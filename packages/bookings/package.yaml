@@ -1,0 +1,39 @@
+package: bookings
+version: 0.1.0
+label: Bookings
+description: "Appointment scheduling: services, staff and resources, availability, a public booking page, reminders, reschedules and paid bookings"
+depends: [core, selling, accounting]
+
+modules:
+  - name: bookings
+    label: Bookings
+    icon: calendar-clock
+    order: 48
+    items: [Booking, BookingService, BookingStaff, StaffTimeOff, BookingResource, BookingSettings,
+            report:bookings_summary, report:bookings_attendance, report:bookings_staff_utilization]
+
+roles:
+  - name: Bookings Manager
+    description: Runs the booking calendar — services, staff, working hours, time off, resources, settings and every booking (confirm, reschedule, cancel, invoice).
+    permissions:
+      - {entity: Booking, read: true, write: true, create: true, delete: true, export: true, import: true}
+      - {entity: BookingService, read: true, write: true, create: true, delete: true, export: true, import: true}
+      - {entity: BookingStaff, read: true, write: true, create: true, delete: true, export: true}
+      - {entity: StaffTimeOff, read: true, write: true, create: true, delete: true, export: true}
+      - {entity: BookingResource, read: true, write: true, create: true, delete: true}
+      - {entity: BookingSettings, read: true, write: true, create: true}
+      - {entity: Customer, read: true, write: true, create: true}
+      - {entity: CustomerGroup, read: true}
+      - {entity: Item, read: true}
+      - {entity: Company, read: true}
+      - {entity: SalesInvoice, read: true, create: true}
+  - name: Bookings User
+    description: A staff member taking appointments — sees and works their own bookings (assigned to them or made by them) and enters their own time off.
+    permissions:
+      - {entity: Booking, read: true, write: true, create: true, if_owner: true}
+      - {entity: BookingService, read: true}
+      - {entity: BookingStaff, read: true}
+      - {entity: StaffTimeOff, read: true, write: true, create: true, delete: true, if_owner: true}
+      - {entity: BookingResource, read: true}
+      - {entity: BookingSettings, read: true}
+      - {entity: Customer, read: true}

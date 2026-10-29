@@ -1,0 +1,222 @@
+- name: BookingReminder
+  label: Booking Reminder
+  kind: child
+  fields:
+    - {name: minutes_before, type: int, label: Minutes Before, required: true, min: 5, max: 43200, in_list: true, description: "e.g. 1440 = a day before, 60 = an hour before"}
+
+- name: BookingSettings
+  label: Booking Settings
+  kind: settings
+  module: bookings
+  description: "How bookings are offered and kept: the public page, notice and advance limits, the slot grid, guest self-service windows, reminders and links."
+  fields:
+    - {name: company, type: link, to: Company, description: "Company bookings are invoiced from (a booking may name another)"}
+    - {name: public_page, type: check, label: Public Booking Page, description: "Open the public booking endpoints (services, free slots, booking, guest self-service). Off: they answer 404. Staff calendar feeds work either way"}
+    - {name: approval_required, type: check, label: Confirm Public Bookings Manually, description: "Public bookings wait as Pending (holding their time) until staff confirm them"}
+    - {name: min_notice_minutes, type: int, label: Minimum Notice (Minutes), default: 120, min: 0, max: 525600, description: "Public bookings and reschedules must start at least this long from now"}
+    - {name: max_advance_days, type: int, label: Book Ahead At Most (Days), default: 60, min: 1, max: 730}
+    - {name: slot_interval_minutes, type: int, label: Slot Interval (Minutes), default: 30, min: 5, max: 1440, description: "Start times are offered every this many minutes from the start of each working interval (a service may override it)"}
+    - {name: cancellation_window_hours, type: int, label: Guests Cancel Up To (Hours Before), default: 24, min: 0, max: 8760, description: "0 = until the start"}
+    - {name: reschedule_window_hours, type: int, label: Guests Reschedule Up To (Hours Before), default: 24, min: 0, max: 8760, description: "0 = until the start"}
+    - {name: reminders, type: table, of: BookingReminder, description: "Reminders before each confirmed booking; a reminder already due when the booking was made or moved is skipped"}
+    - {name: public_url, type: url, label: Server Address, description: "Address this server is reached at from the internet (e.g. https://erp.example.com), for links in emails and calendar feed URLs"}
+    - {name: manage_page_url, type: url, label: Self-Service Page, description: "Your booking page's address; guest links become <address>?token=<token>. Empty: links point at this app's endpoints"}
+    - {name: signing_secret, type: secret, label: Link Signing Secret, description: "HMAC key signing staff calendar feed links; created on first use. Replacing it retires every feed link handed out"}
+  form:
+    - {label: Booking Page, fields: [public_page, approval_required, company, min_notice_minutes, max_advance_days, slot_interval_minutes]}
+    - {label: Guest Self-Service, fields: [cancellation_window_hours, reschedule_window_hours, reminders]}
+    - {label: Links, collapsible: true, fields: [public_url, manage_page_url, signing_secret]}
+
+- name: BookingResource
+  label: Booking Resource
+  kind: master
+  module: bookings
+  title_field: resource_name
+  description: "A room or piece of equipment services need. Capacity is how many bookings or class sessions can use it at the same time."
+  fields:
+    - {name: resource_name, type: data, required: true, unique: true, in_list: true, max_length: 140}
+    - {name: resource_type, type: select, options: [Room, Equipment, Vehicle, Other], default: Room, required: true, in_list: true, in_filter: true}
+    - {name: capacity, type: int, default: 1, required: true, min: 1, max: 1000, in_list: true, description: "Bookings or class sessions it can host at once"}
+    - {name: active, type: check, default: true, in_list: true, in_filter: true, description: "Inactive resources are not given to new bookings"}
+    - {name: description, type: text}
+  list: {columns: [resource_name, resource_type, capacity, active], sort: resource_name asc}
+
+- name: BookingWorkingHour
+  label: Working Hours
+  kind: child
+  fields:
+    - {name: weekday, type: select, options: [Monday, Tuesday, Wednesday, Thursday, Friday, Saturday, Sunday], required: true, in_list: true}
+    - {name: start_time, type: data, required: true, max_length: 5, in_list: true, description: "HH:MM in the staff member's time zone"}
+    - {name: end_time, type: data, required: true, max_length: 5, in_list: true, description: "HH:MM; 24:00 = midnight. Several rows a day leave breaks; a night shift is one row per day"}
+
+- name: BookingStaff
+  label: Booking Staff
+  label_plural: Booking Staff
+  kind: master
+  module: bookings
+  title_field: display_name
+  search_fields: [email]
+  description: "Someone guests book. Working hours are read in the staff member's own time zone."
+  fields:
+    - {name: display_name, type: data, required: true, in_list: true, max_length: 140, description: "Name guests see"}
+    - {name: email, type: email, required: true, unique: true, in_list: true, description: "The Ferrum user this is: they see their own bookings, get notified, and organize calendar invitations"}
+    - {name: time_zone, type: data, required: true, default_expr: "user.timezone", max_length: 64, in_list: true, description: "IANA time zone of the working hours, e.g. Europe/London"}
+    - {name: active, type: check, default: true, in_list: true, in_filter: true, description: "Inactive staff get no new bookings"}
+    - {name: bio, type: text, description: "Shown on the booking page"}
+    - {name: working_hours, type: table, of: BookingWorkingHour}
+    - {name: feed_version, type: int, default: 1, read_only: true, hidden: true, no_copy: true}
+  actions:
+    - {name: calendar_feed, label: Calendar Feed Link, permission: read}
+    - {name: rotate_calendar_feed, label: Reset Calendar Feed Link, permission: read, confirm: "A new feed link is made and every earlier one stops working. Continue?"}
+  form:
+    - {label: Staff, fields: [display_name, email, time_zone, active, bio]}
+    - {label: Working Hours, fields: [working_hours]}
+  list: {columns: [display_name, email, time_zone, active], sort: display_name asc}
+
+- name: StaffTimeOff
+  label: Staff Time Off
+  label_plural: Staff Time Off
+  kind: master
+  module: bookings
+  title_field: staff_name
+  owner_fields: [staff_email]
+  description: "Time a staff member cannot be booked. Bookings already inside it stay (see Conflicting Bookings) until rescheduled or cancelled."
+  fields:
+    - {name: staff, type: link, to: BookingStaff, required: true, on_delete: cascade, in_list: true, in_filter: true}
+    - {name: staff_name, type: data, read_only: true, in_list: true}
+    - {name: staff_email, type: email, read_only: true, hidden: true}
+    - {name: from_time, type: datetime, required: true, in_list: true, in_filter: true}
+    - {name: to_time, type: datetime, required: true, in_list: true}
+    - {name: reason, type: data, max_length: 200, in_list: true}
+    - {name: conflicting_bookings, type: int, read_only: true, no_copy: true, in_list: true, description: "Active bookings inside this time off when it was saved"}
+  indexes: [[staff, from_time]]
+  rules:
+    - {name: ends_after_start, check: "doc.from_time == null || doc.to_time == null || doc.to_time > doc.from_time", message: "Time off must end after it starts"}
+  list: {columns: [staff_name, from_time, to_time, reason, conflicting_bookings], sort: from_time desc}
+
+- name: BookingServiceStaff
+  label: Service Staff
+  kind: child
+  fields:
+    - {name: staff, type: link, to: BookingStaff, required: true, on_delete: cascade, in_list: true}
+
+- name: BookingServiceResource
+  label: Service Resource
+  kind: child
+  fields:
+    - {name: resource, type: link, to: BookingResource, required: true, on_delete: cascade, in_list: true}
+
+- name: BookingQuestion
+  label: Intake Question
+  kind: child
+  fields:
+    - {name: question, type: data, required: true, max_length: 200, in_list: true}
+    - {name: answer_type, type: select, options: [Text, Long Text, Number, Yes/No, Choice], required: true, default: Text, in_list: true}
+    - {name: options, type: text, required_if: "doc.answer_type == 'Choice'", description: "The choices, one per line"}
+    - {name: required, type: check, in_list: true}
+
+- name: BookingService
+  label: Booking Service
+  kind: master
+  module: bookings
+  title_field: service_name
+  description: "What guests book: an appointment (one seat) or a group class (several seats per session), with its duration, buffers, price, staff, resources and intake questions."
+  fields:
+    - {name: service_name, type: data, required: true, unique: true, in_list: true, max_length: 140}
+    - {name: active, type: check, default: true, in_list: true, in_filter: true, description: "Only active services can be booked"}
+    - {name: description, type: text}
+    - {name: duration_minutes, type: int, label: Duration (Minutes), required: true, default: 60, min: 5, max: 1440, in_list: true}
+    - {name: buffer_before_minutes, type: int, label: Buffer Before (Minutes), default: 0, min: 0, max: 720, description: "Kept free before each booking (preparation)"}
+    - {name: buffer_after_minutes, type: int, label: Buffer After (Minutes), default: 0, min: 0, max: 720, description: "Kept free after each booking (clean-up, travel)"}
+    - {name: slot_interval_minutes, type: int, label: Slot Interval (Minutes), min: 5, max: 1440, description: "Empty = Booking Settings"}
+    - {name: capacity, type: int, label: Seats, default: 1, required: true, min: 1, max: 1000, in_list: true, description: "1 = one-to-one appointment; more = a group class with this many seats per session"}
+    - {name: price, type: currency, default: 0, min: "0", in_list: true, description: "Per seat, in the company currency"}
+    - {name: item, type: link, to: Item, required_if: "doc.price > 0.0", description: "Item bookings are invoiced as (a service item)"}
+    - {name: location_type, type: select, options: [In Person, Video, Phone], default: In Person, required: true, in_list: true}
+    - {name: location_details, type: text, description: "Address, video meeting link or phone number; guests see it once booked"}
+    - {name: staff, type: table, of: BookingServiceStaff, required: true, description: "Staff who provide it"}
+    - {name: resources, type: table, of: BookingServiceResource, description: "Each booking needs one of these free; empty = none"}
+    - {name: questions, type: table, of: BookingQuestion, label: Intake Questions}
+  actions:
+    - {name: find_slots, label: Find Free Slots, permission: read}
+  form:
+    - {label: Service, fields: [service_name, active, description, location_type, location_details]}
+    - {label: Time, fields: [duration_minutes, buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, capacity]}
+    - {label: Price, fields: [price, item]}
+    - {label: Staff and Resources, fields: [staff, resources]}
+    - {label: Intake Questions, collapsible: true, fields: [questions]}
+  list: {columns: [service_name, duration_minutes, capacity, price, location_type, active], sort: service_name asc}
+
+- name: BookingAnswer
+  label: Intake Answer
+  kind: child
+  fields:
+    - {name: question, type: data, required: true, max_length: 200, in_list: true}
+    - {name: answer, type: text, max_length: 2000, in_list: true}
+
+- name: Booking
+  label: Booking
+  kind: document
+  module: bookings
+  title_field: guest_name
+  numbering: {template: "BKG-{YYYY}-{seq:5}"}
+  search_fields: [guest_email, guest_phone, service_name, staff_name]
+  owner_fields: [staff_email]
+  description: "An appointment or a seat in a class. Times change only through the Reschedule action, statuses through the actions; the database refuses double bookings."
+  fields:
+    - {name: service, type: link, to: BookingService, required: true, in_filter: true}
+    - {name: service_name, type: data, read_only: true, in_list: true}
+    - {name: staff, type: link, to: BookingStaff, in_filter: true, description: "Empty = any available staff member (the least booked that day)"}
+    - {name: staff_name, type: data, read_only: true, in_list: true}
+    - {name: staff_email, type: email, read_only: true, hidden: true}
+    - {name: start_time, type: datetime, required: true, in_list: true, in_filter: true}
+    - {name: end_time, type: datetime, read_only: true}
+    - {name: seats, type: int, default: 1, min: 1, max: 1000, in_list: true}
+    - {name: status, type: select, options: [Pending, Confirmed, Waitlisted, Cancelled, No Show, Completed], default: Pending, read_only: true, in_list: true, in_filter: true}
+    - {name: source, type: select, options: [Internal, Public], default: Internal, read_only: true, in_filter: true}
+    - {name: join_waitlist, type: check, no_copy: true, description: "When the class is full, join its waitlist instead of failing"}
+    - {name: resource, type: link, to: BookingResource, read_only: true, in_filter: true}
+    - {name: customer, type: link, to: Customer, in_filter: true}
+    - {name: guest_name, type: data, max_length: 200, in_list: true}
+    - {name: guest_email, type: email}
+    - {name: guest_phone, type: phone}
+    - {name: guest_time_zone, type: data, max_length: 64, description: "IANA zone the guest sees times in (default: the workspace's)"}
+    - {name: answers, type: table, of: BookingAnswer, label: Intake Answers}
+    - {name: notes, type: text, max_length: 5000}
+    - {name: location_type, type: data, read_only: true}
+    - {name: location, type: text, read_only: true}
+    - {name: company, type: link, to: Company, in_filter: true}
+    - {name: item, type: link, to: Item, read_only: true}
+    - {name: rate, type: currency, read_only: true, description: "Price per seat when booked"}
+    - {name: amount, type: currency, read_only: true, in_list: true}
+    - {name: sales_invoice, type: link, to: SalesInvoice, read_only: true, on_delete: set_null, no_copy: true}
+    - {name: cancellation_reason, type: text, read_only: true, no_copy: true}
+    - {name: scheduled_at, type: datetime, read_only: true, no_copy: true, description: "When the current time was booked or last moved"}
+    - {name: confirmed_at, type: datetime, read_only: true, no_copy: true}
+    - {name: cancelled_at, type: datetime, read_only: true, no_copy: true}
+    - {name: completed_at, type: datetime, read_only: true, no_copy: true}
+    - {name: block_start, type: datetime, read_only: true, hidden: true, no_copy: true}
+    - {name: block_end, type: datetime, read_only: true, hidden: true, no_copy: true}
+    - {name: session_key, type: data, read_only: true, hidden: true, no_copy: true}
+    - {name: notice_version, type: int, default: 0, read_only: true, hidden: true, no_copy: true}
+    - {name: notified_version, type: int, default: 0, read_only: true, hidden: true, no_copy: true}
+    - {name: last_change, type: select, options: [Booked, Confirmed, Rescheduled, Cancelled, Promoted], read_only: true, hidden: true, no_copy: true}
+  indexes: [[staff, start_time], [service, start_time], [status, start_time]]
+  rules:
+    - {name: guest_or_customer, check: "doc.customer != null || (doc.guest_name != null && doc.guest_name != '')", message: "Choose a customer or enter the guest's name"}
+  actions:
+    - {name: confirm, label: Confirm, permission: write, condition: "doc.status == 'Pending'"}
+    - {name: reschedule, label: Reschedule, permission: write, condition: "doc.status == 'Pending' || doc.status == 'Confirmed'"}
+    - {name: cancel_booking, label: Cancel Booking, permission: write, condition: "doc.status == 'Pending' || doc.status == 'Confirmed' || doc.status == 'Waitlisted'"}
+    - {name: complete, label: Mark Completed, permission: write, condition: "doc.status == 'Confirmed'"}
+    - {name: mark_no_show, label: Mark No Show, permission: write, condition: "doc.status == 'Confirmed' || doc.status == 'Pending'"}
+    - {name: make_sales_invoice, label: Create Sales Invoice, permission: write, condition: "doc.status == 'Confirmed' || doc.status == 'Completed' || doc.status == 'No Show'"}
+    - {name: guest_link, label: Guest Self-Service Link, permission: write, condition: "doc.status != 'Cancelled'"}
+  form:
+    - {label: Booking, fields: [service, service_name, staff, staff_name, start_time, end_time, seats, status, source, join_waitlist, resource]}
+    - {label: Guest, fields: [customer, guest_name, guest_email, guest_phone, guest_time_zone, notes]}
+    - {label: Intake Answers, collapsible: true, fields: [answers]}
+    - {label: Location, collapsible: true, fields: [location_type, location]}
+    - {label: Billing, collapsible: true, fields: [company, item, rate, amount, sales_invoice]}
+    - {label: History, collapsible: true, fields: [cancellation_reason, scheduled_at, confirmed_at, cancelled_at, completed_at]}
+  list: {columns: [number, start_time, service_name, staff_name, guest_name, seats, status], sort: start_time desc}
