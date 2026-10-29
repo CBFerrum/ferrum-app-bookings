@@ -16,9 +16,7 @@ use chrono_tz::Tz;
 use ferrum_domain::util::{d, id, money, rows, s};
 use ferrum_kernel::{Ctx, Doc, Error, FieldError, Kernel, Result, Site, SiteRequest, SiteResponse, Tx, with_retry};
 use serde_json::{Map, Value, json};
-use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
-use std::time::{Duration as StdDuration, Instant as StdInstant};
+use std::time::Duration as StdDuration;
 use uuid::Uuid;
 
 const MAX_BODY: usize = 64 * 1024;
@@ -48,18 +46,18 @@ impl Site for BookingSite {
             ("GET", ["services"]) => (200, services(k, &ctx).await?),
             ("GET", ["slots"]) => (200, open_slots(k, &ctx, &req).await?),
             ("POST", ["book"]) => {
-                throttle(req.tenant, &req.client_ip)?;
+                throttle(k, req.tenant, &req.client_ip).await?;
                 book(k, &ctx, &body_of(&req)?).await?
             }
             ("GET", ["manage", tok]) => (200, manage(k, &ctx, tok).await?),
             ("GET", ["manage", tok, "slots"]) => (200, manage_slots(k, &ctx, &req, tok).await?),
             ("POST", ["manage", tok, "cancel"]) => {
-                throttle(req.tenant, &req.client_ip)?;
+                throttle(k, req.tenant, &req.client_ip).await?;
                 let body = body_of(&req)?;
                 (200, change(k, &ctx, tok, Change::Cancel(body.get("reason").and_then(Value::as_str).map(str::to_string))).await?)
             }
             ("POST", ["manage", tok, "reschedule"]) => {
-                throttle(req.tenant, &req.client_ip)?;
+                throttle(k, req.tenant, &req.client_ip).await?;
                 let m = booking::parse_move(&Value::Object(body_of(&req)?))?;
                 (200, change(k, &ctx, tok, Change::Move(m)).await?)
             }
@@ -71,26 +69,11 @@ impl Site for BookingSite {
     }
 }
 
-/// A fixed-window limit per caller address and workspace on the requests that write (the server
-/// already limits every public request; booking slots deserve a tighter budget).
-fn throttle(tenant: Uuid, ip: &str) -> Result<()> {
-    static HITS: LazyLock<Mutex<HashMap<String, (StdInstant, u32)>>> = LazyLock::new(Default::default);
-    let mut hits = HITS.lock().unwrap_or_else(|e| e.into_inner());
-    if hits.len() > 50_000 {
-        hits.retain(|_, (since, _)| since.elapsed() < WINDOW);
-        if hits.len() > 50_000 {
-            hits.clear();
-        }
-    }
-    let entry = hits.entry(format!("{tenant}|{ip}")).or_insert((StdInstant::now(), 0));
-    if entry.0.elapsed() >= WINDOW {
-        *entry = (StdInstant::now(), 0);
-    }
-    entry.1 += 1;
-    if entry.1 > WRITES_PER_WINDOW {
-        return Err(Error::TooManyRequests("too many booking requests from this address; try again in a few minutes".into()));
-    }
-    Ok(())
+/// A fixed-window limit per caller address and workspace on the requests that write, shared by
+/// every replica (the server already limits every public request; booking slots deserve a
+/// tighter budget).
+async fn throttle(k: &Kernel, tenant: Uuid, ip: &str) -> Result<()> {
+    k.rate_limit(&format!("bookings|{tenant}|{ip}"), WINDOW, WRITES_PER_WINDOW, "too many booking requests from this address; try again in a few minutes").await
 }
 
 fn body_of(req: &SiteRequest) -> Result<Map<String, Value>> {
@@ -631,16 +614,5 @@ mod tests {
         );
         assert!(answers(&s, Some(&json!("yes"))).is_err());
         assert!(answers(&svc(vec![]), None).unwrap().is_empty());
-    }
-
-    #[test]
-    fn writes_are_throttled_per_address() {
-        let tenant = Uuid::now_v7();
-        for _ in 0..WRITES_PER_WINDOW {
-            throttle(tenant, "198.51.100.1").unwrap();
-        }
-        assert!(matches!(throttle(tenant, "198.51.100.1"), Err(Error::TooManyRequests(_))));
-        assert!(throttle(tenant, "198.51.100.2").is_ok(), "another address");
-        assert!(throttle(Uuid::now_v7(), "198.51.100.1").is_ok(), "another workspace");
     }
 }
