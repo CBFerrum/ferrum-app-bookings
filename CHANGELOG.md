@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Guests get their emails without the Mail app too: when it is not installed, notices and
+  reminders go through the server's own mailer, with an add-to-calendar link.
+
 ## 0.1.0
 
 - First release. Appointment scheduling on Ferrum: services as one-to-one appointments or group
