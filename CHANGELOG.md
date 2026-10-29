@@ -4,6 +4,8 @@
 
 - Guests get their emails without the Mail app too: when it is not installed, notices and
   reminders go through the server's own mailer, with an add-to-calendar link.
+- The public write throttle (30 booking changes per address in ten minutes) is counted in the
+  database, so it holds however many replicas serve the booking page.
 
 ## 0.1.0
 

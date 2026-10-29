@@ -935,4 +935,12 @@ async fn scenario() {
     assert!(t.scalar(links, Some(jane_id)).await >= 1);
     t.maintain(at(d, "16:00") + Duration::days(31)).await;
     assert_eq!(t.scalar(links, Some(jane_id)).await, 0);
+
+    // Writes are throttled per address and workspace, counted in the database for every replica.
+    let cancel = |ip: &'static str| site_call(&t.k, &t.site, t.tenant, "POST", "/manage/no-such-link/cancel", Some(json!({})), ip);
+    for _ in 0..30 {
+        assert!(!matches!(cancel("10.7.0.1").await, Err(Error::TooManyRequests(_))));
+    }
+    assert!(matches!(cancel("10.7.0.1").await, Err(Error::TooManyRequests(_))), "the 31st write in ten minutes");
+    assert!(!matches!(cancel("10.7.0.2").await, Err(Error::TooManyRequests(_))), "another address");
 }
