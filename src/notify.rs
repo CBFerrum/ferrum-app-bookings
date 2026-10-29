@@ -180,11 +180,14 @@ pub fn compose(kind: Guest, b: &Doc, tz: Tz, manage: &str, ics_url: &str) -> (St
     (subject, html)
 }
 
-/// Emails the guest through the Mail app (with a fresh self-service link and, for confirmations,
-/// moves and cancellations, a calendar invitation). `false` when there is no Mail app or address.
+/// Emails the guest with a fresh self-service link: through the Mail app when it is installed
+/// (with a calendar invitation for confirmations, moves and cancellations), otherwise through the
+/// server's own mailer (the invitation is a link in the email). `false` when there is no way to
+/// send, or no usable address.
 async fn email_guest(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, kind: Guest, st: &Settings) -> Result<bool> {
     let Some(to) = s(b, "guest_email") else { return Ok(false) };
-    if !mail_installed(ctx) {
+    let via_mail_app = mail_installed(ctx);
+    if !via_mail_app && k.mailer.is_none() {
         return Ok(false);
     }
     let bid = id(b, "id").ok_or_else(|| Error::internal("booking without id"))?;
@@ -193,6 +196,16 @@ async fn email_guest(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, kind: Guest, s
     let manage = st.manage_link(&root, &token);
     let ics_url = st.absolute(&format!("{root}/manage/{token}/booking.ics"));
     let (subject, html) = compose(kind, b, guest_zone(b, ctx), &manage, &ics_url);
+    if !via_mail_app {
+        return match k.queue_mail(tx, ctx.tenant, to, &subject, &html).await {
+            Ok(()) => Ok(true),
+            Err(Error::Validation(e)) => {
+                tracing::warn!(booking = %bid, "guest email not sent: {e:?}");
+                Ok(false)
+            }
+            Err(e) => Err(e),
+        };
+    }
     let summary = format!("{} with {}", s(b, "service_name").unwrap_or("Booking"), s(b, "staff_name").unwrap_or("us"));
     let invite = match kind {
         Guest::Confirmed | Guest::Rescheduled => booking_event(b, summary, "CONFIRMED").map(|e| ics::calendar(Some("REQUEST"), None, &[e])),

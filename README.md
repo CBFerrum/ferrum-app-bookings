@@ -8,7 +8,7 @@ A native app for [Ferrum](https://github.com/CBFerrum/Ferrum), the open-source, 
 - Double booking impossible under concurrency: ordered row locks around every decision plus a database exclusion constraint on staff time
 - Waitlists for full classes, filled automatically when a seat frees up (cancellation, reschedule, larger class)
 - A public booking page API: services, free slots in the guest's zone, booking with validation, honeypot and throttling, self-service by token (view, reschedule, cancel within windows), `.ics` downloads
-- Every notice and reminder sent exactly once from maintenance — email with calendar invitations through the Mail app when installed, otherwise in-app for staff and copyable guest links
+- Every notice and reminder sent exactly once from maintenance — email with calendar invitations through the Mail app when installed, otherwise through the server's mailer (with an add-to-calendar link); in-app for staff, and copyable guest links when no mail can be sent
 - Paid bookings become draft Sales Invoices at the booked price, exactly once; private HMAC-signed calendar feeds per staff member
 - Reports: bookings summary, no-shows and cancellations, staff utilization (booked against available minutes)
 - `packages/bookings/README.md` documents every entity, action, endpoint, setting and background job
