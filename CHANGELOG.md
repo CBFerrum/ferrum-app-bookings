@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Declares where it keeps people's personal data, so Administration → Personal data exports and
+  erases it for a person (by email).
 - Guests get their emails without the Mail app too: when it is not installed, notices and
   reminders go through the server's own mailer, with an add-to-calendar link.
 - The public write throttle (30 booking changes per address in ten minutes) is counted in the
