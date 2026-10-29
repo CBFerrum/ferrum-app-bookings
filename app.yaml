@@ -1,0 +1,14 @@
+id: bookings
+name: Bookings
+version: 0.1.0
+publisher: cbferrum
+summary: "Appointment scheduling: services, staff and resources, availability, a public booking page, reminders, reschedules and paid bookings"
+description: README.md
+categories: [sales, productivity]
+license: AGPL-3.0-only
+homepage: https://github.com/CBFerrum/ferrum-app-bookings
+support: https://github.com/CBFerrum/ferrum-app-bookings/issues
+runtime: native
+platform: ">=0.3, <0.4"
+packages: [bookings]
+uninstall: ask
