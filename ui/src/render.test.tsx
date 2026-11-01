@@ -13,8 +13,11 @@ import { BookPage } from "./guest/Book";
 import type { Catalog, GuestBooking } from "./guest/booking";
 import { ManagePage } from "./guest/Manage";
 import { MonthGrid, Times } from "./guest/Picker";
+import { NewBooking } from "./NewBooking";
 import { BookingPage } from "./Page";
 import { Schedule } from "./Schedule";
+import { BookingSheet } from "./Sheet";
+import { TimeOff } from "./TimeOff";
 import { Today } from "./Today";
 import { browserZone, dayBounds, dayOf, monthOf } from "./zone";
 
@@ -338,5 +341,45 @@ describe("the booking page's settings", () => {
     qc.setQueryData(["meta", "BookingSettings"], { name: "BookingSettings", permissions: { read: "all", write: "all", create: "all", delete: "none", submit: "none", cancel: "none", export: "none", import: "none" } });
     qc.setQueryData(["bk", "settings"], []);
     expect(draw(qc, "/page", <BookingPage />)).toContain("Set up the booking page");
+  });
+});
+
+describe("a booking's sheet and the dialogs", () => {
+  const sheet = (b: Partial<Bk> & Record<string, unknown>, canWrite = true) => {
+    const qc = client();
+    qc.setQueryData(["bk", "doc", "b1"], { ...bk("b1", {}), guest_email: "jane@example.test", guest_phone: "98765", answers: [{ question: "Any allergies?", answer: "No" }], notes: "Left shoulder", amount: "1500.00", number: "BKG-2026-00001", ...b });
+    return draw(qc, "/", <BookingSheet id="b1" zone={ZONE} hour12={false} canWrite={canWrite} onClose={() => {}} />);
+  };
+
+  it("shows when, who, what they said and what it costs, with the buttons its status allows", () => {
+    const html = sheet({ start_time: new Date(Date.now() + 86_400_000).toISOString(), end_time: new Date(Date.now() + 90_000_000).toISOString() });
+    for (const word of ["Jane Doe", "jane@example.test", "98765", "Any allergies?", "Left shoulder", "1,500", "BKG-2026-00001", "Move", "Cancel", "More", "History"]) expect(html).toContain(word);
+    expect(html).not.toContain("Confirm</");
+    expect(html).not.toContain("Completed</button>");
+  });
+
+  it("offers Confirm and Decline for a pending booking, and nothing to someone who cannot write", () => {
+    const pending = sheet({ status: "Pending", start_time: new Date(Date.now() + 86_400_000).toISOString() });
+    expect(pending).toContain("Confirm");
+    expect(pending).toContain("Decline");
+    expect(sheet({ status: "Pending" }, false)).not.toContain("Decline");
+  });
+
+  it("asks who and when for a new booking, with the person and the start filled in", () => {
+    const html = renderToString(
+      <QueryClientProvider client={client()}>
+        <MemoryRouter>
+          <NewBooking meta={meta} zone={ZONE} hour12={false} from={{ staff: "st-2", start: Date.parse(`${DAY}T10:15:00+05:30`) }} onClose={() => {}} onCreated={() => {}} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    for (const word of ["New booking", "Choose a service", "Anyone free", "Ravi Iyer", "Guest&#x27;s name", "All fields"]) expect(html).toContain(word);
+    expect(html).toContain('value="2026-11-02"');
+    expect(html).toContain('value="10:15"');
+  });
+
+  it("blocks out time for a person", () => {
+    const html = renderToString(<TimeOff meta={meta} zone={ZONE} day={DAY} onClose={() => {}} onSaved={() => {}} />);
+    for (const word of ["Block out time", "Who is away", "Whole days", "Asha Rao", "Reason"]) expect(html).toContain(word);
   });
 });

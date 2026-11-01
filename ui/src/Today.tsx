@@ -43,7 +43,7 @@ function Quick({ b, now, canWrite, busy, run }: { b: Bk; now: number; canWrite: 
   );
 }
 
-function Row({ block, zone, hour12, now, canWrite, showWho, busy, run, onOpen, open }: { block: Block; zone: string; hour12: boolean; now: number; canWrite: boolean; showWho: boolean; busy: string | null; run: Do; onOpen: (id: string) => void; open: string | null }) {
+function Row({ block, zone, hour12, now, canWrite, showWho, busy, run, onOpen, open, next }: { block: Block; zone: string; hour12: boolean; now: number; canWrite: boolean; showWho: boolean; busy: string | null; run: Do; onOpen: (id: string) => void; open: string | null; next?: boolean }) {
   const first = block.bookings[0];
   const live = block.start <= now && block.end > now;
   return (
@@ -53,13 +53,16 @@ function Row({ block, zone, hour12, now, canWrite, showWho, busy, run, onOpen, o
         <span className="faint">{clockText(block.end, zone, hour12)}</span>
       </time>
       <div className="bk-row-main">
-        {block.kind === "booking" ? (
-          <button type="button" className="bk-row-title" onClick={() => onOpen(first.id)}>
-            {first.guest_name ?? "Guest"}
-          </button>
-        ) : (
-          <span className="bk-row-title">{block.title}</span>
-        )}
+        <span className="bk-row-line">
+          {block.kind === "booking" ? (
+            <button type="button" className="bk-row-title" onClick={() => onOpen(first.id)}>
+              {first.guest_name ?? "Guest"}
+            </button>
+          ) : (
+            <span className="bk-row-title">{block.title}</span>
+          )}
+          {next && <Badge tone="blue">Next</Badge>}
+        </span>
         <span className="muted">
           {block.kind === "booking" ? first.service_name : `${block.seats} of ${block.capacity} seats`}
           {showWho && first.staff_name ? ` · ${first.staff_name}` : ""}
@@ -149,7 +152,8 @@ export function Today() {
       },
       { replace: true },
     );
-  const rows = (list: Block[]) => list.map((b) => <Row key={b.key} block={b} zone={zone} hour12={hour12} now={now} canWrite={canWrite} showWho={!mine} busy={busy} run={run} open={openId} onOpen={(id) => put("b", id)} />);
+  const rows = (list: Block[], next?: string) =>
+    list.map((b) => <Row key={b.key} block={b} zone={zone} hour12={hour12} now={now} canWrite={canWrite} showWho={!mine} busy={busy} run={run} open={openId} next={b.key === next} onOpen={(id) => put("b", id)} />);
 
   const loading = !meta.data || !day.data;
   const nothing = !loading && !blocks.length && !asks.length;
@@ -238,7 +242,7 @@ export function Today() {
               {order.next.length > 0 && (
                 <section aria-label="Coming up">
                   <h2 className="bk-group">Coming up</h2>
-                  <ul className="bk-rows">{rows(order.next)}</ul>
+                  <ul className="bk-rows">{rows(order.next, order.next[0]?.key)}</ul>
                 </section>
               )}
               {closed.length > 0 && (
