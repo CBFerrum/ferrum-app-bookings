@@ -1,6 +1,6 @@
 id: bookings
 name: Bookings
-version: 0.1.1
+version: 0.2.0
 publisher: cbferrum
 summary: "Appointment scheduling: services, staff and resources, availability, a public booking page, reminders, reschedules and paid bookings"
 description: README.md
@@ -9,8 +9,30 @@ license: AGPL-3.0-only
 homepage: https://github.com/CBFerrum/ferrum-app-bookings
 support: https://github.com/CBFerrum/ferrum-app-bookings/issues
 runtime: native
-platform: ">=0.3.1, <0.4"
+platform: ">=0.3.2, <0.4"
 # Records of ERP (items, customers, accounts, stock): installing it installs ERP.
 requires: {erp: ">=0.1"}
 packages: [bookings]
 uninstall: ask
+# Its own interface at /bookings/ (Ferrum docs/plan/apps-ui.md §13): the team's schedule, today's list
+# and the booking page's settings, and the public booking page guests use (ui/, built into ui/dist).
+ui:
+  dist: ui/dist
+contributes:
+  shell.app:
+    - id: bookings
+      route: bookings
+      title: Bookings
+      description: The schedule, today's list and the booking page
+      icon: calendar-clock
+      color: "#0e7490"
+      roles: [Bookings User, Bookings Manager]
+  shell.open:
+    # A booking opens on the schedule, on its day, with its sheet; the rest in the records frame.
+    - {id: booking, entity: Booking, path: "bookings/b/{id}", list: bookings/, priority: 1}
+    - {id: bookings, package: bookings, path: "bookings/e/{entity}/{id}", list: "bookings/e/{entity}"}
+  shell.create:
+    - {id: booking, label: Booking, path: bookings/new, entity: Booking}
+  # What guests open without signing in: /bookings/book/{workspace}, and their own booking below it.
+  shell.public:
+    - {id: book, path: bookings/book, title: Book an appointment}
