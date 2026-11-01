@@ -523,6 +523,8 @@ impl DocHook for BookingHook {
             "mark_no_show" => finish(hc.kernel, &engine, hc.tx, doc, "No Show").await?,
             "make_sales_invoice" => return Ok(Some(invoice(hc, doc).await?)),
             "guest_link" => return Ok(Some(guest_link(hc, doc).await?)),
+            "repeat" => return Ok(Some(crate::series::repeat(hc, doc, params).await?)),
+            "cancel_series" => return Ok(Some(crate::series::cancel_from(hc, doc, params).await?)),
             _ => return Ok(None),
         };
         Ok(Some(Value::Object(out)))

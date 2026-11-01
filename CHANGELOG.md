@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Repeating bookings: the Repeat action makes a booking the first of a series, weekly, every 2 or 4
+  weeks or monthly, at the same local time for the staff member across a change of the clocks. Each
+  occurrence is an ordinary booking, placed and checked as any other. A series is booked whole, or
+  names the date that is taken and books nothing, unless the caller asks to skip what does not
+  fit. Cancel This and Later ends one from any point on.
+
 ## 0.1.1
 
 - Requires the ERP app (Ferrum docs/plan/apps-ui.md §13): installing it in a workspace without ERP
