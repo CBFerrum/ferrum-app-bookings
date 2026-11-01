@@ -1829,3 +1829,10 @@
   }
 
 }
+
+/* An icon stays on its line, beside what it says. */
+.bk-part p:has(> svg) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
