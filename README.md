@@ -5,7 +5,7 @@
   <img alt="Ferrum Bookings" src="docs/assets/banner-light.svg" width="100%">
 </picture>
 
-[![CI](https://github.com/CBFerrum/ferrum-app-bookings/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-bookings/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.1.1-30a654?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.1%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
+[![CI](https://github.com/CBFerrum/ferrum-app-bookings/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-bookings/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.2.0-30a654?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
 
 **A native app for [Ferrum](https://github.com/CBFerrum/Ferrum), the open-source, AI-first business platform.**
 
@@ -20,20 +20,21 @@
 Ferrum Bookings schedules appointments and group classes. Staff work in their own time zones
 across several intervals a day; rooms and equipment have capacities; a heavily tested availability
 engine handles daylight saving, buffers and notice windows; and double booking is impossible even
-under concurrency. A public booking page lets guests book, reschedule and cancel, and paid bookings
-become invoices.
+under concurrency. Its own interface gives the team a schedule, a day's list and the booking
+page's settings, and gives guests a public booking page where they book, reschedule and cancel.
+Paid bookings become invoices.
 
 
 | At a glance | |
 |---|---|
-| 📦 Version | `0.1.1` |
-| 🧱 Platform | Ferrum `>=0.3.1, <0.4` |
+| 📦 Version | `0.2.0` |
+| 🧱 Platform | Ferrum `>=0.3.2, <0.4` |
 | 🔗 Requires | erp `>=0.1` |
-| 🖥️ Interface | Ferrum's records screens (`/data/bookings/`) |
+| 🖥️ Interface | Its own at `/bookings/` (schedule, today, booking page), and the public booking page at `/bookings/book/{workspace}` |
 | 🗃️ Records | 12 entities in 1 package |
 | 👥 Roles | 2: Bookings Manager, Bookings User |
 | 📊 Reports | 3 |
-| 🧪 Tests | 27 Rust tests |
+| 🧪 Tests | 32 Rust tests, 67 interface tests |
 
 
 ## Highlights
@@ -71,13 +72,27 @@ Row locks and a database exclusion constraint on staff time.
 <td width="50%" valign="top">
 
 ### 🌐 Public booking page
-Free slots in the guest's zone, self-service reschedule and cancel, <code>.ics</code> downloads.
+Service, person, day and time from what is really free in the guest's zone, on a phone as on a desk; move or cancel from the link, add to a calendar.
 
 </td>
 <td width="50%" valign="top">
 
+### 📅 A schedule for the front desk
+A day by person or room, or a week; drag a booking to move it, or move it with the keyboard.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
 ### 💳 Paid bookings
 Draft sales invoices at the booked price, exactly once; reminders sent once.
+
+</td>
+<td width="50%" valign="top">
+
+### ✅ Today's list
+What needs an answer, what is under way, and who still has to be marked as having come.
 
 </td>
 </tr>
@@ -120,7 +135,8 @@ sequenceDiagram
 ```mermaid
 flowchart LR
     subgraph Browser
-        UI["Records screens<br/><small>/data/bookings/</small>"]
+        UI["Schedule · Today · Booking page<br/><small>/bookings/</small>"]
+        PUB["Public booking page<br/><small>/bookings/book/{workspace}</small>"]
         BAR["Ferrum bar<br/><small>launcher · search · bell</small>"]
     end
     subgraph Server["Ferrum server"]
@@ -131,6 +147,7 @@ flowchart LR
     end
     DB[("PostgreSQL")]
     UI --> API --> K --> DB
+    PUB --> API
     BAR --> API
     K <--> APP
     K --> OB --> EV["Notifications · webhooks<br/>automations"]
@@ -249,12 +266,21 @@ ferrum-app-erp = { path = "../ferrum-app-erp" }
 ```
 
 
+The interface (`ui/`) is built with the platform's packages from the sibling `ferrum/web` checkout, and its
+built files (`ui/dist`) are committed and embedded in the crate. After changing `ui/src`:
+
+```bash
+cd ui
+npm run test && npm run typecheck && npm run build && npm run check
+```
+
 ### Project layout
 
 ```text
 app.yaml      the manifest: id, version, requirements, what it adds to Ferrum
 packages/     metadata: entities, roles, reports, workflows, print formats
 src/          the app's logic in Rust: hooks, actions, endpoints, upkeep jobs
+ui/           its interface: the team's screens and the public booking page (React)
 tests/        integration tests against a real PostgreSQL
 CHANGELOG.md  what changed in each version
 ```
@@ -263,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.2.0** | Its own interface: a public booking page guests can use (service, person, day and time in their own zone, move or cancel from the link), the team's schedule with moving by drag or keyboard, today's list, and the booking page's settings. |
 | **0.1.1** | Requires the ERP app: installing it in a workspace without ERP installs ERP whole, with its interface, rather than a few of its packages. |
 | **0.1.0** | First release. Appointment scheduling on Ferrum: services as one-to-one appointments or group classes (duration, buffers, price and invoicing … |
 
