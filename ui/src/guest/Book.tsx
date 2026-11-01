@@ -5,7 +5,7 @@
 // while the guest typed disables Confirm with a message, and its complaints land beside the field.
 // A booking ends on its manage page, where the guest can add it to a calendar, move it or cancel it.
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Banknote, ChevronLeft, Clock, Globe, MapPin, Users } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
@@ -291,6 +291,7 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
   onAnother: () => void;
 }) {
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const form = useRef<HTMLFormElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const [values, setValues] = useState<Form>({ name: "", email: "", phone: "", notes: "", seats, answers: {} });
@@ -325,12 +326,15 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
     setBusy(true);
     try {
       const out = await site.book(tenant, bookBody({ service, start: at, staff: staff ?? undefined, form: values, zone, waitlist, website: trap }));
+      // That time is no longer free for the next guest, whatever the lists on screen last said.
+      void qc.invalidateQueries({ queryKey: ["gb-slots"] });
       if ("status" in out) setReceived(true);
       else navigate(`manage/${out.token}`, { replace: true, state: { booking: out.booking, fresh: true } });
     } catch (err) {
       if (isTaken(err)) {
         setTaken(true);
         void still.refetch();
+        void qc.invalidateQueries({ queryKey: ["gb-slots"] });
       }
       const found = serverErrors(err, service.questions);
       // A connection that dropped may have booked it: say so, rather than invite a second try.

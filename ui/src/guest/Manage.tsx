@@ -121,7 +121,9 @@ function Move({ tenant, token, b, onClose, onDone }: { tenant: string; token: st
     setBusy(true);
     setError(null);
     try {
-      onDone((await site.move(tenant, token, chosen, staff ?? undefined)).booking);
+      const moved = (await site.move(tenant, token, chosen, staff ?? undefined)).booking;
+      void qc.invalidateQueries({ queryKey: ["gb-slots"] });
+      onDone(moved);
     } catch (e) {
       setError(errorMessage(e));
       if (isTaken(e)) {
