@@ -13,6 +13,7 @@
 
 mod booking;
 mod calendar;
+mod departures;
 pub mod engine;
 mod ics;
 mod notify;
@@ -53,7 +54,8 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("BookingStaff", Arc::new(setup::StaffHook))
         .register("StaffTimeOff", Arc::new(setup::TimeOffHook))
         .register("BookingSettings", Arc::new(setup::SettingsHook))
-        .add_site("bookings", Arc::new(site::BookingSite));
+        .add_site("bookings", Arc::new(site::BookingSite))
+        .add_event_sink(Arc::new(departures::Departures));
 }
 
 /// This app's reports.
