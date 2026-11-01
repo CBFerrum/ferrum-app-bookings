@@ -1,0 +1,1 @@
+import{j as o}from"./index-C9dkLO-d.js";import{R as r,d as t}from"./Shell-BvKBf769.js";import"./theme-Br_ad3Lr.js";import"./useQuery-D7IYzjWI.js";t("app",["bookings"]);function s(){return o.jsx(r,{})}export{s as Team};
