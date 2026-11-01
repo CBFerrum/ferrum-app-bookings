@@ -634,9 +634,14 @@ async fn scenario() {
     );
     let di = t.book(class("Di", 2, true, d1)).await.unwrap();
     assert_eq!(di["booking"]["waitlist_position"], json!(2));
+    // A full class is listed, marked full, for its waitlist; the staff finder and a move do not offer it.
+    let listed = t.get_pub(&slots_path(yoga_id, d1, d1, "Asia/Kolkata")).await;
+    let nine = listed["days"][0]["slots"].as_array().unwrap().iter().find(|s| s["time"] == json!("09:00")).cloned().expect("the full class is listed");
+    assert_eq!((nine["full"].clone(), nine["seats_left"].clone(), nine["staff"][0]["id"].clone()), (json!(true), json!(0), json!(sid(&asha))));
+    let open = |v: &Value| v["days"].as_array().unwrap().iter().flat_map(|d| d["slots"].as_array().unwrap().iter()).any(|s| s["time"] == json!("09:00"));
     assert!(
-        !times_for(&t.get_pub(&slots_path(yoga_id, d1, d1, "Asia/Kolkata")).await, &sid(&asha)).contains(&"09:00".to_string()),
-        "a full class is not offered"
+        !open(&t.act(&manager, "BookingService", yoga_id, "find_slots", json!({"from": d1.to_string(), "to": d1.to_string()})).await),
+        "staff book a full class through its waitlist, not as an open time"
     );
     // Ana leaves: Cy's one seat fits at once; Di's two do not yet.
     t.post_pub(&format!("/manage/{ana_tok}/cancel"), json!({})).await.unwrap();
@@ -787,6 +792,21 @@ async fn scenario() {
     let ben_free = t.act(&ben_user, "BookingService", massage_id, "find_slots", json!({"from": d.to_string(), "to": d.to_string(), "staff": sid(&ben)})).await;
     let ben_times = times_for(&ben_free, &sid(&ben));
     assert!(!ben_times.is_empty() && !ben_times.contains(&"15:00".to_string()), "find_slots for agents and staff: {ben_times:?}");
+    // A booking being moved sees its own time as free: Ben's 15:00 is Jane's.
+    let own = t
+        .act(
+            &ben_user,
+            "BookingService",
+            massage_id,
+            "find_slots",
+            json!({"from": d.to_string(), "to": d.to_string(), "staff": sid(&ben), "booking": jane_id.to_string()}),
+        )
+        .await;
+    assert!(times_for(&own, &sid(&ben)).contains(&"15:00".to_string()), "find_slots with the booking being moved");
+    assert!(
+        messages(&t.action(&ben_user, "BookingService", massage_id, "find_slots", json!({"booking": "nobody"})).await.unwrap_err())
+            .contains("is not a booking id")
+    );
 
     // ───────────── completion, no-shows, invoices ─────────────
     let yesterday = today - Duration::days(1);

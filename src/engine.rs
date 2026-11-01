@@ -442,6 +442,36 @@ impl World {
         out.into_iter().map(|(start, options)| Slot { start, end: start + svc.duration, options }).collect()
     }
 
+    /// Class sessions in `window` that exist but have no room for `seats` more, though every other
+    /// rule (hours, notice, time off) holds: the times whose waitlist can be joined. `(start, staff
+    /// member, seats still free)`, earliest first.
+    pub fn full_sessions(&self, window: Span, seats: i64) -> Vec<(Instant, Uuid, i64)> {
+        if !self.group() {
+            return vec![];
+        }
+        let mut out = Vec::new();
+        for s in &self.staff {
+            let spans = working_spans(s.tz, &s.hours, window);
+            let mine = self.mine(s.id);
+            let mut starts: Vec<Instant> = mine
+                .iter()
+                .filter(|b| b.service == self.service.id && window.holds(b.span.start) && b.session == self.session_key(s.id, b.span.start))
+                .map(|b| b.span.start)
+                .collect();
+            starts.sort();
+            starts.dedup();
+            for start in starts {
+                if self.check(s, &spans, &mine, start, seats) == Err(Why::Full) {
+                    let key = self.session_key(s.id, start);
+                    let taken: i64 = mine.iter().filter(|b| b.session == key).map(|b| b.seats).sum();
+                    out.push((start, s.id, (self.service.capacity - taken).max(0)));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
     /// A class session at `start` that exists but has no room for `seats`: where a waitlist entry
     /// goes. `(staff, resource, session key)`.
     pub fn full_session(&self, start: Instant, seats: i64) -> Option<(Uuid, Option<Uuid>, String)> {
@@ -521,6 +551,26 @@ mod tests {
 
     fn why(w: &World, start: &str) -> Vec<Why> {
         w.candidates_at(t(start), 1).1.into_iter().map(|(_, w)| w).collect()
+    }
+
+    #[test]
+    fn full_classes_are_where_a_waitlist_can_be_joined() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let mut w = world(service(60, 0, 0, 3, 60), vec![staff(1, utc, every_day("09:00", "12:00"))]);
+        book(&mut w, 1, "2026-06-01T09:00:00Z", 2, None);
+        book(&mut w, 1, "2026-06-01T10:00:00Z", 2, None);
+        book(&mut w, 1, "2026-06-01T10:00:00Z", 1, None);
+        let day = local_day(utc, d(2026, 6, 1));
+        let full = |seats| w.full_sessions(day, seats).into_iter().map(|(t, _, left)| (t.format("%H:%M").to_string(), left)).collect::<Vec<_>>();
+        // The ten o'clock class has no seat left; nine o'clock has one, which two guests cannot share.
+        assert_eq!(full(1), [("10:00".to_string(), 0)]);
+        assert_eq!(full(2), [("09:00".to_string(), 1), ("10:00".to_string(), 0)]);
+        assert!(!starts(&w.slots(day, 1)).contains(&"2026-06-01T10:00Z".to_string()), "a full class is not an open time");
+        // Rules still hold: inside the notice window nothing can be joined, and one-to-one services have no waitlist.
+        w.rules = Rules { earliest: Some(t("2026-06-01T10:30:00Z")), latest: None, on_grid: true };
+        assert!(w.full_sessions(day, 1).is_empty());
+        let one = world(service(60, 0, 0, 1, 60), vec![staff(1, utc, every_day("09:00", "12:00"))]);
+        assert!(one.full_sessions(day, 1).is_empty());
     }
 
     #[test]

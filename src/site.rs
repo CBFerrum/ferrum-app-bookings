@@ -167,7 +167,7 @@ async fn open_slots(k: &Kernel, ctx: &Ctx, req: &SiteRequest) -> Result<Value> {
     let mut tx = k.db.tenant_tx(ctx.tenant).await?;
     let st = open_page(&mut tx, ctx.tenant).await?;
     let svc = bookable(&mut tx, ctx.tenant, query(req, "service")).await?;
-    let out = slots::find(&mut tx, ctx.tenant, &svc, &st, &q, st.public_rules(Utc::now()), None).await?;
+    let out = slots::find(&mut tx, ctx.tenant, &svc, &st, &q, st.public_rules(Utc::now()), None, true).await?;
     tx.commit().await?;
     Ok(out)
 }
@@ -411,7 +411,7 @@ async fn manage_slots(k: &Kernel, ctx: &Ctx, req: &SiteRequest, tok: &str) -> Re
     q.seats = int(&b, "seats").max(1);
     let sid = id(&b, "service").ok_or_else(|| Error::NotFound("booking".into()))?;
     let svc = calendar::service(&mut tx, ctx.tenant, sid).await?.ok_or_else(|| Error::NotFound("booking".into()))?;
-    let out = slots::find(&mut tx, ctx.tenant, &svc, &st, &q, st.public_rules(Utc::now()), Some(doc_id(&b)?)).await?;
+    let out = slots::find(&mut tx, ctx.tenant, &svc, &st, &q, st.public_rules(Utc::now()), Some(doc_id(&b)?), false).await?;
     tx.commit().await?;
     Ok(out)
 }

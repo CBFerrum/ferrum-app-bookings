@@ -50,7 +50,17 @@ pub fn parse(get: impl Fn(&str) -> Option<String>, default_tz: Tz) -> Result<Que
 }
 
 /// The bookable starts, grouped by local date in `q.tz`; `exclude` leaves out a booking being moved.
-pub async fn find(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, st: &Settings, q: &Query, rules: Rules, exclude: Option<Uuid>) -> Result<Value> {
+/// With `waitlist`, a full class is listed too, marked `full`: its waitlist can be joined.
+pub async fn find(
+    tx: &mut Tx,
+    tenant: Uuid,
+    svc: &ServiceInfo,
+    st: &Settings,
+    q: &Query,
+    rules: Rules,
+    exclude: Option<Uuid>,
+    waitlist: bool,
+) -> Result<Value> {
     if q.seats > svc.capacity {
         return Err(Error::field("seats", format!("{} takes at most {} seat(s) per booking", svc.name, svc.capacity)));
     }
@@ -75,6 +85,22 @@ pub async fn find(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, st: &Settings, q
             "seats_left": seats_left,
             "staff": slot.options.iter().map(|o| json!({"id": o.staff, "name": name(o.staff)})).collect::<Vec<_>>(),
         }));
+    }
+    if waitlist {
+        for (start, who, left) in world.full_sessions(window, q.seats) {
+            days.entry(start.with_timezone(&q.tz).date_naive()).or_default().push(json!({
+                "start": ts(start),
+                "end": ts(start + chrono::Duration::minutes(svc.duration)),
+                "time": start.with_timezone(&q.tz).format("%H:%M").to_string(),
+                "seats_left": left,
+                "full": true,
+                "staff": [{"id": who, "name": name(who)}],
+            }));
+        }
+        // The full ones stand among the open ones in time order (timestamps in one form sort as text).
+        for list in days.values_mut() {
+            list.sort_by(|a, b| a["start"].as_str().cmp(&b["start"].as_str()));
+        }
     }
     Ok(json!({
         "service": {"id": svc.id, "name": svc.name, "duration_minutes": svc.duration, "seats": svc.capacity},

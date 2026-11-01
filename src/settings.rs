@@ -71,11 +71,12 @@ impl Settings {
         crate::engine::Rules { earliest: Some(now + self.min_notice), latest: Some(now + self.max_advance), on_grid: true }
     }
 
-    /// The self-service link for a guest token.
+    /// The self-service link for a guest token: the business's own page when it set one, else the
+    /// booking page the interface serves (`/bookings/book/{workspace}/manage/{token}`).
     pub fn manage_link(&self, root: &str, token: &str) -> String {
         match &self.manage_page_url {
             Some(page) => format!("{page}{}token={token}", if page.contains('?') { '&' } else { '?' }),
-            None => self.absolute(&format!("{root}/manage/{token}")),
+            None => self.absolute(&format!("{}/manage/{token}", page_root(root))),
         }
     }
 
@@ -86,6 +87,13 @@ impl Settings {
             None => path.to_string(),
         }
     }
+}
+
+/// `/bookings/book/{workspace}`: where the booking page is, from the root of its endpoints
+/// (`/api/site/{workspace}/bookings`).
+fn page_root(api_root: &str) -> String {
+    let workspace = api_root.strip_prefix("/api/site/").and_then(|r| r.split('/').next()).unwrap_or_default();
+    format!("/bookings/book/{workspace}")
 }
 
 /// `/api/site/{tenant slug}/bookings`: the root of the public endpoints.
@@ -154,8 +162,8 @@ mod tests {
     #[test]
     fn links_point_at_the_page_or_the_server() {
         let root = "/api/site/spa/bookings";
-        assert_eq!(settings(None, None).manage_link(root, "tok"), "/api/site/spa/bookings/manage/tok");
-        assert_eq!(settings(None, Some("https://erp.example.com")).manage_link(root, "tok"), "https://erp.example.com/api/site/spa/bookings/manage/tok");
+        assert_eq!(settings(None, None).manage_link(root, "tok"), "/bookings/book/spa/manage/tok");
+        assert_eq!(settings(None, Some("https://erp.example.com")).manage_link(root, "tok"), "https://erp.example.com/bookings/book/spa/manage/tok");
         assert_eq!(settings(Some("https://spa.example.com/book"), None).manage_link(root, "tok"), "https://spa.example.com/book?token=tok");
         assert_eq!(settings(Some("https://spa.example.com/b?lang=en"), None).manage_link(root, "tok"), "https://spa.example.com/b?lang=en&token=tok");
         let now = chrono::Utc::now();
