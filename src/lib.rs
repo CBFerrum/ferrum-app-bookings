@@ -6,8 +6,9 @@
 //! * `booking`: the Booking hook and actions (confirm, reschedule, cancel, complete, no-show,
 //!   invoice, guest link) and the class waitlist.
 //! * `setup`: hooks on services (`find_slots`), staff (calendar feed links), time off, settings.
-//! * `site`: the public booking page endpoints; `notify`: notifications and reminders, each sent
-//!   once, from maintenance; `reports`: volume, attendance and utilization.
+//! * `site`: the public booking page endpoints (its pages are the interface's, `ui/`); `notify`:
+//!   notifications and reminders, each sent once, from maintenance; `reports`: volume, attendance
+//!   and utilization.
 //!
 //! Hooks are registered per entity, so a tenant without the `bookings` package never runs them.
 
@@ -34,6 +35,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 include!(concat!(env!("OUT_DIR"), "/packages.rs"));
+include!(concat!(env!("OUT_DIR"), "/ui.rs"));
 
 /// An instant (stored as `timestamptz`).
 pub type Instant = DateTime<Utc>;
@@ -145,6 +147,17 @@ mod tests {
         }
         assert!(schema.roles.iter().any(|r| r.name == "Bookings Manager") && schema.roles.iter().any(|r| r.name == "Bookings User"));
         assert!(super::MANIFEST.contains("packages: [bookings]"));
+    }
+
+    #[test]
+    fn the_interface_is_a_release_the_platform_takes() {
+        let m = ferrum_apps::AppManifest::parse(super::MANIFEST).expect("app.yaml");
+        assert_eq!(m.routes(), vec![("bookings".to_string(), vec![])]);
+        // The booking page guests use is open to anyone with its address, below the app's own route.
+        assert_eq!(m.public_paths(), vec!["bookings/book"]);
+        let files = super::UI.iter().map(|(p, b)| (p.to_string(), b.to_vec())).collect();
+        let ui = ferrum_apps::ui::prepare("bookings", files).expect("ui/dist is an interface release");
+        assert!(super::UI.iter().any(|(p, _)| *p == "index.html") && !super::UI.iter().any(|(p, _)| p.starts_with('.')), "{}", ui.digest);
     }
 
     #[test]

@@ -1,0 +1,12 @@
+{
+  "name": "ferrum-app-bookings-ui",
+  "private": true,
+  "type": "module",
+  "description": "Bookings' own interface at /bookings/ (the schedule, today's list, the booking page's settings) and the public booking page guests use, built with Ferrum-Frontend's packages from the sibling checkout (../../ferrum/web)",
+  "scripts": {
+    "build": "node ../../ferrum/web/packages/build/cli.mjs build",
+    "check": "node ../../ferrum/web/packages/build/cli.mjs check",
+    "typecheck": "node ../../ferrum/web/packages/build/cli.mjs typecheck",
+    "test": "node ../../ferrum/web/packages/build/cli.mjs test"
+  }
+}
