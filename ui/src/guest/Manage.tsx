@@ -207,6 +207,8 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
     refetchOnWindowFocus: true,
   });
   const b = q.data;
+  // The price is written in the business's currency, which the booking itself does not carry.
+  const catalog = useQuery({ queryKey: ["gb-catalog", tenant], queryFn: ({ signal }) => site.catalog(tenant, signal), staleTime: 60_000, retry: false });
   const home = `/book/${encodeURIComponent(tenant)}`;
   // Just booked: the page announces it.
   const fresh0 = !!state?.fresh;
@@ -313,7 +315,7 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
             {Number(b.amount) > 0 && (
               <div>
                 <dt>Price</dt>
-                <dd>{priceText(b.amount, null)}</dd>
+                <dd>{priceText(b.amount, catalog.data?.currency ?? null)}</dd>
               </div>
             )}
             <div>

@@ -3,12 +3,12 @@
 // cancel or move, reminders). Each setting saves where it stands, against the version on screen; the
 // server checks it. Everything else about the app's settings is one link away.
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, ExternalLink } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { api, bootstrap, errorMessage, routeBase } from "@ferrum/client";
-import { Badge, Button, EmptyState, ErrorState, PageLoading, toast, useShellTitle } from "@ferrum/kit";
+import { Badge, Button, EmptyState, ErrorState, PageLoading, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { type Doc, type EntityMeta, useEntityMeta, useRecord } from "@ferrum/records";
 import { rows } from "./data";
 import { Tabs } from "./Tabs";
@@ -165,7 +165,10 @@ function Address({ doc, services }: { doc: Doc; services: { id: string; service_
 }
 
 function Settings({ meta, id }: { meta: EntityMeta; id: string }) {
+  const qc = useQueryClient();
   const { record, save } = useRecord(meta, id);
+  // Someone else changing a setting shows here as they do.
+  useLiveEntity("BookingSettings", useCallback(() => void qc.invalidateQueries({ queryKey: ["peek", "BookingSettings", id] }), [qc, id]));
   const services = useQuery({ queryKey: ["bk", "service-names"], queryFn: () => rows<{ id: string; service_name: string; active?: boolean }>("BookingService", { fields: "service_name,active", sort: "service_name asc", limit: 200 }) });
   const doc = record.data;
   if (record.error) return <ErrorState error={record.error} onRetry={() => void record.refetch()} />;

@@ -25,7 +25,8 @@ const NONE = "none";
 
 /** What waits for the team: pending bookings to confirm or decline, and people waiting for a seat. */
 function Approvals({ waiting, zone, hour12, canWrite, onOpen, onDone }: { waiting: Bk[]; zone: string; hour12: boolean; canWrite: boolean; onOpen: (b: Bk) => void; onDone: () => void }) {
-  const [open, setOpen] = useState(true);
+  // On a phone the strip starts folded, with its count in view, so the schedule is not pushed down the screen.
+  const [open, setOpen] = useState(() => !globalThis.matchMedia?.("(max-width: 720px)").matches);
   const [busy, setBusy] = useState<string | null>(null);
   const pending = waiting.filter((b) => b.status === "Pending");
   const queued = waiting.filter((b) => b.status === "Waitlisted");

@@ -34,7 +34,7 @@ Paid bookings become invoices.
 | 🗃️ Records | 12 entities in 1 package |
 | 👥 Roles | 2: Bookings Manager, Bookings User |
 | 📊 Reports | 3 |
-| 🧪 Tests | 32 Rust tests, 67 interface tests |
+| 🧪 Tests | 32 Rust tests, 71 interface tests |
 
 
 ## Highlights
