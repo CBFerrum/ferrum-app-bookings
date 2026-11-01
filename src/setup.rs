@@ -55,8 +55,9 @@ impl DocHook for ServiceHook {
         if errors.is_empty() { Ok(()) } else { Err(Error::Validation(errors)) }
     }
 
-    /// `find_slots {from?, to?, time_zone?, staff?, seats?}`: bookable starts from now on (any
-    /// distance ahead), as staff and agents may book them.
+    /// `find_slots {from?, to?, time_zone?, staff?, seats?, booking?}`: bookable starts from now on
+    /// (any distance ahead), as staff and agents may book them. With `booking`, the time that
+    /// booking holds counts as free (it is being moved).
     async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, params: &Value) -> Result<Option<Value>> {
         if name != "find_slots" {
             return Ok(None);
@@ -69,8 +70,9 @@ impl DocHook for ServiceHook {
         let st = settings::load(hc.tx, tenant).await?;
         let default_tz = calendar::zone(&hc.ctx.schema.timezone).unwrap_or(Tz::UTC);
         let q = slots::parse(|k| param(params, k), default_tz)?;
+        let moving = param(params, "booking").map(|v| v.parse::<Uuid>().map_err(|_| Error::field("booking", "is not a booking id"))).transpose()?;
         let rules = Rules { earliest: Some(Utc::now()), latest: None, on_grid: true };
-        Ok(Some(slots::find(hc.tx, tenant, &svc, &st, &q, rules, None).await?))
+        Ok(Some(slots::find(hc.tx, tenant, &svc, &st, &q, rules, moving, false).await?))
     }
 }
 
