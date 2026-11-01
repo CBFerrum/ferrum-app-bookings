@@ -1,6 +1,34 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
+
+- A booking page guests can use. At `/bookings/book/{workspace}`, with no sign-in: choose a service,
+  a person when more than one gives it, a day on a month calendar (days with times are marked, and
+  the first is chosen for you) and a time, shown in the guest's own time zone with a 12 or 24 hour
+  clock. Then their details and the service's questions, with the server's complaints beside the
+  field they are about. A time taken while they typed disables Confirm with a message. A full class
+  offers its waitlist. Phones get the same steps, with the button to book where a thumb is.
+- A guest's own booking page, which the links in their emails now open: what was booked and where,
+  add to a calendar (a file, Google, Outlook), choose another time from what is really free, or
+  cancel with a reason, for as long as the business allows.
+- The schedule, the team's home: a day by person (or by room) or a week by day, bookings sized to
+  how long they last with their buffers shaded, working hours lit, time off hatched, a line at the
+  current time, and a class as one block with its seats. Press an empty time to book it with the
+  person and start filled in. Drag a booking to move it, or press M on it and use the arrow keys:
+  it shows at once and goes back, with the server's reason, if refused. Bookings that wait for an
+  answer sit in a strip above, to confirm or decline.
+- A booking opens in a sheet: when, who, where, what they answered, what it costs and the history,
+  with the buttons its status allows. Moving it shows real free times (its own time counts as free
+  to it), cancelling asks for a reason and says whether the guest is told, and a booking can be
+  repeated or invoiced from it.
+- Today: what needs an answer, what is under way, what comes next, and what is over and still to be
+  closed (did they come?), for the person's own bookings or everyone's.
+- Booking page: open or close online booking, copy the address (or a service's own), and change the
+  rules people change most: confirming by hand, notice, how far ahead, when guests can still cancel
+  or move, and reminders.
+- Guest links in emails and calendar files lead to that page, unless the business has set a page of
+  its own. A full class is listed, marked full, to those who may join its waitlist; Find Free Slots
+  takes the booking being moved, so its own time is not offered as taken.
 
 - Repeating bookings: the Repeat action makes a booking the first of a series, weekly, every 2 or 4
   weeks or monthly, at the same local time for the staff member across a change of the clocks. Each
