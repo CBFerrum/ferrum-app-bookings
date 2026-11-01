@@ -942,6 +942,56 @@ async fn scenario() {
     t.maintain(at(d, "16:00") + Duration::days(31)).await;
     assert_eq!(t.scalar(links, Some(jane_id)).await, 0);
 
+    // ───────────── a series: the same local time each week, whatever the clocks do ─────────────
+    let coaching = t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Coaching", "duration_minutes": 60, "location_type": "Video", "location_details": "https://meet.spa.test/c", "staff": [{"staff": ben_id.to_string()}]}),
+        )
+        .await;
+    // The clocks go back in London on 27 October 2030, between the first date and the second.
+    let on = |d: u32, m: u32| NaiveDate::from_ymd_opt(2030, m, d).unwrap();
+    let session = |day: NaiveDate| json!({"service": sid(&coaching), "staff": ben_id.to_string(), "start_time": rfc(local(london, day, "10:00")), "guest_name": "Rae", "guest_email": "rae@spa.test"});
+    let first = t.insert(&manager, "Booking", session(on(22, 10))).await;
+    let first_id = uid(&first);
+    let taken = t.insert(&manager, "Booking", session(on(29, 10))).await;
+    let in_series = |series: &str| json!({"series": series});
+    for bad in [json!({"every": "fortnightly", "count": 3}), json!({"every": "week", "count": 1}), json!({"every": "week", "count": 53}), json!({"count": 3})] {
+        assert!(t.action(&manager, "Booking", first_id, "repeat", bad.clone()).await.is_err(), "{bad}");
+    }
+    // A series is whole or nothing: the week that is taken is named, and nothing was booked.
+    let before = t.scalar("select count(*) from e_booking where tenant_id = $1 and guest_name = 'Rae'", None).await;
+    let refused = t.action(&manager, "Booking", first_id, "repeat", json!({"every": "week", "count": 3})).await.unwrap_err();
+    assert!(messages(&refused).contains("2030-10-29"), "{}", messages(&refused));
+    assert_eq!(t.scalar("select count(*) from e_booking where tenant_id = $1 and guest_name = 'Rae'", None).await, before, "nothing was repeated");
+    assert_eq!(t.get("Booking", first_id).await["series"], Value::Null);
+    // Skipping what does not fit is the caller's choice, and the answer says what was skipped.
+    let out = t.act(&manager, "Booking", first_id, "repeat", json!({"every": "week", "count": 4, "skip_conflicts": true})).await;
+    assert_eq!(out["skipped"].as_array().unwrap().len(), 1, "{out}");
+    assert_eq!(out["skipped"][0]["date"], json!("2030-10-29"));
+    assert_eq!(out["booked"].as_array().unwrap().len(), 2, "{out}");
+    let series = out["series"].as_str().unwrap().to_string();
+    let rows = t.list(&a, "Booking", in_series(&series)).await.unwrap();
+    assert_eq!(rows.len(), 3, "the first and two more");
+    let mut starts: Vec<DateTime<Utc>> = rows.iter().map(|r| r["start_time"].as_str().unwrap().parse().unwrap()).collect();
+    starts.sort();
+    assert_eq!(starts, vec![local(london, on(22, 10), "10:00"), local(london, on(5, 11), "10:00"), local(london, on(12, 11), "10:00")]);
+    assert_eq!(starts[0].format("%H:%M").to_string(), "09:00", "10:00 in summer time");
+    assert_eq!(starts[1].format("%H:%M").to_string(), "10:00", "and 10:00 in winter time: an hour later in UTC, the same on the wall");
+    assert!(rows.iter().all(|r| r["status"] == json!("Confirmed") && r["staff"] == json!(ben_id.to_string())));
+    assert!(t.action(&manager, "Booking", first_id, "repeat", json!({"every": "week", "count": 2})).await.is_err(), "a booking joins one series");
+    // The engine still places each one: the slot of a later date is gone for anyone else.
+    let clash = t.k.insert(&manager, "Booking", obj(session(on(12, 11)))).await;
+    assert!(clash.is_err(), "{clash:?}");
+    // Each stays its own booking, and a series can end from any point on.
+    let middle = rows.iter().find(|r| r["start_time"].as_str().unwrap().parse::<DateTime<Utc>>().unwrap() == starts[1]).unwrap();
+    let ended = t.act(&manager, "Booking", uid(middle), "cancel_series", json!({"reason": "Moved away"})).await;
+    assert_eq!(ended["cancelled"].as_array().unwrap().len(), 2, "this one and the later one: {ended}");
+    assert_eq!(t.get("Booking", first_id).await["status"], json!("Confirmed"), "the earlier one stays");
+    assert_eq!(t.get("Booking", uid(middle)).await["cancellation_reason"], json!("Moved away"));
+    assert!(t.action(&manager, "Booking", uid(&taken), "cancel_series", json!({})).await.is_err(), "not in a series");
+
     // Writes are throttled per address and workspace, counted in the database for every replica.
     let cancel = |ip: &'static str| site_call(&t.k, &t.site, t.tenant, "POST", "/manage/no-such-link/cancel", Some(json!({})), ip);
     for _ in 0..30 {

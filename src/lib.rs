@@ -17,6 +17,7 @@ pub mod engine;
 mod ics;
 mod notify;
 mod reports;
+mod series;
 mod settings;
 mod setup;
 mod site;
@@ -137,7 +138,7 @@ mod tests {
         assert!(schema.entity("BookingSettings").is_some_and(|e| e.secret_fields().count() == 1));
         let booking = schema.entity("Booking").expect("Booking");
         assert_eq!(booking.table, "e_booking");
-        for action in ["confirm", "reschedule", "cancel_booking", "complete", "mark_no_show", "make_sales_invoice", "guest_link"] {
+        for action in ["repeat", "cancel_series", "confirm", "reschedule", "cancel_booking", "complete", "mark_no_show", "make_sales_invoice", "guest_link"] {
             assert!(booking.def.actions.iter().any(|a| a.name == action), "{action}");
         }
         assert!(schema.roles.iter().any(|r| r.name == "Bookings Manager") && schema.roles.iter().any(|r| r.name == "Bookings User"));
