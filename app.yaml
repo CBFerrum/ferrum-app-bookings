@@ -24,7 +24,7 @@ contributes:
       route: bookings
       title: Bookings
       description: The schedule, today's list and the booking page
-      icon: calendar-clock
+      icon: calendar-check
       color: "#0e7490"
       roles: [Bookings User, Bookings Manager]
   shell.open:
