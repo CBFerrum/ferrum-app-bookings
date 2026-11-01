@@ -992,6 +992,24 @@ async fn scenario() {
     assert_eq!(t.get("Booking", uid(middle)).await["cancellation_reason"], json!("Moved away"));
     assert!(t.action(&manager, "Booking", uid(&taken), "cancel_series", json!({})).await.is_err(), "not in a series");
 
+    // ───────────── someone leaves: no more bookings, and those made stay for a person to move ─────────────
+    let leaver = t.user("leaver@spa.test", &["Bookings User"]).await;
+    let leaving = t
+        .insert(
+            &manager,
+            "BookingStaff",
+            json!({"display_name": "Leaver", "email": "Leaver@spa.test", "time_zone": "Europe/London", "working_hours": every("08:00", "16:00")}),
+        )
+        .await;
+    let session_with = |who: &Doc, day: NaiveDate| json!({"service": sid(&coaching), "staff": sid(who), "start_time": rfc(local(london, day, "11:00")), "guest_name": "Una", "guest_email": "una@spa.test"});
+    t.update(&manager, "BookingService", uid(&coaching), json!({"staff": [{"staff": ben_id.to_string()}, {"staff": sid(&leaving)}]})).await;
+    let kept = t.insert(&manager, "Booking", session_with(&leaving, on(5, 11))).await;
+    t.k.deprovision_user(&a, leaver.user, None, "left").await.expect("deprovisioned");
+    while t.k.dispatch_outbox_once().await.unwrap() > 0 {}
+    assert_eq!(t.get("BookingStaff", uid(&leaving)).await["active"], json!(false), "their calendar closes");
+    assert!(t.k.insert(&manager, "Booking", obj(session_with(&leaving, on(6, 11)))).await.is_err(), "no more bookings");
+    assert_eq!(t.get("Booking", uid(&kept)).await["status"], json!("Confirmed"), "what a guest was promised stays, for a person to move");
+
     // Writes are throttled per address and workspace, counted in the database for every replica.
     let cancel = |ip: &'static str| site_call(&t.k, &t.site, t.tenant, "POST", "/manage/no-such-link/cancel", Some(json!({})), ip);
     for _ in 0..30 {
