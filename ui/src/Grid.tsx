@@ -231,7 +231,8 @@ export function Board(p: BoardProps) {
                 aria-label={`${lane.label}${lane.sub ? ` ${lane.sub}` : ""}`}
                 data-create={p.canCreate || undefined}
                 onClick={(e) => {
-                  if (!p.canCreate || (e.target as Element).closest(".bk-slot")) return;
+                  // A drag ends in a click wherever it was dropped: that is no request for a new booking.
+                  if (!p.canCreate || suppress.current || (e.target as Element).closest(".bk-slot")) return;
                   // The quarter hour that was pressed.
                   const y = (e.clientY - e.currentTarget.getBoundingClientRect().top) / PX;
                   p.onCreate(lane, lane.start + (win.from + Math.floor(y / STEP) * STEP) * 60_000);
