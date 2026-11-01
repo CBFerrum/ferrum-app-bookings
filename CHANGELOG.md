@@ -27,8 +27,9 @@
   rules people change most: confirming by hand, notice, how far ahead, when guests can still cancel
   or move, and reminders.
 - Guest links in emails and calendar files lead to that page, unless the business has set a page of
-  its own. A full class is listed, marked full, to those who may join its waitlist; Find Free Slots
-  takes the booking being moved, so its own time is not offered as taken.
+  its own. Asked with `waitlist=1`, the public slot list also names a full class, marked full, so a
+  page can offer its waitlist (the list is as it was without it); Find Free Slots takes the booking
+  being moved, so its own time is not offered as taken.
 
 - Repeating bookings: the Repeat action makes a booking the first of a series, weekly, every 2 or 4
   weeks or monthly, at the same local time for the staff member across a change of the clocks. Each

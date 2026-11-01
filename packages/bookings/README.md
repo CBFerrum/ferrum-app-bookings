@@ -35,7 +35,7 @@ Administrators can do everything. Staff without a Bookings role see nothing of t
    | `cancellation_window_hours` / `reschedule_window_hours` | 24 / 24 | Guests may cancel / move up to this many hours before the start (0 = until the start). Waitlist places can always be cancelled |
    | `reminders` | none | Rows of `minutes_before` (5–43200, unique), e.g. 1440 and 60 |
    | `public_url` | — | This server's internet address, for absolute links in emails and feed URLs |
-   | `manage_page_url` | — | Your booking page; guest links become `<url>?token=<token>` (else they point at `/manage/{token}` below) |
+   | `manage_page_url` | — | Your own booking page; guest links become `<url>?token=<token>` (else they open the booking page this app serves, `/bookings/book/{workspace}/manage/{token}`) |
    | `signing_secret` | made on first use | **Secret field** (needs `FERRUM_SECRET_KEY`): the HMAC key of staff feed links. Write-only; replacing it retires every feed link |
 
 2. **Booking Staff** (`BookingStaff`): `display_name` (shown to guests), `email` (unique; the
@@ -130,7 +130,7 @@ started are cancelled by maintenance ("No seat became free before the class star
 
 | Entity | Action | Who | Result |
 |---|---|---|---|
-| `BookingService` | `find_slots` `{from?, to?, time_zone?, staff?, seats?}` | read access | Bookable starts from now on (no advance limit), same shape as `GET /slots` |
+| `BookingService` | `find_slots` `{from?, to?, time_zone?, staff?, seats?, booking?}` | read access | Bookable starts from now on (no advance limit), same shape as `GET /slots`; `booking` is a booking being moved, whose own time counts as free |
 | `BookingStaff` | `calendar_feed` | the staff member or a manager | `{url, path, expires_at, note}`: their private feed link, valid a year |
 | `BookingStaff` | `rotate_calendar_feed` | the staff member or a manager | A new link; earlier ones stop working |
 
@@ -144,7 +144,7 @@ answer the same 404. `POST`s are limited to 30 per 10 minutes per address and wo
 | Method & path | Request | Response |
 |---|---|---|
 | `GET /services` | — | `{time_zone, currency, services: [{id, name, description, duration_minutes, seats, price, location_type, location (in person only), staff: [{id, name, bio}], questions: [{question, type, options, required}]}]}` — active services with active staff |
-| `GET /slots` | `service` (required), `from`, `to` (dates in the zone; default the next 7 days, at most 62), `time_zone` (IANA; default the workspace's), `staff`, `seats` | `{service: {id, name, duration_minutes, seats}, time_zone, from, to, days: [{date, slots: [{start, end, time ("HH:MM" in the zone), seats_left, staff: [{id, name}]}]}]}`. 404 for an unknown or inactive service; 422 for bad parameters |
+| `GET /slots` | `service` (required), `from`, `to` (dates in the zone; default the next 7 days, at most 62), `time_zone` (IANA; default the workspace's), `staff`, `seats`, `waitlist` (1: list full classes too, marked `full: true` with `seats_left` what is free, so a page can offer their waitlist) | `{service: {id, name, duration_minutes, seats}, time_zone, from, to, days: [{date, slots: [{start, end, time ("HH:MM" in the zone), seats_left, staff: [{id, name}]}]}]}`. 404 for an unknown or inactive service; 422 for bad parameters |
 | `POST /book` | `{service, start_time, staff? (id or "any"), seats?, name, email, phone?, time_zone?, notes?, answers? ({question: answer} or [{question, answer}]), waitlist?, website}` | `201 {booking: View, token}`. `website` is a honeypot: when filled the answer is `201 {"status": "received"}` and nothing is booked. Answers are checked against the questions (required ones present, numbers, Yes/No, one of the choices, nothing unknown). 422 with field errors, 409 when taken, 404 unknown service |
 | `GET /manage/{token}` | — | `{booking: View}` |
 | `GET /manage/{token}/slots` | `from`, `to`, `time_zone`, `staff` | Like `/slots` for the booking's service and seats; its own time does not block |
