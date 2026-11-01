@@ -18,8 +18,9 @@ const slotParams = (q: SlotQuery) => ({ from: q.from, to: q.to, time_zone: q.zon
 
 export const catalog = (tenant: string, signal?: AbortSignal) => api.get<Catalog>(`${base(tenant)}/services`, undefined, signal);
 
+/** A full class is listed too (`waitlist`), for its waitlist. */
 export const freeSlots = (tenant: string, service: string, q: SlotQuery, signal?: AbortSignal) =>
-  api.get<Slots>(`${base(tenant)}/slots`, { service, ...slotParams(q) }, signal);
+  api.get<Slots>(`${base(tenant)}/slots`, { service, ...slotParams(q), waitlist: 1 }, signal);
 
 /** A booking, or `{status: "received"}` for the hidden field only a program fills in. */
 export type Booked = { booking: GuestBooking; token: string } | { status: "received" };

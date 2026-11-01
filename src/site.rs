@@ -161,13 +161,15 @@ async fn services(k: &Kernel, ctx: &Ctx) -> Result<Value> {
     Ok(json!({"time_zone": ctx.schema.timezone, "currency": code, "services": list}))
 }
 
-/// `GET /slots?service=&from=&to=&time_zone=&staff=&seats=`.
+/// `GET /slots?service=&from=&to=&time_zone=&staff=&seats=&waitlist=1`: with `waitlist`, a full
+/// class is listed too, marked `full`, for a page that offers its waitlist.
 async fn open_slots(k: &Kernel, ctx: &Ctx, req: &SiteRequest) -> Result<Value> {
     let q = slots::parse(|key| query(req, key).map(str::to_string), workspace_zone(ctx))?;
     let mut tx = k.db.tenant_tx(ctx.tenant).await?;
     let st = open_page(&mut tx, ctx.tenant).await?;
     let svc = bookable(&mut tx, ctx.tenant, query(req, "service")).await?;
-    let out = slots::find(&mut tx, ctx.tenant, &svc, &st, &q, st.public_rules(Utc::now()), None, true).await?;
+    let waitlist = matches!(query(req, "waitlist"), Some("1" | "true"));
+    let out = slots::find(&mut tx, ctx.tenant, &svc, &st, &q, st.public_rules(Utc::now()), None, waitlist).await?;
     tx.commit().await?;
     Ok(out)
 }

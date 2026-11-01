@@ -634,8 +634,12 @@ async fn scenario() {
     );
     let di = t.book(class("Di", 2, true, d1)).await.unwrap();
     assert_eq!(di["booking"]["waitlist_position"], json!(2));
-    // A full class is listed, marked full, for its waitlist; the staff finder and a move do not offer it.
-    let listed = t.get_pub(&slots_path(yoga_id, d1, d1, "Asia/Kolkata")).await;
+    // A full class is not offered as a time; asked for with waitlist=1 it is listed, marked full, so a page can offer its waitlist.
+    assert!(
+        !times_for(&t.get_pub(&slots_path(yoga_id, d1, d1, "Asia/Kolkata")).await, &sid(&asha)).contains(&"09:00".to_string()),
+        "a full class is not offered"
+    );
+    let listed = t.get_pub(&format!("{}&waitlist=1", slots_path(yoga_id, d1, d1, "Asia/Kolkata"))).await;
     let nine = listed["days"][0]["slots"].as_array().unwrap().iter().find(|s| s["time"] == json!("09:00")).cloned().expect("the full class is listed");
     assert_eq!((nine["full"].clone(), nine["seats_left"].clone(), nine["staff"][0]["id"].clone()), (json!(true), json!(0), json!(sid(&asha))));
     let open = |v: &Value| v["days"].as_array().unwrap().iter().flat_map(|d| d["slots"].as_array().unwrap().iter()).any(|s| s["time"] == json!("09:00"));
