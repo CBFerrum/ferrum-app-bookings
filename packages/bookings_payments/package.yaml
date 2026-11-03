@@ -1,0 +1,26 @@
+package: bookings_payments
+version: 0.1.0
+label: Booking Deposits
+description: Deposits for paid bookings through the store's payment methods - asked for when a guest books, the booking confirmed when it is paid, and refunded by the service's terms when the booking is cancelled.
+depends: [bookings, commerce]
+field_prefix: bpay_
+
+overlays:
+  - entity: BookingService
+    ops:
+      - {op: add_field, column: true, field: {name: bpay_deposit_percent, type: percent, min: "0", max: "100", label: Deposit (%),
+          description: "Of the price, paid online when a guest books: the booking is confirmed when it is. Empty: paid on the day"}}
+      - {op: add_field, column: true, field: {name: bpay_refund_hours, type: int, min: 0, max: 8760, default: 24, label: Full Refund Up To (Hours Before),
+          description: "Cancelled at least this long before it starts, the deposit comes back whole"}}
+      - {op: add_field, column: true, field: {name: bpay_keep_percent, type: percent, min: "0", max: "100", default: 100, label: Kept When Cancelled Later (%),
+          description: "Of the deposit, kept when the booking is cancelled later than that"}}
+  - entity: BookingSettings
+    ops:
+      - {op: add_field, column: true, field: {name: bpay_payment_method, type: data, max_length: 40, label: Deposit Payment Method,
+          description: "The store payment method (a gateway plugin's name) guests pay deposits through. Empty: no deposits are asked for"}}
+  - entity: Booking
+    ops:
+      - {op: add_field, column: true, field: {name: bpay_deposit, type: currency, read_only: true, no_copy: true, label: Deposit}}
+      - {op: add_field, column: true, field: {name: bpay_payment_request, type: link, to: PaymentRequest, read_only: true, no_copy: true, label: Deposit Request}}
+      - {op: add_field, column: true, field: {name: bpay_kept, type: currency, read_only: true, no_copy: true, label: Deposit Kept, description: What the cancellation terms kept}}
+      - {op: add_field, column: true, field: {name: bpay_refund, type: link, to: OrderRefund, read_only: true, no_copy: true, label: Deposit Refund}}
