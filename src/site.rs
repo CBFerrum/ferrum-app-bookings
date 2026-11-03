@@ -327,6 +327,8 @@ async fn book(k: &Kernel, ctx: &Ctx, body: &Map<String, Value>) -> Result<(u16, 
             "answers": rows,
         }));
         let doc = k.insert_tx(ctx, &mut tx, "Booking", input).await?;
+        // As saved, with what its hooks added (a deposit asked for).
+        let doc = k.get_tx(ctx, &mut tx, "Booking", doc_id(&doc)?, false).await?;
         let token = token::mint(&mut tx, ctx.tenant, doc_id(&doc)?).await?;
         let root = settings::site_root(&mut tx, ctx.tenant).await?;
         let view = guest_view(ctx, &mut tx, &doc, &st, &root, &token).await?;
@@ -391,6 +393,8 @@ async fn guest_view(ctx: &Ctx, tx: &mut Tx, b: &Doc, st: &Settings, root: &str, 
         "can_reschedule": active && now <= move_until,
         "reschedule_until": active.then(|| ts(move_until)),
         "links": {"manage": st.manage_link(root, tok), "ics": st.absolute(&format!("{root}/manage/{tok}/booking.ics"))},
+        // With Booking Deposits: the deposit asked for, and where to pay it while it is due.
+        "deposit": if ctx.schema.packages.iter().any(|p| p == crate::payments::PACKAGE) { crate::payments::guest_view(ctx, tx, b).await? } else { Value::Null },
     }))
 }
 
