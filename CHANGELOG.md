@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0, and Booking Deposits 0.1.0
+
+Deposits and refunds (FERRUM-BOOKINGS-003), in a connector app with Commerce, Booking Deposits,
+offered where both are installed.
+
+- A service can take a deposit (a share of its price) when a guest books it, refunded whole when the
+  booking is cancelled at least so many hours ahead, and kept in part (a share of it) later.
+- A guest's booking of such a service waits as Pending: it is invoiced at once, and the deposit is
+  asked for through the store's payment method named in Booking Settings. The guest's booking view
+  shows it and where to pay it. Paying confirms the booking; the rest is paid on the day.
+- Cancelling it settles the deposit by the terms: an unpaid one stops being asked for and its invoice
+  is cancelled; a paid one is kept in part, the invoice credited for the rest, and what was paid
+  beyond what is kept goes back through the gateway once a person approves the refund (Commerce 0.7.0).
+
+Not yet: a deposit for a booking staff make (only guests' bookings ask for one), and asking for the
+rest online before the day.
+
 ## 0.2.0
 
 - A booking page guests can use. At `/bookings/book/{workspace}`, with no sign-in: choose a service,

@@ -18,6 +18,7 @@ mod departures;
 pub mod engine;
 mod ics;
 mod notify;
+mod payments;
 mod reports;
 mod series;
 mod settings;
@@ -58,7 +59,15 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("BookingSettings", Arc::new(setup::SettingsHook))
         .add_site("bookings", Arc::new(site::BookingSite))
         .add_event_sink(Arc::new(departures::Departures));
+    // The connector with Commerce: only where Booking Deposits is installed.
+    hooks.scoped(&[payments::PACKAGE.to_string()], |h| {
+        h.register("Booking", Arc::new(payments::BookingHook)).register("PaymentEntry", Arc::new(payments::PaidHook));
+    });
 }
+
+/// The manifest of the connector app with Commerce (`connectors/payments/app.yaml`): its package is
+/// `bookings_payments`, its code this crate's. It ships with Bookings.
+pub const CONNECTOR_MANIFEST: &str = include_str!("../connectors/payments/app.yaml");
 
 /// This app's reports.
 pub fn reports() -> Vec<Arc<dyn ReportSource>> {
@@ -131,12 +140,20 @@ pub(crate) fn when(t: Instant, tz: Tz) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::payments;
+
     #[test]
     fn packages_are_valid() {
         let mut all = ferrum_domain::packages().expect("platform packages");
         all.extend(ferrum_app_erp::packages().expect("ERP's packages"));
+        // Booking Deposits are on Commerce's payment requests (its Finance connector is left out here).
+        all.extend(ferrum_app_commerce::packages().expect("Commerce's packages").into_iter().filter(|p| p.name() != "commerce_subscriptions"));
         all.extend(super::packages().expect("app packages"));
         let catalog = ferrum_meta::Catalog::from_packages(all).unwrap_or_else(|e| panic!("{e}"));
+        let with_deposits = ferrum_meta::effective::build(&catalog, &["bookings".into(), "commerce".into(), payments::PACKAGE.into()], &[], 1)
+            .unwrap_or_else(|e| panic!("{e}"));
+        assert!(with_deposits.entity("Booking").is_some_and(|b| b.field("bpay_payment_request").is_some()), "the connector's fields");
+        assert!(super::CONNECTOR_MANIFEST.contains("packages: [bookings_payments]"));
         let schema = ferrum_meta::effective::build(&catalog, &["bookings".to_string()], &[], 1).unwrap_or_else(|e| panic!("{e}"));
         assert!(schema.warnings.is_empty(), "{:?}", schema.warnings);
         assert!(schema.entity("BookingSettings").is_some_and(|e| e.secret_fields().count() == 1));

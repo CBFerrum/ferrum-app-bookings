@@ -382,7 +382,7 @@ pub async fn promote(k: &Kernel, ctx: &Ctx, tx: &mut Tx, svc: &ServiceInfo, st: 
 /// `make_sales_invoice`: a draft Sales Invoice for the booking at the price it was booked at
 /// (rate × seats, no discounts), once. A guest without a customer becomes one (matched by email
 /// first). A cancelled or deleted invoice frees the booking to be invoiced again.
-async fn invoice(hc: &mut HookCtx<'_>, booking: &Doc) -> Result<Value> {
+pub(crate) async fn invoice(hc: &mut HookCtx<'_>, booking: &Doc) -> Result<Value> {
     hc.ctx.require("SalesInvoice", Action::Create)?;
     let tenant = hc.ctx.tenant;
     let bid = doc_id(booking)?;

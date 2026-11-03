@@ -208,8 +208,12 @@ fn token_in(content: &str) -> String {
     content[at..at + 43].to_string()
 }
 
+/// The tests share one database that each of them resets: one at a time.
+static DB: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[test]
 fn bookings_end_to_end() {
+    let _db = DB.lock().unwrap_or_else(|e| e.into_inner());
     // Same runtime shape as the server: unoptimized async hook chains need more than 2 MiB.
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(16 << 20).build().unwrap();
     rt.block_on(async { tokio::spawn(scenario()).await.unwrap() });
@@ -221,7 +225,8 @@ async fn scenario() {
     sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_erp::packages().expect("ERP's packages"));
-    packages.extend(ferrum_app_bookings::packages().expect("app packages"));
+    // Bookings without its Commerce connector, which deposits_end_to_end tests.
+    packages.extend(ferrum_app_bookings::packages().expect("app packages").into_iter().filter(|p| p.name() != "bookings_payments"));
     packages.push(mail_stand_in());
     let catalog = Catalog::from_packages(packages).expect("catalog");
     let mut hooks = HookRegistry::default();
@@ -1041,4 +1046,166 @@ async fn scenario() {
     }
     assert!(matches!(cancel("10.7.0.1").await, Err(Error::TooManyRequests(_))), "the 31st write in ten minutes");
     assert!(!matches!(cancel("10.7.0.2").await, Err(Error::TooManyRequests(_))), "another address");
+}
+
+#[test]
+fn deposits_end_to_end() {
+    let _db = DB.lock().unwrap_or_else(|e| e.into_inner());
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(16 << 20).build().unwrap();
+    rt.block_on(async { tokio::spawn(deposits()).await.unwrap() });
+}
+
+/// A facial of 1,000 takes a 30% deposit online, all of it back if cancelled two days ahead.
+async fn deposits() {
+    let url = std::env::var("FERRUM_BOOKINGS_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_bookings_test".into());
+    let db = Db::connect(DbConfig { url, max_connections: 24, ..Default::default() }).await.expect("connect");
+    sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    let mut packages = ferrum_domain::packages().expect("platform packages");
+    packages.extend(ferrum_app_erp::packages().expect("ERP's packages"));
+    // Commerce's own packages (its Store Subscriptions connector needs Finance, which this test leaves out).
+    packages.extend(ferrum_app_commerce::packages().expect("Commerce's packages").into_iter().filter(|p| p.name() != "commerce_subscriptions"));
+    packages.extend(ferrum_app_bookings::packages().expect("app packages"));
+    let catalog = Catalog::from_packages(packages).expect("catalog");
+    let mut hooks = HookRegistry::default();
+    ferrum_domain::register(&mut hooks);
+    ferrum_app_erp::register(&mut hooks);
+    ferrum_app_commerce::register(&mut hooks);
+    ferrum_app_bookings::register(&mut hooks);
+    let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), ..Default::default() };
+    let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
+    ferrum_domain::maintenance(&k).await.expect("partitions");
+    ferrum_app_erp::maintenance(&k).await.expect("partitions");
+    let tenant = k
+        .create_tenant(NewTenant {
+            slug: "glow".into(),
+            name: "Glow Studio".into(),
+            admin_email: "admin@glow.test".into(),
+            admin_password: "Correct-Horse-9".into(),
+            admin_name: None,
+            packages: vec!["bookings".into(), "commerce".into(), "bookings_payments".into()],
+            settings: Some(json!({"fiscal_year_start_month": 4, "timezone": "Asia/Kolkata"})),
+        })
+        .await
+        .expect("tenant");
+    let session = k.login("glow", "admin@glow.test", "Correct-Horse-9").await.expect("login");
+    let admin = k.load_ctx(tenant, session.user, Some(session.token_version), "it".into()).await.expect("ctx");
+    let site = k.hooks.site("bookings").cloned().expect("bookings site");
+    let t = T { k: k.clone(), tenant, admin, site, calls: AtomicU32::new(0) };
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let at = |hhmm: &str| local(ist, day, hhmm);
+
+    // ───────────── a store to take the money, a studio to book ─────────────
+    let inr = t.find_one("Currency", json!({"code": "INR"})).await;
+    let cid = uid(&t.insert(&a, "Company", json!({"company_name": "Glow Studio", "abbr": "GS", "default_currency": inr["id"]})).await);
+    let services_group = t.find_one("ItemGroup", json!({"group_name": "Services"})).await;
+    let nos = t.find_one("Uom", json!({"uom_name": "Nos"})).await;
+    let item = |code: &str| json!({"item_code": code, "item_name": code, "item_group": services_group["id"], "stock_uom": nos["id"], "is_stock_item": false});
+    let facial_item = uid(&t.insert(&a, "Item", item("FACIAL")).await);
+    let ship = uid(&t.insert(&a, "Item", item("SHIP")).await);
+    let stores = t.find_one("Warehouse", json!({"warehouse_name": "Stores", "company": cid.to_string()})).await;
+    let selling = t.find_one("PriceList", json!({"price_list_name": "Standard Selling"})).await;
+    t.insert(
+        &a,
+        "StoreSettings",
+        json!({"store_name": "Glow", "company": cid.to_string(), "currency": inr["id"], "price_list": selling["id"], "fulfilment_warehouse": stores["id"],
+               "shipping_item": ship.to_string(), "payment_methods": [{"gateway": "fakepay", "label": "Card", "expiry_minutes": 30}], "store_url": "https://glow.test"}),
+    )
+    .await;
+    let fakepay = {
+        let role = "plugin:fakepay".to_string();
+        for entity in ["PaymentRequest", "PaymentException", "OrderRefund"] {
+            let p = ferrum_meta::PermissionDef { entity: entity.into(), read: true, write: true, ..Default::default() };
+            t.k.set_role_permission(&a, &role, &p).await.unwrap();
+        }
+        let u = t.k.create_user(&a, "fakepay@plugins.ferrum.invalid", "Plugin: fakepay", None, &[role], false).await.unwrap();
+        t.k.load_ctx(tenant, u, None, "plugin-fakepay".into()).await.unwrap()
+    };
+    let manager = t.user("manager@glow.test", &["Bookings Manager"]).await;
+    t.insert(
+        &manager,
+        "BookingSettings",
+        json!({"company": cid.to_string(), "public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 30,
+               "cancellation_window_hours": 0, "reschedule_window_hours": 0, "bpay_payment_method": "fakepay"}),
+    )
+    .await;
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let mira = t
+        .insert(&manager, "BookingStaff", json!({"display_name": "Mira", "email": "mira@glow.test", "time_zone": "Asia/Kolkata", "working_hours": every}))
+        .await;
+    let facial = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Facial", "duration_minutes": 60, "price": "1000", "item": facial_item.to_string(), "location_type": "In Person",
+                   "staff": [{"staff": sid(&mira)}], "bpay_deposit_percent": "30", "bpay_refund_hours": 48, "bpay_keep_percent": "100"}),
+        )
+        .await);
+    let book = |hhmm: &'static str, email: &'static str| {
+        let t = &t;
+        async move {
+            let v = t.book(json!({"service": facial.to_string(), "start_time": rfc(at(hhmm)), "name": "Guest", "email": email})).await.expect("booked");
+            let number = v["booking"]["number"].as_str().unwrap().to_string();
+            (uid(&t.find_one("Booking", json!({"number": number})).await), v["booking"].clone())
+        }
+    };
+
+    // ───────────── a guest books: the booking waits for its deposit ─────────────
+    let (first, view) = book("10:00", "asha@example.test").await;
+    assert_eq!((view["status"].clone(), view["deposit"]["status"].clone()), (json!("Pending"), json!("Initiated")));
+    assert_eq!(dec_of(&view["deposit"]["amount"]), "300", "30% of 1,000");
+    let b = t.get("Booking", first).await;
+    let invoice = t.get("SalesInvoice", b["sales_invoice"].as_str().unwrap().parse().unwrap()).await;
+    assert_eq!((invoice["docstatus"].clone(), dec_of(&invoice["grand_total"])), (json!(1), "1000".to_string()), "invoiced at once");
+    let request: Uuid = b["bpay_payment_request"].as_str().unwrap().parse().unwrap();
+    t.act(&fakepay, "PaymentRequest", request, "mark_paid", json!({"amount": "300", "currency": "INR", "gateway_reference": "pi_1"})).await;
+    assert_eq!(t.get("Booking", first).await["status"], json!("Confirmed"), "paying the deposit confirms it");
+    assert_eq!(dec_of(&t.get("SalesInvoice", uid(&invoice)).await["outstanding_amount"]), "700", "the rest is paid on the day");
+
+    // ───────────── cancelled three days ahead: all 300 back ─────────────
+    t.act(&manager, "Booking", first, "cancel_booking", json!({"reason": "Unwell"})).await;
+    let b = t.get("Booking", first).await;
+    assert_eq!(dec_of(&b["bpay_kept"]), "0");
+    let refund: Uuid = b["bpay_refund"].as_str().unwrap().parse().unwrap();
+    let r = t.get("OrderRefund", refund).await;
+    assert_eq!((r["kind"].clone(), dec_of(&r["amount"]), r["status"].clone()), (json!("Payment"), "300".to_string(), json!("Requested")));
+    let note = t.get("SalesInvoice", r["credit_note"].as_str().unwrap().parse().unwrap()).await;
+    assert_eq!(
+        (dec_of(&note["grand_total"]), dec_of(&t.get("SalesInvoice", uid(&invoice)).await["outstanding_amount"])),
+        ("-1000".to_string(), "0".to_string())
+    );
+    t.act(&a, "OrderRefund", refund, "approve_refund", json!({})).await;
+    t.act(&fakepay, "OrderRefund", refund, "refund_done", json!({"refund_reference": "re_1"})).await;
+    let r = t.get("OrderRefund", refund).await;
+    assert_eq!((r["status"].clone(), r["booked"].clone()), (json!("Refunded"), json!(true)), "{}", r["booking_error"]);
+
+    // ───────────── cancelled within the two days: the deposit is kept ─────────────
+    t.update(&manager, "BookingService", facial, json!({"bpay_refund_hours": 100})).await;
+    let (second, _) = book("12:00", "ben@example.test").await;
+    let b = t.get("Booking", second).await;
+    let request: Uuid = b["bpay_payment_request"].as_str().unwrap().parse().unwrap();
+    t.act(&fakepay, "PaymentRequest", request, "mark_paid", json!({"amount": "300", "currency": "INR", "gateway_reference": "pi_2"})).await;
+    t.act(&manager, "Booking", second, "cancel_booking", json!({"reason": "Changed plans"})).await;
+    let b = t.get("Booking", second).await;
+    assert_eq!((dec_of(&b["bpay_kept"]), b["bpay_refund"].clone()), ("300".to_string(), Value::Null), "nothing goes back");
+    let invoice = t.get("SalesInvoice", b["sales_invoice"].as_str().unwrap().parse().unwrap()).await;
+    assert_eq!(dec_of(&invoice["outstanding_amount"]), "0", "credited for the 700 not kept");
+
+    // ───────────── cancelled before paying: nothing was taken ─────────────
+    let (third, _) = book("14:00", "omar@example.test").await;
+    let b = t.get("Booking", third).await;
+    t.act(&manager, "Booking", third, "cancel_booking", json!({})).await;
+    let request = t.get("PaymentRequest", b["bpay_payment_request"].as_str().unwrap().parse().unwrap()).await;
+    let invoice = t.get("SalesInvoice", b["sales_invoice"].as_str().unwrap().parse().unwrap()).await;
+    assert_eq!((request["status"].clone(), invoice["docstatus"].clone()), (json!("Cancelled"), json!(2)));
+}
+
+/// A decimal as text without trailing zeros.
+fn dec_of(v: &Value) -> String {
+    let text = match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    text.parse::<rust_decimal::Decimal>().map(|d| d.normalize().to_string()).unwrap_or(text)
 }
