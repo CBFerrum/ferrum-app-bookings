@@ -289,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.3.1** | Rebuilt with Ferrum-Frontend 80ff179: labels name their fields, and linked titles show their titles. |
 | **0.3.0** | Deposits with Booking Deposits (a connector with Commerce): a guest's booking of a paid service waits for its deposit, paid online through the store, and a cancellation refunds it whole when early enough or keeps the service's share when late, through the gateway once a person approves. |
 | **0.2.0** | Its own interface: a public booking page guests can use (service, person, day and time in their own zone, move or cancel from the link), the team's schedule with moving by drag or keyboard, today's list, and the booking page's settings. |
 | **0.1.1** | Requires the ERP app: installing it in a workspace without ERP installs ERP whole, with its interface, rather than a few of its packages. |
