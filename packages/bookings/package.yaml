@@ -15,7 +15,7 @@ modules:
 # What a personal-data request exports and erases for a guest (their email): who booked and what
 # they wrote; the time the booking held stays.
 personal_data:
-  - {entity: Booking, match: guest_email, erase: [guest_name, guest_email, guest_phone, answers, notes, cancellation_reason]}
+  - {entity: Booking, match: guest_email, phone: guest_phone, name: guest_name, erase: [guest_name, guest_email, guest_phone, answers, notes, cancellation_reason]}
 roles:
   - name: Bookings Manager
     description: Runs the booking calendar — services, staff, working hours, time off, resources, settings and every booking (confirm, reschedule, cancel, invoice).
