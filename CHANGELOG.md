@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+Rebuilt with Ferrum-Frontend daeadda: after an action runs, a record page shows what the action said it did rather than only that it is done.
+
 ## 0.4.0
 
 Outside calendars (FERRUM-BOOKINGS-004): what a staff member's own calendar elsewhere says now
