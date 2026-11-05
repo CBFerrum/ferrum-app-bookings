@@ -18,6 +18,7 @@ mod departures;
 pub mod engine;
 mod ics;
 mod notify;
+mod outside;
 mod payments;
 mod reports;
 mod series;
@@ -80,8 +81,8 @@ pub async fn maintenance(k: &Kernel) -> Result<()> {
 }
 
 /// [`maintenance`] as of `now` (tests move the clock): per tenant with bookings, send change
-/// notices and due reminders, close waitlists of started classes, fill freed class seats and
-/// purge expired guest links. A failing tenant is logged and does not stop the others; the first
+/// notices and due reminders, close waitlists of started classes, fill freed class seats, purge
+/// expired guest links and read staff members' outside calendars whose turn has come. A failing tenant is logged and does not stop the others; the first
 /// error is returned.
 pub async fn maintenance_at(k: &Kernel, now: Instant) -> Result<()> {
     let mut tx = k.db.system_tx().await?;
@@ -97,12 +98,16 @@ pub async fn maintenance_at(k: &Kernel, now: Instant) -> Result<()> {
                 continue;
             }
         };
-        match notify::run(k, tenant, schema, now).await {
+        match notify::run(k, tenant, schema.clone(), now).await {
             Ok(round) if round != notify::Round::default() => tracing::info!(%tenant, ?round, "bookings maintenance"),
             Ok(_) => {}
             Err(e) => {
                 first_error.get_or_insert(e);
             }
+        }
+        if let Err(e) = outside::read_due(k, tenant, schema, now).await {
+            tracing::warn!(%tenant, "outside calendars: {e}");
+            first_error.get_or_insert(e);
         }
     }
     first_error.map_or(Ok(()), Err)
