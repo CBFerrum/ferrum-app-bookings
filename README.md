@@ -50,7 +50,7 @@ Durations, buffers, prices, seats and in-person, video or phone locations.
 <td width="50%" valign="top">
 
 ### 🌍 Staff in their own time
-IANA time zones, several working intervals a day, time off, rooms and equipment.
+IANA time zones, several working intervals a day, time off, rooms and equipment; busy times read from their own calendars elsewhere.
 
 </td>
 </tr>
@@ -289,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.4.0** | Outside calendars: a staff member's own calendar elsewhere (Google, Outlook, iCloud, Nextcloud, Ferrum Comms), read every quarter of an hour by its iCalendar address, keeps guests from the times it says they are busy, with the service's buffers. Only the times are kept; recurring events, exceptions, moved occurrences, all-day events and Outlook's zone names are read with the icalendar crate. |
 | **0.3.1** | Rebuilt with Ferrum-Frontend 80ff179: labels name their fields, and linked titles show their titles. |
 | **0.3.0** | Deposits with Booking Deposits (a connector with Commerce): a guest's booking of a paid service waits for its deposit, paid online through the store, and a cancellation refunds it whole when early enough or keeps the service's share when late, through the gateway once a person approves. |
 | **0.2.0** | Its own interface: a public booking page guests can use (service, person, day and time in their own zone, move or cancel from the link), the team's schedule with moving by drag or keyboard, today's list, and the booking page's settings. |
