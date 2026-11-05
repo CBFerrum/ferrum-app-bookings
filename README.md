@@ -289,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.4.2** | Personal-data requests find booking records by the person's phone number as well as their email, and list the booking records holding their name apart, for an … |
 | **0.4.1** | Rebuilt with Ferrum-Frontend daeadda: actions say what they did. |
 | **0.4.0** | Outside calendars: a staff member's own calendar elsewhere (Google, Outlook, iCloud, Nextcloud, Ferrum Comms), read every quarter of an hour by its iCalendar address, keeps guests from the times it says they are busy, with the service's buffers. Only the times are kept; recurring events, exceptions, moved occurrences, all-day events and Outlook's zone names are read with the icalendar crate. |
 | **0.3.1** | Rebuilt with Ferrum-Frontend 80ff179: labels name their fields, and linked titles show their titles. |
