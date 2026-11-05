@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3
+
+Rebuilt with Ferrum-Frontend 00dea07: in a workflow state that names what may change, the other fields show read-only, and the fields the state needs show required.
+
 ## 0.4.2
 
 Personal-data requests find booking records by the person's phone number as well as their email, and list the booking records holding their name apart, for an administrator to judge (never erased for the name alone) (Ferrum's FERRUM-PRIVACY-002).
