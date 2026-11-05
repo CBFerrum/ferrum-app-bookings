@@ -167,6 +167,8 @@ pub struct Staff {
     pub tz: Tz,
     pub hours: Vec<Hours>,
     pub time_off: Vec<Span>,
+    /// When their own calendar elsewhere says they are busy.
+    pub busy: Vec<Span>,
 }
 
 #[derive(Debug, Clone)]
@@ -220,6 +222,7 @@ pub enum Why {
     OffGrid,
     TimeOff,
     Busy,
+    Elsewhere,
     Full,
     NoResource,
 }
@@ -234,6 +237,7 @@ impl Why {
             Why::OffGrid => "not one of the offered start times",
             Why::TimeOff => "on time off",
             Why::Busy => "already booked then",
+            Why::Elsewhere => "busy in their own calendar",
             Why::Full => "the class is full",
             Why::NoResource => "no room or equipment is free then",
         }
@@ -325,6 +329,9 @@ impl World {
         let block = Span::new(start - svc.before, appt.end + svc.after);
         if mine.iter().any(|b| b.block.overlaps(&block) && key.as_ref() != Some(&b.session)) {
             return Err(Why::Busy);
+        }
+        if staff.busy.iter().any(|b| b.overlaps(&block)) {
+            return Err(Why::Elsewhere);
         }
         let taken: i64 = session.iter().map(|b| b.seats).sum();
         if taken + seats > svc.capacity {
@@ -508,7 +515,7 @@ mod tests {
     }
 
     fn staff(n: u128, tz: Tz, hours: Vec<Hours>) -> Staff {
-        Staff { id: uid(n), tz, hours, time_off: vec![] }
+        Staff { id: uid(n), tz, hours, time_off: vec![], busy: vec![] }
     }
 
     fn service(minutes: i64, before: i64, after: i64, capacity: i64, interval: i64) -> Service {
@@ -693,6 +700,17 @@ mod tests {
         let mut w = world(service(60, 30, 0, 1, 30), vec![staff(1, utc, every_day("09:00", "13:00"))]);
         book(&mut w, 1, "2026-06-01T10:00:00Z", 1, None);
         assert_eq!(why(&w, "2026-06-01T11:00:00Z"), [Why::Busy], "11:00 needs 10:30-11:00 free to prepare");
+        assert!(w.candidates_at(t("2026-06-01T11:30:00Z"), 1).0.len() == 1);
+    }
+
+    #[test]
+    fn busy_elsewhere_with_the_buffers() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let mut s = staff(1, utc, every_day("09:00", "13:00"));
+        s.busy = vec![Span::new(t("2026-06-01T10:00:00Z"), t("2026-06-01T11:00:00Z"))];
+        let w = world(service(60, 30, 0, 1, 30), vec![s]);
+        assert_eq!(why(&w, "2026-06-01T10:30:00Z"), [Why::Elsewhere]);
+        assert_eq!(why(&w, "2026-06-01T11:00:00Z"), [Why::Elsewhere], "11:00 needs 10:30-11:00 free to prepare");
         assert!(w.candidates_at(t("2026-06-01T11:30:00Z"), 1).0.len() == 1);
     }
 

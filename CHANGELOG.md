@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.0
+
+Outside calendars (FERRUM-BOOKINGS-004): what a staff member's own calendar elsewhere says now
+keeps guests from those times, as a booking does.
+
+- A staff record takes the address of a calendar of theirs in iCalendar format (Google Calendar's
+  secret address in iCal format, Outlook's published ICS link, an iCloud or Nextcloud subscription
+  link, Ferrum Comms' own feed). It is a secret: it opens their calendar, so it is never shown again
+  or repeated in a message.
+- Every quarter of an hour the upkeep reads it through the platform's vetted client (https, never
+  a private address, 15 seconds, 5 MB) and keeps only when they are busy, never what an event is.
+  A time it covers, with the service's buffers, is not offered ("busy in their own calendar").
+- Events marked free (`TRANSP:TRANSPARENT`, Outlook's free) or cancelled are not busy. Recurring
+  events are expanded with their exceptions, and a moved occurrence counts where it went, by the
+  icalendar crate (rrule underneath) rather than by hand; all-day events and floating times are
+  read in the staff member's zone, Outlook's Windows zone names are mapped, and a zone nobody knows
+  is taken as the staff member's own.
+- A reading that fails says why on the staff record (Outside Calendar Problem), and what was read
+  before still counts; an address taken off the record takes its busy times with it.
+
+Not yet: a booking already made is not flagged when an outside calendar later says the staff
+member is busy then; nothing is written to the outside calendar beyond the feeds and invitations
+Bookings already sends.
+
 ## 0.3.1
 
 Rebuilt with Ferrum-Frontend 80ff179: a field's label names its control for assistive technology, and a record whose title is a link shows that record's title, not its id.
