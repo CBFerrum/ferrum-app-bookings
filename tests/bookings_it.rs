@@ -196,6 +196,28 @@ fn all_starts(slots: &Value) -> Vec<String> {
     slots["days"].as_array().unwrap().iter().flat_map(|d| d["slots"].as_array().unwrap().iter()).map(|s| s["start"].as_str().unwrap().to_string()).collect()
 }
 
+/// A stand-in for an outside calendar's address, on this machine: answers each request with the
+/// status and calendar it holds at the time, and counts the requests.
+async fn calendar_stand_in(calendar: Arc<std::sync::Mutex<(u16, String)>>) -> (String, Arc<AtomicU32>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/calendar.ics", listener.local_addr().unwrap());
+    let hits = Arc::new(AtomicU32::new(0));
+    let counted = hits.clone();
+    tokio::spawn(async move {
+        while let Ok((mut sock, _)) = listener.accept().await {
+            let mut buf = vec![0u8; 8192];
+            let _ = sock.read(&mut buf).await;
+            counted.fetch_add(1, Ordering::SeqCst);
+            let (status, body) = calendar.lock().unwrap().clone();
+            let answer = format!("HTTP/1.1 {status} X\r\nContent-Type: text/calendar\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+            let _ = sock.write_all(answer.as_bytes()).await;
+            let _ = sock.shutdown().await;
+        }
+    });
+    (url, hits)
+}
+
 fn messages(e: &Error) -> String {
     match e {
         Error::Validation(list) => list.iter().map(|f| format!("{}: {}", f.field, f.message)).collect::<Vec<_>>().join(" | "),
@@ -239,7 +261,8 @@ async fn scenario() {
     for source in ferrum_app_bookings::reports() {
         ferrum_domain::reports::add_source(source);
     }
-    let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), ..Default::default() };
+    // Private addresses allowed: the outside calendar's stand-in is on this machine.
+    let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), webhooks_allow_private: true, ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("partitions");
     ferrum_app_erp::maintenance(&k).await.expect("partitions");
@@ -414,6 +437,55 @@ async fn scenario() {
         assert!(matches!(t.site("GET", &bad, None).await, Err(Error::Validation(_))), "{bad}");
     }
     assert!(matches!(t.site("GET", &slots_path(Uuid::now_v7(), d, d, "UTC"), None).await, Err(Error::NotFound(_))));
+
+    // ───────────── outside calendars (FERRUM-BOOKINGS-004) ─────────────
+    // Asha's own calendar elsewhere, read by its iCalendar address: the dentist from 10:00 to 11:00
+    // on day d, a reminder marked free at noon, and a conference all of d1.
+    let ics_at = |t: DateTime<Utc>| t.format("%Y%m%dT%H%M%SZ").to_string();
+    let event = |uid: &str, from: DateTime<Utc>, to: DateTime<Utc>, more: &str| {
+        format!("BEGIN:VEVENT\r\nUID:{uid}\r\nDTSTART:{}\r\nDTEND:{}\r\nSUMMARY:Private\r\n{more}END:VEVENT\r\n", ics_at(from), ics_at(to))
+    };
+    let feed = |events: String| format!("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//elsewhere//EN\r\n{events}END:VCALENDAR\r\n");
+    let conference =
+        format!("BEGIN:VEVENT\r\nUID:conf\r\nDTSTART;VALUE=DATE:{}\r\nDTEND;VALUE=DATE:{}\r\nEND:VEVENT\r\n", d1.format("%Y%m%d"), d2.format("%Y%m%d"));
+    let dentist = event("dentist", at(d, "10:00"), at(d, "11:00"), "");
+    let reminder = event("reminder", at(d, "12:00"), at(d, "12:30"), "TRANSP:TRANSPARENT\r\n");
+    let calendar = Arc::new(std::sync::Mutex::new((200u16, feed(format!("{dentist}{reminder}{conference}")))));
+    let (url, hits) = calendar_stand_in(calendar.clone()).await;
+    t.update(&manager, "BookingStaff", asha_id, json!({"outside_calendar": url})).await;
+    assert_eq!(t.get("BookingStaff", asha_id).await["outside_calendar"], json!(true), "the address is a secret: it opens her calendar");
+    let now = Utc::now();
+    t.maintain(now).await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    let read = t.get("BookingStaff", asha_id).await;
+    assert!(read["outside_calendar_read"].is_string() && read["outside_calendar_error"].is_null(), "{read:?}");
+    // The massage's 15 minutes after it count too, so 09:00 goes with the dentist's hour.
+    let without_dentist: Vec<&str> = asha_day.iter().copied().filter(|h| !["09:00", "09:30", "10:00", "10:30"].contains(h)).collect();
+    let asha_sid = sid(&asha);
+    let asha_on = |from: NaiveDate, to: NaiveDate| {
+        let (t, who, path) = (&t, &asha_sid, slots_path(massage_id, from, to, "Asia/Kolkata"));
+        async move { times_for(&t.get_pub(&path).await, who) }
+    };
+    assert_eq!(asha_on(d, d1).await, without_dentist, "nothing on the conference day; the free reminder is free");
+    assert_eq!(t.scalar("select count(*) from bookings_outside_busy where tenant_id = $1 and staff = $2", Some(asha_id)).await, 2, "times only");
+    t.maintain(now + Duration::minutes(5)).await;
+    assert_eq!(hits.load(Ordering::SeqCst), 1, "read every quarter of an hour");
+    // Unreadable, it says why, and what was read before still counts.
+    calendar.lock().unwrap().0 = 500;
+    t.maintain(now + Duration::minutes(16)).await;
+    assert_eq!(hits.load(Ordering::SeqCst), 2);
+    assert_eq!(t.get("BookingStaff", asha_id).await["outside_calendar_error"], json!("it answered 500 Internal Server Error"));
+    assert_eq!(asha_on(d, d).await, without_dentist);
+    // The dentist cancelled: read again, the hour is offered once more.
+    *calendar.lock().unwrap() = (200, feed(conference.clone()));
+    t.maintain(now + Duration::minutes(32)).await;
+    assert_eq!(asha_on(d, d).await, asha_day);
+    assert!(t.get("BookingStaff", asha_id).await["outside_calendar_error"].is_null());
+    // The address taken off her record, the conference no longer counts.
+    t.update(&manager, "BookingStaff", asha_id, json!({"outside_calendar": null})).await;
+    t.maintain(now + Duration::minutes(33)).await;
+    assert_eq!(asha_on(d1, d1).await, asha_day);
+    assert_eq!(hits.load(Ordering::SeqCst), 3);
 
     // ───────────── internal booking, buffers, fair choice of staff ─────────────
     let meera = t.insert(&manager, "Customer", json!({"customer_name": "Meera Iyer", "customer_type": "Individual", "email": "meera@example.test"})).await;

@@ -30,13 +30,18 @@ hex = "0.4"
 hmac = "0.12"
 rand = "0.9"
 base64 = "0.22"
+# Staff members' outside calendars, read by their iCalendar addresses: parsed, and recurring
+# events expanded (with time zones and exceptions), by a mature crate rather than by hand.
+icalendar = { version = "0.17", default-features = false, features = ["parser", "recurrence", "chrono-tz"] }
+# Reading them through the kernel's vetted client.
+reqwest = { version = "0.12", default-features = false }
 
 [dev-dependencies]
 # Its tests run on ERP's records (customers, invoices, the ledger), and check that its interface is
 # a release the platform takes.
 ferrum-app-erp = { git = "https://github.com/CBFerrum/ferrum-app-erp", branch = "main" }
 ferrum-apps = { git = "https://github.com/CBFerrum/Ferrum", branch = "main" }
-tokio = { version = "1.45", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+tokio = { version = "1.45", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net", "io-util"] }
 
 [lints.clippy]
 type_complexity = "allow"

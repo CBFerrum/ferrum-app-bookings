@@ -65,12 +65,17 @@
     - {name: bio, type: text, description: "Shown on the booking page"}
     - {name: working_hours, type: table, of: BookingWorkingHour}
     - {name: feed_version, type: int, default: 1, read_only: true, hidden: true, no_copy: true}
+    - {name: outside_calendar, type: secret, description: "The address of a calendar of theirs in iCalendar format: Google Calendar's secret address in iCal format, Outlook's published ICS link, an iCloud or Nextcloud subscription link. When it says they are busy, guests are not offered that time; nothing else is read or kept"}
+    - {name: outside_calendar_read, type: datetime, read_only: true, no_copy: true, description: "When it was last read. It is read every quarter of an hour"}
+    - {name: outside_calendar_error, type: data, read_only: true, no_copy: true, label: Outside Calendar Problem, description: "Why the last reading failed, or what in it could not be read. What was read before still counts"}
+    - {name: outside_calendar_tried, type: datetime, read_only: true, hidden: true, no_copy: true}
   actions:
     - {name: calendar_feed, label: Calendar Feed Link, permission: read}
     - {name: rotate_calendar_feed, label: Reset Calendar Feed Link, permission: read, confirm: "A new feed link is made and every earlier one stops working. Continue?"}
   form:
     - {label: Staff, fields: [display_name, email, time_zone, active, bio]}
     - {label: Working Hours, fields: [working_hours]}
+    - {label: Outside Calendar, fields: [outside_calendar, outside_calendar_read, outside_calendar_error]}
   list: {columns: [display_name, email, time_zone, active], sort: display_name asc}
 
 - name: StaffTimeOff

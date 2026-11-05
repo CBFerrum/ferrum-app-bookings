@@ -270,6 +270,15 @@ pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffI
     .bind(to)
     .fetch_all(&mut **tx)
     .await?;
+    let elsewhere: Vec<(Uuid, Instant, Instant)> = sqlx::query_as(
+        "select staff, from_time, to_time from bookings_outside_busy where tenant_id = $1 and staff = any($2) and to_time > $3 and from_time < $4",
+    )
+    .bind(tenant)
+    .bind(&staff_ids)
+    .bind(from)
+    .bind(to)
+    .fetch_all(&mut **tx)
+    .await?;
     let booked: Vec<BookedRow> = sqlx::query_as(
         "select id, staff, service, resource, start_time, end_time, block_start, block_end, session_key, seats from e_booking \
          where tenant_id = $1 and status in ('Pending', 'Confirmed') and block_end > $3 and block_start < $4 \
@@ -293,6 +302,7 @@ pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffI
                 tz: s.tz,
                 hours: s.hours.clone(),
                 time_off: off.iter().filter(|o| o.0 == s.id).map(|o| Span::new(o.1, o.2)).collect(),
+                busy: elsewhere.iter().filter(|o| o.0 == s.id).map(|o| Span::new(o.1, o.2)).collect(),
             })
             .collect(),
         // In the service's order of preference.
