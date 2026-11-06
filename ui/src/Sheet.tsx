@@ -8,7 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Mail, MapPin, Phone, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { api, docPath, errorMessage } from "@ferrum/client";
+import { api, docPath, errorMessage, formatMoment } from "@ferrum/client";
 import { Alert, Badge, Button, confirmDialog, Dialog, ErrorState, Field, Menu, MenuItem, Spinner, TabPanel, Tabs, toast } from "@ferrum/kit";
 import { type Bk, nextSteps, type Step, tone } from "./board";
 import { act } from "./data";
@@ -58,7 +58,7 @@ function History({ id }: { id: string }) {
         <li key={`${e.at}-${i}`}>
           <strong>{HISTORY[e.action]}</strong>
           <span className="faint">
-            {new Date(e.at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
+            {formatMoment(e.at, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
             {e.actor_name || e.actor ? ` · ${e.actor_name ?? e.actor}` : ""}
           </span>
         </li>
