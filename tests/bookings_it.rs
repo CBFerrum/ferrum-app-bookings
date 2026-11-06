@@ -1068,7 +1068,16 @@ async fn scenario() {
     assert_eq!(t.scalar("select count(*) from e_booking where tenant_id = $1 and guest_name = 'Rae'", None).await, before, "nothing was repeated");
     assert_eq!(t.get("Booking", first_id).await["series"], Value::Null);
     // Skipping what does not fit is the caller's choice, and the answer says what was skipped.
-    let out = t.act(&manager, "Booking", first_id, "repeat", json!({"every": "week", "count": 4, "skip_conflicts": true})).await;
+    // What the record page can give it asks for; what it cannot (a time, the free slots) is the
+    // schedule's, and the page offers no button for it.
+    let booking = manager.schema.entity("Booking").unwrap();
+    let action = |name: &str| booking.def.actions.iter().find(|a| a.name == name).unwrap();
+    for (name, asks) in [("repeat", &["every", "count", "skip_conflicts"][..]), ("cancel_booking", &["reason"]), ("cancel_series", &["reason"])] {
+        assert_eq!(action(name).params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), asks, "{name}");
+    }
+    assert!(action("reschedule").hidden && manager.schema.entity("BookingService").unwrap().def.actions.iter().any(|a| a.name == "find_slots" && a.hidden));
+    // The page's dialog says "Yes".
+    let out = t.act(&manager, "Booking", first_id, "repeat", json!({"every": "week", "count": 4, "skip_conflicts": "Yes"})).await;
     assert_eq!(out["skipped"].as_array().unwrap().len(), 1, "{out}");
     assert_eq!(out["skipped"][0]["date"], json!("2030-10-29"));
     assert_eq!(out["booked"].as_array().unwrap().len(), 2, "{out}");
