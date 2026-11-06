@@ -1,6 +1,6 @@
 id: bookings
 name: Bookings
-version: 0.4.6
+version: 0.4.7
 publisher: cbferrum
 summary: "Appointment scheduling: services, staff and resources, availability, a public booking page, reminders, reschedules and paid bookings"
 description: README.md
