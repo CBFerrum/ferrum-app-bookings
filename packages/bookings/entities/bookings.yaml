@@ -143,7 +143,8 @@
     - {name: resources, type: table, of: BookingServiceResource, description: "Each booking needs one of these free; empty = none"}
     - {name: questions, type: table, of: BookingQuestion, label: Intake Questions}
   actions:
-    - {name: find_slots, label: Find Free Slots, permission: read}
+    # The booking screens list the free times; a record page could not show them.
+    - {name: find_slots, label: Find Free Slots, permission: read, hidden: true}
   form:
     - {label: Service, fields: [service_name, active, description, location_type, location_details]}
     - {label: Time, fields: [duration_minutes, buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, capacity]}
@@ -212,14 +213,32 @@
     - {name: guest_or_customer, check: "doc.customer != null || (doc.guest_name != null && doc.guest_name != '')", message: "Choose a customer or enter the guest's name"}
   actions:
     - {name: confirm, label: Confirm, permission: write, condition: "doc.status == 'Pending'"}
-    - {name: reschedule, label: Reschedule, permission: write, condition: "doc.status == 'Pending' || doc.status == 'Confirmed'"}
-    - {name: cancel_booking, label: Cancel Booking, permission: write, condition: "doc.status == 'Pending' || doc.status == 'Confirmed' || doc.status == 'Waitlisted'"}
+    # Moved on the schedule, which offers the free times (a record page has no date and time to give).
+    - {name: reschedule, label: Reschedule, permission: write, hidden: true, condition: "doc.status == 'Pending' || doc.status == 'Confirmed'"}
+    - name: cancel_booking
+      label: Cancel Booking
+      permission: write
+      condition: "doc.status == 'Pending' || doc.status == 'Confirmed' || doc.status == 'Waitlisted'"
+      params:
+        - {name: reason, type: text, label: Reason, description: The guest sees it}
     - {name: complete, label: Mark Completed, permission: write, condition: "doc.status == 'Confirmed'"}
     - {name: mark_no_show, label: Mark No Show, permission: write, condition: "doc.status == 'Confirmed' || doc.status == 'Pending'"}
     - {name: make_sales_invoice, label: Create Sales Invoice, permission: write, condition: "doc.status == 'Confirmed' || doc.status == 'Completed' || doc.status == 'No Show'"}
     - {name: guest_link, label: Guest Self-Service Link, permission: write, condition: "doc.status != 'Cancelled'"}
-    - {name: repeat, label: Repeat, permission: write, condition: "(doc.status == 'Pending' || doc.status == 'Confirmed') && doc.series == null"}
-    - {name: cancel_series, label: Cancel This and Later, permission: write, condition: "doc.series != null"}
+    - name: repeat
+      label: Repeat
+      permission: write
+      condition: "(doc.status == 'Pending' || doc.status == 'Confirmed') && doc.series == null"
+      params:
+        - {name: every, type: select, label: Every, options: [week, 2 weeks, 4 weeks, month], required: true}
+        - {name: count, type: int, label: Bookings in All, required: true, description: "2 to 52, this one included"}
+        - {name: skip_conflicts, type: select, label: Skip Times That Are Taken, options: ["No", "Yes"], description: "No: a time that is taken stops the series"}
+    - name: cancel_series
+      label: Cancel This and Later
+      permission: write
+      condition: "doc.series != null"
+      params:
+        - {name: reason, type: text, label: Reason, description: The guests see it}
   form:
     - {label: Booking, fields: [service, service_name, staff, staff_name, start_time, end_time, seats, status, source, join_waitlist, resource]}
     - {label: Guest, fields: [customer, guest_name, guest_email, guest_phone, guest_time_zone, notes]}

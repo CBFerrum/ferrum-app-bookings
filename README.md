@@ -5,7 +5,7 @@
   <img alt="Ferrum Bookings" src="docs/assets/banner-light.svg" width="100%">
 </picture>
 
-[![CI](https://github.com/CBFerrum/ferrum-app-bookings/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-bookings/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.2.0-30a654?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
+[![CI](https://github.com/CBFerrum/ferrum-app-bookings/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-bookings/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.4.4-30a654?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
 
 **A native app for [Ferrum](https://github.com/CBFerrum/Ferrum), the open-source, AI-first business platform.**
 
@@ -27,7 +27,7 @@ Paid bookings become invoices.
 
 | At a glance | |
 |---|---|
-| 📦 Version | `0.2.0` |
+| 📦 Version | `0.4.4` |
 | 🧱 Platform | Ferrum `>=0.3.2, <0.4` |
 | 🔗 Requires | erp `>=0.1` |
 | 🖥️ Interface | Its own at `/bookings/` (schedule, today, booking page), and the public booking page at `/bookings/book/{workspace}` |
@@ -289,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.4.4** | A booking's record page asks Repeat and the cancels for what they read; Reschedule stays on the schedule. |
 | **0.4.3** | Rebuilt with Ferrum-Frontend 00dea07: a workflow state's kept fields are read-only, its needed ones required. |
 | **0.4.2** | Personal-data requests find booking records by the person's phone number as well as their email, and list the booking records holding their name apart, for an … |
 | **0.4.1** | Rebuilt with Ferrum-Frontend daeadda: actions say what they did. |
