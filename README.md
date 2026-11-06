@@ -289,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.4.5** | Rebuilt with Ferrum-Frontend bb60115: empty numbers read as the server reads them; settings open as their record. |
 | **0.4.4** | A booking's record page asks Repeat and the cancels for what they read; Reschedule stays on the schedule. |
 | **0.4.3** | Rebuilt with Ferrum-Frontend 00dea07: a workflow state's kept fields are read-only, its needed ones required. |
 | **0.4.2** | Personal-data requests find booking records by the person's phone number as well as their email, and list the booking records holding their name apart, for an … |
