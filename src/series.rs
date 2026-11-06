@@ -89,7 +89,8 @@ pub async fn repeat(hc: &mut HookCtx<'_>, booking: &Doc, params: &Value) -> Resu
     let every = Every::parse(params.get("every").and_then(Value::as_str))?;
     let count = params.get("count").and_then(Value::as_u64).filter(|c| (2..=MAX_OCCURRENCES as u64).contains(c));
     let count = count.ok_or_else(|| Error::field("count", format!("must be 2 to {MAX_OCCURRENCES}, this booking included")))? as u32;
-    let skip = params.get("skip_conflicts").and_then(Value::as_bool).unwrap_or(false);
+    // A page's dialog says "Yes"; the booking sheet sends true.
+    let skip = params.get("skip_conflicts").is_some_and(|v| v.as_bool().unwrap_or(v.as_str() == Some("Yes")));
     let first = time(booking, "start_time").ok_or_else(|| Error::internal("booking without a start"))?;
     let staff = id(booking, "staff").ok_or_else(|| Error::internal("a placed booking has its staff"))?;
     let tz = calendar::staff(hc.tx, hc.ctx.tenant, &[staff]).await?.first().map(|st| st.tz).ok_or_else(|| Error::internal("a booking's staff is gone"))?;
