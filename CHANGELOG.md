@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.5
+
+Rebuilt with Ferrum-Frontend bb60115: a record page reads an empty number or check as the server does, so an action whose condition needs one shows, and a workspace's settings open as their one record.
+
 ## 0.4.4
 
 A booking's record page offers what it can do: Repeat asks how often, how many bookings in all and whether to skip times that are taken, and Cancel Booking and Cancel This and Later ask for the reason the guests see. They read those and never asked, so from a record page Repeat always failed and cancelling kept no reason. Reschedule and Find Free Slots need a time and show free times, which the schedule's booking sheet does: a record page no longer offers them as buttons.
