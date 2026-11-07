@@ -6,7 +6,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { Link } from "react-router";
-import { api, ApiError, docPath, errorMessage, t } from "@ferrum/client";
+import { api, ApiError, docPath, errorMessage, t, isolate } from "@ferrum/client";
 import { Alert, Button, Dialog, Field, toast } from "@ferrum/kit";
 import type { Bk } from "./board";
 import type { Meta } from "./data";
@@ -68,7 +68,7 @@ export function NewBooking({ meta, zone, hour12, from, onClose, onCreated }: { m
         guest_phone: guest.phone.trim() || undefined,
         notes: guest.notes.trim() || undefined,
       });
-      toast(`Booked ${guest.name.trim()} for ${clockText(startAt, zone, hour12)}`);
+      toast(t("Booked {value} for {startAt}", { value: guest.name.trim(), startAt: clockText(startAt, zone, hour12) }));
       onCreated(made);
     } catch (err) {
       setError(err instanceof ApiError ? err : errorMessage(err));
@@ -96,14 +96,14 @@ export function NewBooking({ meta, zone, hour12, from, onClose, onCreated }: { m
       }
     >
       <form id="bk-new" className="bk-new" onSubmit={(e) => void submit(e)} noValidate>
-        {message && <Alert tone="error">{message}</Alert>}
+        {message && <Alert tone="error">{isolate(message)}</Alert>}
         <Field label={t("What")} htmlFor="bk-service" required error={fieldError("service")}>
           <select id="bk-service" className="select" value={service} onChange={(e) => { setService(e.target.value); setStaff(""); }} data-autofocus={!service || undefined}>
             <option value="">{t("Choose a service…")}</option>
             {services.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.service_name}
-                {s.duration_minutes ? ` · ${s.duration_minutes} min` : ""}
+                {isolate(s.service_name)}
+                {s.duration_minutes ? t(" · {duration_minutes} min", { duration_minutes: s.duration_minutes }) : ""}
               </option>
             ))}
           </select>
@@ -113,7 +113,7 @@ export function NewBooking({ meta, zone, hour12, from, onClose, onCreated }: { m
             <option value="">{t("Anyone free")}</option>
             {people.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.display_name}
+                {isolate(p.display_name)}
               </option>
             ))}
           </select>
@@ -122,12 +122,12 @@ export function NewBooking({ meta, zone, hour12, from, onClose, onCreated }: { m
           <Field label={t("Day")} htmlFor="bk-date" required>
             <input id="bk-date" className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
           </Field>
-          <Field label={t("Time")} htmlFor="bk-time" required error={fieldError("start_time")} hint={endAt !== null ? `Until ${clockText(endAt, zone, hour12)}` : undefined}>
+          <Field label={t("Time")} htmlFor="bk-time" required error={fieldError("start_time")} hint={endAt !== null ? t("Until {endAt}", { endAt: clockText(endAt, zone, hour12) }) : undefined}>
             <input id="bk-time" className="input" type="time" step={900} value={time} onChange={(e) => setTime(e.target.value)} />
           </Field>
         </div>
         {chosen?.capacity && chosen.capacity > 1 && (
-          <Field label={t("Seats")} htmlFor="bk-seats" error={fieldError("seats")} hint={`Up to ${chosen.capacity}`}>
+          <Field label={t("Seats")} htmlFor="bk-seats" error={fieldError("seats")} hint={t("Up to {capacity}", { capacity: chosen.capacity })}>
             <input id="bk-seats" className="input" type="number" min={1} max={chosen.capacity} value={seats} onChange={(e) => setSeats(Math.min(chosen.capacity!, Math.max(1, Number(e.target.value) || 1)))} />
           </Field>
         )}

@@ -3,7 +3,7 @@
 
 import { type ReactNode, useCallback, useState } from "react";
 import { Link } from "react-router";
-import { ApiError, bootstrap, t } from "@ferrum/client";
+import { ApiError, bootstrap, t, isolate } from "@ferrum/client";
 import { EmptyState, ErrorState, Spinner } from "@ferrum/kit";
 import { browserZone, isZone, prefers12Hour } from "../zone";
 
@@ -15,7 +15,7 @@ export function Frame({ children, wide }: { children: ReactNode; wide?: boolean 
         {t("Skip to content")}
       </a>
       <header className="gb-top">
-        <span className="gb-brand">{name ?? "Bookings"}</span>
+        <span className="gb-brand">{name ?? t("Bookings")}</span>
       </header>
       <main id="main" className={wide ? "gb-main gb-main-wide" : "gb-main"} tabIndex={-1}>
         {children}
@@ -28,7 +28,7 @@ export function Loading({ label }: { label: string }) {
   return (
     <div className="gb-loading" role="status">
       <Spinner />
-      <span className="muted">{label}</span>
+      <span className="muted">{isolate(label)}</span>
     </div>
   );
 }

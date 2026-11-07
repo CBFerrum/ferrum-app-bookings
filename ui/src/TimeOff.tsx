@@ -3,7 +3,7 @@
 // or cancelled.
 
 import { type FormEvent, useState } from "react";
-import { api, ApiError, errorMessage, t } from "@ferrum/client";
+import { api, ApiError, errorMessage, t, isolate } from "@ferrum/client";
 import { Alert, Button, Dialog, Field, toast } from "@ferrum/kit";
 import { hhmm } from "./board";
 import type { Meta } from "./data";
@@ -40,7 +40,7 @@ export function TimeOff({ meta, zone, day, mine, onClose, onSaved }: { meta: Met
         reason: reason.trim() || undefined,
       });
       const clashes = made.conflicting_bookings ?? 0;
-      toast(clashes ? `Time blocked. ${clashes} ${clashes === 1 ? "booking falls" : "bookings fall"} inside it: move or cancel ${clashes === 1 ? "it" : "them"}.` : "Time blocked", clashes ? "info" : "success");
+      toast(clashes ? t("Time blocked. {clashes} {value} inside it: move or cancel {value2}.", { clashes, value: clashes === 1 ? "booking falls" : "bookings fall", value2: clashes === 1 ? "it" : "them" }) : t("Time blocked"), clashes ? "info" : "success");
       onSaved(clashes);
     } catch (err) {
       setError(err instanceof ApiError && err.fields.length ? err.fields.map((f) => f.message).join(". ") : errorMessage(err));
@@ -63,12 +63,12 @@ export function TimeOff({ meta, zone, day, mine, onClose, onSaved }: { meta: Met
       }
     >
       <form id="bk-off" className="bk-new" onSubmit={(e) => void submit(e)} noValidate>
-        {error && <Alert tone="error">{error}</Alert>}
+        {error && <Alert tone="error">{isolate(error)}</Alert>}
         <Field label={t("Who is away")} htmlFor="bk-off-who" required>
           <select id="bk-off-who" className="select" value={staff} onChange={(e) => setStaff(e.target.value)} data-autofocus>
             {people.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.display_name}
+                {isolate(p.display_name)}
               </option>
             ))}
           </select>
@@ -77,7 +77,7 @@ export function TimeOff({ meta, zone, day, mine, onClose, onSaved }: { meta: Met
           <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} /> {t("Whole days")}
         </label>
         <div className="bk-new-when">
-          <Field label={allDay ? "First day" : "From"} htmlFor="bk-off-from" required>
+          <Field label={allDay ? t("First day") : t("From")} htmlFor="bk-off-from" required>
             <input id="bk-off-from" className="input" type="date" value={from} onChange={(e) => { setFrom(e.target.value); if (to < e.target.value) setTo(e.target.value); }} />
           </Field>
           {allDay ? (

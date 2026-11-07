@@ -6,6 +6,7 @@
 // is 23 or 25 hours long.
 
 import { addDays, clockText, dayBounds, dayOf, instantAt, weekday } from "./zone";
+import { t as tr } from "@ferrum/client";
 
 export type Status = "Pending" | "Confirmed" | "Waitlisted" | "Cancelled" | "No Show" | "Completed";
 
@@ -185,7 +186,7 @@ export function blocks(bookings: Bk[], services: Map<string, ServiceRow>): Block
         to: Math.max(...list.map((b) => ms(b.block_end, end))),
         status: sessionStatus(list),
         service: first.service,
-        title: capacity > 1 ? (first.service_name ?? "Class") : (first.guest_name ?? first.service_name ?? "Booking"),
+        title: capacity > 1 ? (first.service_name ?? tr("Class")) : (first.guest_name ?? first.service_name ?? tr("Booking")),
         seats: list.reduce((n, b) => n + (b.seats ?? 1), 0),
         capacity,
       } satisfies Block;
