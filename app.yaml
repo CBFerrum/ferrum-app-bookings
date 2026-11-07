@@ -1,6 +1,6 @@
 id: bookings
 name: Bookings
-version: 0.4.13
+version: 0.4.14
 publisher: cbferrum
 summary: "Appointment scheduling: services, staff and resources, availability, a public booking page, reminders, reschedules and paid bookings"
 description: README.md
@@ -36,3 +36,18 @@ contributes:
   # What guests open without signing in: /bookings/book/{workspace}, and their own booking below it.
   shell.public:
     - {id: book, path: bookings/book, title: Book an appointment}
+  # What the assistant should know in Bookings's pages, and what it suggests asking there.
+  shell.assistant:
+    - id: bookings
+      title: "Bookings"
+      instructions: >-
+        A Booking is Pending until confirmed, Confirmed once set, Waitlisted when a group class is full, and
+        Cancelled, No Show or Completed afterwards. Times are in the workspace's time zone. Whether staff are free
+        comes from their working hours (BookingWorkingHour) less their time off (StaffTimeOff) and their other
+        bookings; a service may also need a resource such as a room (BookingResource). A guest's answers to a
+        service's questions are BookingAnswer.
+      suggestions:
+        - "What is booked for tomorrow?"
+        - "Which bookings are still waiting to be confirmed?"
+        - "Who did not show up this week?"
+        - "Which services were booked most this month?"
