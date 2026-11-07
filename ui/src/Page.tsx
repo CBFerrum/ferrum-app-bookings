@@ -72,7 +72,7 @@ function Count({ id, label, hint, value, min, max, unit, disabled, onSave }: { i
 const REMIND = [15, 30, 60, 120, 240, 720, 1440, 2880, 10080];
 
 const before = (m: number) =>
-  m % 10080 === 0 ? `${m / 10080} week${m === 10080 ? "" : "s"} before` : m % 1440 === 0 ? `${m / 1440} day${m === 1440 ? "" : "s"} before` : m % 60 === 0 ? `${m / 60} hour${m === 60 ? "" : "s"} before` : `${m} minutes before`;
+  m % 10080 === 0 ? (m === 10080 ? t("1 week before") : t("{n} weeks before", { n: m / 10080 })) : m % 1440 === 0 ? (m === 1440 ? t("1 day before") : t("{n} days before", { n: m / 1440 })) : m % 60 === 0 ? (m === 60 ? t("1 hour before") : t("{n} hours before", { n: m / 60 })) : t("{m} minutes before", { m });
 
 function Reminders({ doc, save, writable }: { doc: Doc; save: Save; writable: boolean }) {
   const kept = ((doc.reminders as { minutes_before?: number }[] | undefined) ?? []).map((r) => Number(r.minutes_before)).filter((n) => n > 0).sort((a, b) => b - a);

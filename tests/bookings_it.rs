@@ -1123,6 +1123,7 @@ async fn scenario() {
     let sol = t.list(&a, "Booking", json!({"guest_email": "sol@example.test"})).await.unwrap();
     assert_eq!(sol.len(), 3, "this one and two more weeks");
     assert!(sol.iter().all(|r| r["series"] == sol[0]["series"] && !r["series"].is_null() && r["status"] == json!("Confirmed")));
+    assert!(sol.iter().all(|r| r["source"] == json!("Public")), "each date was booked from the page");
     let mut weeks: Vec<DateTime<Utc>> = sol.iter().map(|r| r["start_time"].as_str().unwrap().parse().unwrap()).collect();
     weeks.sort();
     assert_eq!(weeks, vec![local(london, week(5), "11:30"), local(london, week(6), "11:30"), local(london, week(7), "11:30")]);

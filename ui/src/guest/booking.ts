@@ -3,7 +3,7 @@
 // form needs checked, the server's complaints put beside the field they are about, and the links
 // that put a booking in a guest's calendar. Pure, so it is tested without a page.
 
-import { ApiError } from "@ferrum/client";
+import { ApiError, t } from "@ferrum/client";
 
 export type AnswerType = "Text" | "Long Text" | "Number" | "Yes/No" | "Choice";
 
@@ -107,16 +107,16 @@ export function priceText(price: string | number | null | undefined, currency: s
 }
 
 export function durationText(minutes: number): string {
-  if (minutes < 60) return `${minutes} min`;
+  if (minutes < 60) return t("{minutes} min", { minutes });
   const [h, m] = [Math.floor(minutes / 60), minutes % 60];
-  return m ? `${h} h ${m} min` : h === 1 ? "1 hour" : `${h} hours`;
+  return m ? t("{h} h {m} min", { h, m }) : h === 1 ? "1 hour" : t("{h} hours", { h });
 }
 
 /** How the service meets: its address when it is in person; video links and numbers come after booking. */
 export function whereText(type: string | null | undefined, location?: string | null): string {
   if (type === "Video") return "Video call";
   if (type === "Phone") return "Phone call";
-  return location ? `In person · ${location}` : "In person";
+  return location ? t("In person · {location}", { location }) : "In person";
 }
 
 export const isLink = (v: string | null | undefined): v is string => !!v && /^https?:\/\/\S+$/i.test(v.trim());

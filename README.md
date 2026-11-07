@@ -289,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.4.16** | Sentences built in code are words too, in Arabic and Hindi. |
 | **0.4.15** | A guest books a series from the booking page, where the service allows it. |
 | **0.4.14** | The assistant knows its records. |
 | **0.4.13** | Rebuilt with Ferrum-Frontend 5b22e7b: its own words in Arabic and Hindi. |

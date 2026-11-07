@@ -13,7 +13,7 @@ use crate::{doc_id, ics, int, obj, series, slots, time, token, ts, when};
 use async_trait::async_trait;
 use chrono::Utc;
 use chrono_tz::Tz;
-use ferrum_domain::util::{d, id, money, rows, s};
+use ferrum_domain::util::{d, id, money, rows, s, sys};
 use ferrum_kernel::{Ctx, Doc, Error, FieldError, Kernel, Result, Site, SiteRequest, SiteResponse, Tx, with_retry};
 use serde_json::{Map, Value, json};
 use std::time::Duration as StdDuration;
@@ -356,6 +356,12 @@ async fn book(k: &Kernel, ctx: &Ctx, body: &Map<String, Value>) -> Result<(u16, 
             Some((every, count)) => Some(series::repeat_in(k, ctx, &mut tx, &doc, &json!({"every": every, "count": count})).await?),
             None => None,
         };
+        // The later dates were booked by the guest too, from the page, as the first was.
+        for later in series.as_ref().and_then(|s| s["booked"].as_array()).into_iter().flatten() {
+            if let Some(id) = later["id"].as_str().and_then(|v| v.parse::<Uuid>().ok()) {
+                k.set_values_tx(&sys(ctx), &mut tx, "Booking", id, obj(json!({"source": "Public"}))).await?;
+            }
+        }
         // As saved, with what its hooks added (a deposit asked for).
         let doc = k.get_tx(ctx, &mut tx, "Booking", doc_id(&doc)?, false).await?;
         let token = token::mint(&mut tx, ctx.tenant, doc_id(&doc)?).await?;
