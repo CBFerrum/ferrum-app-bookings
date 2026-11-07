@@ -3,7 +3,7 @@
 // or cancelled.
 
 import { type FormEvent, useState } from "react";
-import { api, ApiError, errorMessage } from "@ferrum/client";
+import { api, ApiError, errorMessage, t } from "@ferrum/client";
 import { Alert, Button, Dialog, Field, toast } from "@ferrum/kit";
 import { hhmm } from "./board";
 import type { Meta } from "./data";
@@ -52,19 +52,19 @@ export function TimeOff({ meta, zone, day, mine, onClose, onSaved }: { meta: Met
     <Dialog
       open
       onClose={onClose}
-      title="Block out time"
+      title={t("Block out time")}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("Cancel")}</Button>
           <Button variant="primary" type="submit" form="bk-off" loading={busy}>
-            Block time
+            {t("Block time")}
           </Button>
         </>
       }
     >
       <form id="bk-off" className="bk-new" onSubmit={(e) => void submit(e)} noValidate>
         {error && <Alert tone="error">{error}</Alert>}
-        <Field label="Who is away" htmlFor="bk-off-who" required>
+        <Field label={t("Who is away")} htmlFor="bk-off-who" required>
           <select id="bk-off-who" className="select" value={staff} onChange={(e) => setStaff(e.target.value)} data-autofocus>
             {people.map((p) => (
               <option key={p.id} value={p.id}>
@@ -74,33 +74,33 @@ export function TimeOff({ meta, zone, day, mine, onClose, onSaved }: { meta: Met
           </select>
         </Field>
         <label className="check-field">
-          <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} /> Whole days
+          <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} /> {t("Whole days")}
         </label>
         <div className="bk-new-when">
           <Field label={allDay ? "First day" : "From"} htmlFor="bk-off-from" required>
             <input id="bk-off-from" className="input" type="date" value={from} onChange={(e) => { setFrom(e.target.value); if (to < e.target.value) setTo(e.target.value); }} />
           </Field>
           {allDay ? (
-            <Field label="Last day" htmlFor="bk-off-to" required>
+            <Field label={t("Last day")} htmlFor="bk-off-to" required>
               <input id="bk-off-to" className="input" type="date" min={from} value={to} onChange={(e) => setTo(e.target.value)} />
             </Field>
           ) : (
-            <Field label="At" htmlFor="bk-off-start" required>
+            <Field label={t("At")} htmlFor="bk-off-start" required>
               <input id="bk-off-start" className="input" type="time" step={900} value={starts} onChange={(e) => setStarts(e.target.value)} />
             </Field>
           )}
         </div>
         {!allDay && (
           <div className="bk-new-when">
-            <Field label="Until" htmlFor="bk-off-to" required>
+            <Field label={t("Until")} htmlFor="bk-off-to" required>
               <input id="bk-off-to" className="input" type="date" min={from} value={to} onChange={(e) => setTo(e.target.value)} />
             </Field>
-            <Field label="At" htmlFor="bk-off-end" required>
+            <Field label={t("At")} htmlFor="bk-off-end" required>
               <input id="bk-off-end" className="input" type="time" step={900} value={ends} onChange={(e) => setEnds(e.target.value)} />
             </Field>
           </div>
         )}
-        <Field label="Reason" htmlFor="bk-off-reason" hint="Only the team sees it.">
+        <Field label={t("Reason")} htmlFor="bk-off-reason" hint={t("Only the team sees it.")}>
           <input id="bk-off-reason" className="input" maxLength={200} value={reason} onChange={(e) => setReason(e.target.value)} />
         </Field>
       </form>

@@ -8,7 +8,7 @@ import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-quer
 import { CalendarOff, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { errorMessage } from "@ferrum/client";
+import { errorMessage, t as tr } from "@ferrum/client";
 import { Alert, Badge, Button, EmptyState, ErrorState, PageLoading, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, useEntityMeta, useMe } from "@ferrum/records";
 import { Board } from "./Grid";
@@ -62,24 +62,24 @@ function Approvals({ waiting, zone, hour12, canWrite, onOpen, onDone }: { waitin
         {canWrite && b.status === "Pending" && (
           <div className="bk-ask-actions">
             <Button size="sm" variant="primary" loading={busy === b.id} onClick={() => void confirm(b)}>
-              Confirm
+              {tr("Confirm")}
             </Button>
             <Button size="sm" onClick={() => onOpen(b)}>
-              Decline…
+              {tr("Decline…")}
             </Button>
           </div>
         )}
-        {b.status === "Waitlisted" && <Badge tone={tone(b.status)}>Waiting for a seat</Badge>}
+        {b.status === "Waitlisted" && <Badge tone={tone(b.status)}>{tr("Waiting for a seat")}</Badge>}
       </li>
     );
   };
 
   return (
-    <section className="bk-approvals" aria-label="Needs your answer">
+    <section className="bk-approvals" aria-label={tr("Needs your answer")}>
       <header>
         <h2>
           {pending.length ? `${pending.length} to confirm` : "No one to confirm"}
-          {queued.length > 0 && <span className="faint"> · {queued.length} waiting for a seat</span>}
+          {queued.length > 0 && <span className="faint"> {tr("· {length} waiting for a seat", { length: queued.length })}</span>}
         </h2>
         <button type="button" className="link-btn" aria-expanded={open} onClick={() => setOpen(!open)}>
           {open ? "Hide" : "Show"}
@@ -251,18 +251,18 @@ export function Schedule() {
   const pendingCount = (waiting.data ?? []).filter((b) => b.status === "Pending").length;
 
   let body;
-  if (meta.error) body = <ErrorState error={meta.error} onRetry={() => void meta.refetch()} title="We could not load the schedule" />;
-  else if (!meta.data) body = <PageLoading label="Loading the schedule…" />;
+  if (meta.error) body = <ErrorState error={meta.error} onRetry={() => void meta.refetch()} title={tr("We could not load the schedule")} />;
+  else if (!meta.data) body = <PageLoading label={tr("Loading the schedule…")} />;
   else if (!meta.data.staff.length) {
     body = (
-      <EmptyState title="No one to book yet" icon="calendar">
-        <p className="muted">Add the people guests book, with the hours they work, and they appear here.</p>
+      <EmptyState title={tr("No one to book yet")} icon="calendar">
+        <p className="muted">{tr("Add the people guests book, with the hours they work, and they appear here.")}</p>
         <Link className="btn btn-primary btn-md" to="/e/BookingStaff/new">
-          Add a staff member
+          {tr("Add a staff member")}
         </Link>
       </EmptyState>
     );
-  } else if (range.error && !range.data) body = <ErrorState error={range.error} onRetry={() => void range.refetch()} title="We could not load the bookings" />;
+  } else if (range.error && !range.data) body = <ErrorState error={range.error} onRetry={() => void range.refetch()} title={tr("We could not load the bookings")} />;
   else if (!lanes.length) {
     body = (
       <EmptyState title={by === "room" ? "No rooms yet" : "No one is selected"} icon="calendar">
@@ -272,7 +272,7 @@ export function Schedule() {
   } else {
     body = (
       <div className="bk-stage" data-busy={range.isFetching || undefined}>
-        {range.data && range.data.bookings.length >= LIMIT && <Alert tone="warning">Only the first {LIMIT} bookings of this {view} are shown. Choose fewer days or one person.</Alert>}
+        {range.data && range.data.bookings.length >= LIMIT && <Alert tone="warning">{tr("Only the first {LIMIT} bookings of this {view} are shown. Choose fewer days or one person.", { LIMIT, view })}</Alert>}
         <Board
           lanes={lanes}
           blocks={placed}
@@ -296,11 +296,11 @@ export function Schedule() {
         />
         {range.data && !placed.length && (
           <p className="bk-empty muted">
-            Nothing is booked {view === "week" ? "this week" : date === today ? "today" : "this day"}.
+            {tr("Nothing is booked")} {view === "week" ? "this week" : date === today ? "today" : "this day"}.
             {canCreate ? " Press a time to book it." : ""}
           </p>
         )}
-        <p className="bk-hint faint">{canWrite ? "Drag a booking to move it, or select it and press M, then the arrow keys." : "Select a booking to see it."} Shaded time is outside working hours; hatched is time off.</p>
+        <p className="bk-hint faint">{canWrite ? "Drag a booking to move it, or select it and press M, then the arrow keys." : "Select a booking to see it."} {tr("Shaded time is outside working hours; hatched is time off.")}</p>
       </div>
     );
   }
@@ -317,54 +317,54 @@ export function Schedule() {
         <div className="row">
           {canBlock && meta.data?.staff.length ? (
             <Button onClick={() => setBlocking(true)}>
-              <CalendarOff size={16} aria-hidden="true" /> Block time
+              <CalendarOff size={16} aria-hidden="true" /> {tr("Block time")}
             </Button>
           ) : null}
           {canCreate && meta.data?.staff.length ? (
             <Button variant="primary" onClick={() => setDraft({})}>
-              <Plus size={16} aria-hidden="true" /> New booking
+              <Plus size={16} aria-hidden="true" /> {tr("New booking")}
             </Button>
           ) : null}
         </div>
       </header>
 
-      <div className="bk-tools" role="toolbar" aria-label="Schedule">
+      <div className="bk-tools" role="toolbar" aria-label={tr("Schedule")}>
         <div className="bk-nav">
           <button type="button" className="icon-btn" aria-label={view === "week" ? "Earlier week" : "Earlier day"} onClick={() => step(-1)}>
             <ChevronLeft size={18} />
           </button>
           <Button size="sm" onClick={() => set({ date: null }, true)} disabled={days.includes(today)}>
-            Today
+            {tr("Today")}
           </Button>
           <button type="button" className="icon-btn" aria-label={view === "week" ? "Later week" : "Later day"} onClick={() => step(1)}>
             <ChevronRight size={18} />
           </button>
           <h2 className="bk-date">{heading}</h2>
-          <input className="input bk-date-input" type="date" aria-label="Go to a date" value={date} onChange={(e) => isDate(e.target.value) && set({ date: e.target.value }, true)} />
+          <input className="input bk-date-input" type="date" aria-label={tr("Go to a date")} value={date} onChange={(e) => isDate(e.target.value) && set({ date: e.target.value }, true)} />
         </div>
         <div className="bk-filters">
-          <div className="segmented" role="group" aria-label="View">
+          <div className="segmented" role="group" aria-label={tr("View")}>
             <button type="button" aria-pressed={view === "day"} onClick={() => set({ view: null, by: by === "room" ? "room" : null })}>
-              Day
+              {tr("Day")}
             </button>
             <button type="button" aria-pressed={view === "week"} onClick={() => set({ view: "week", by: null, staff: chosen.slice(0, 1).join(",") || null })}>
-              Week
+              {tr("Week")}
             </button>
           </div>
           {view === "day" && resources.length > 0 && (
-            <div className="segmented" role="group" aria-label="Columns">
+            <div className="segmented" role="group" aria-label={tr("Columns")}>
               <button type="button" aria-pressed={by === "staff"} onClick={() => set({ by: null })}>
-                People
+                {tr("People")}
               </button>
               <button type="button" aria-pressed={by === "room"} onClick={() => set({ by: "room" })}>
-                Rooms
+                {tr("Rooms")}
               </button>
             </div>
           )}
           {meta.data && by === "staff" && view === "day" && meta.data.staff.length > 1 && (
             <Pop summary={chosen.length ? `${chosen.length} of ${everyone.length} people` : "Everyone"}>
               <fieldset className="bk-checks">
-                <legend className="sr-only">People to show</legend>
+                <legend className="sr-only">{tr("People to show")}</legend>
                 {everyone.map((p) => (
                   <label key={p.id}>
                     <input
@@ -381,15 +381,15 @@ export function Schedule() {
                 ))}
                 {chosen.length > 0 && (
                   <button type="button" className="link-btn" onClick={() => set({ staff: null }, true)}>
-                    Show everyone
+                    {tr("Show everyone")}
                   </button>
                 )}
               </fieldset>
             </Pop>
           )}
           {meta.data && view === "week" && meta.data.staff.length > 1 && (
-            <select className="select bk-select" aria-label="Whose week" value={chosen[0] ?? ""} onChange={(e) => set({ staff: e.target.value || null }, true)}>
-              <option value="">Everyone</option>
+            <select className="select bk-select" aria-label={tr("Whose week")} value={chosen[0] ?? ""} onChange={(e) => set({ staff: e.target.value || null }, true)}>
+              <option value="">{tr("Everyone")}</option>
               {everyone.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.display_name}
@@ -398,8 +398,8 @@ export function Schedule() {
             </select>
           )}
           {meta.data && meta.data.services.length > 1 && (
-            <select className="select bk-select" aria-label="Service" value={service} onChange={(e) => set({ service: e.target.value || null }, true)}>
-              <option value="">All services</option>
+            <select className="select bk-select" aria-label={tr("Service")} value={service} onChange={(e) => set({ service: e.target.value || null }, true)}>
+              <option value="">{tr("All services")}</option>
               {meta.data.services.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.service_name}

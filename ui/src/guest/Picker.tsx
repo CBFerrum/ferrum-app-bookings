@@ -8,6 +8,7 @@ import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react"
 import { EmptyState, ErrorState, Icon } from "@ferrum/kit";
 import { addDays, addMonths, clockText, dayText, firstWeekday, monthEnd, monthOf, monthWeeks } from "../zone";
 import { firstDay, openDays, type Slot, type Slots } from "./booking";
+import { t } from "@ferrum/client";
 
 /** How many months ahead we look for the first day with times. */
 const LOOK_AHEAD = 6;
@@ -61,10 +62,10 @@ export function MonthGrid({ month, first, open, selected, today, busy, canPrev, 
           {title}
         </h2>
         <div className="gb-cal-nav">
-          <button type="button" className="icon-btn" aria-label="Previous month" disabled={!canPrev} onClick={() => onMonth(addMonths(month, -1))}>
+          <button type="button" className="icon-btn" aria-label={t("Previous month")} disabled={!canPrev} onClick={() => onMonth(addMonths(month, -1))}>
             <Icon name="left" size={18} />
           </button>
-          <button type="button" className="icon-btn" aria-label="Next month" onClick={() => onMonth(addMonths(month, 1))}>
+          <button type="button" className="icon-btn" aria-label={t("Next month")} onClick={() => onMonth(addMonths(month, 1))}>
             <Icon name="chevronRight" size={18} />
           </button>
         </div>
@@ -140,7 +141,7 @@ export function Times({ day, slots, zone, hour12, at, showSeats, onPick }: {
               onClick={() => onPick(s)}
             >
               {clockText(Date.parse(s.start), zone, hour12)}
-              {s.full ? <small>Full · waitlist</small> : showSeats && <small>{s.seats_left} left</small>}
+              {s.full ? <small>{t("Full · waitlist")}</small> : showSeats && <small>{s.seats_left} left</small>}
             </button>
           </li>
         ))}
@@ -219,7 +220,7 @@ export function Picker(p: PickerProps) {
   const here = p.day && monthOf(p.day) === month ? p.day : null;
   const slots = here ? open.get(here) : undefined;
 
-  if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} title="We could not load the times" />;
+  if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} title={t("We could not load the times")} />;
   return (
     <div className="gb-picker">
       <MonthGrid
@@ -242,7 +243,7 @@ export function Picker(p: PickerProps) {
           {here && slots ? `${slots.length} ${slots.length === 1 ? "time" : "times"} on ${dayText(here, { weekday: "long", day: "numeric", month: "long" })}` : ""}
         </p>
         {!q.data ? (
-          <div className="gb-slots-loading" aria-label="Loading times" role="status">
+          <div className="gb-slots-loading" aria-label={t("Loading times")} role="status">
             {[0, 1, 2, 3, 4, 5].map((i) => (
               <span key={i} className="skeleton" />
             ))}
@@ -250,12 +251,12 @@ export function Picker(p: PickerProps) {
         ) : here && slots ? (
           <Times day={here} slots={slots} zone={p.zone} hour12={p.hour12} at={p.at} showSeats={p.showSeats} onPick={p.onPick} />
         ) : nothingAhead ? (
-          <EmptyState title="No times free right now" icon="calendar">
-            <p className="muted">There is nothing open in the coming months. Try again soon, or get in touch with us.</p>
+          <EmptyState title={t("No times free right now")} icon="calendar">
+            <p className="muted">{t("There is nothing open in the coming months. Try again soon, or get in touch with us.")}</p>
           </EmptyState>
         ) : here ? (
-          <EmptyState title="Nothing free that day" icon="calendar">
-            <p className="muted">Choose another day. Days with times are in bold.</p>
+          <EmptyState title={t("Nothing free that day")} icon="calendar">
+            <p className="muted">{t("Choose another day. Days with times are in bold.")}</p>
           </EmptyState>
         ) : (
           <p className="muted gb-looking">{open.size ? "Pick a day to see its times." : "Looking for the first free day…"}</p>

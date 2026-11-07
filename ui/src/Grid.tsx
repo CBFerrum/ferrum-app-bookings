@@ -8,6 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { clockText } from "./zone";
 import { type Block, type Drop, dropText, hourMarks, landing, type Lane, minutesIn, pack, STEP, type Window } from "./board";
+import { t as tr } from "@ferrum/client";
 
 /** Pixels an hour takes, and the shortest a block is drawn (minutes). */
 const HOUR = 56;
@@ -243,7 +244,7 @@ export function Board(p: BoardProps) {
                 ))}
                 {lane.off.map(([a, b]) => (
                   <div key={a} className="bk-off" style={{ top: at(a, lane), height: ((b - a) / 60_000) * PX }}>
-                    <span>Time off</span>
+                    <span>{tr("Time off")}</span>
                   </div>
                 ))}
                 {nowAt !== null && nowAt >= 0 && nowAt <= height && <div className="bk-now" style={{ top: nowAt }} aria-hidden="true" />}

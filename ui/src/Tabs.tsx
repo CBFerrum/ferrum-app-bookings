@@ -1,15 +1,16 @@
 // The team's own screens, at the top of each.
 
 import { NavLink } from "react-router";
+import { t } from "@ferrum/client";
 
 export function Tabs() {
   return (
-    <nav className="bk-tabs" aria-label="Bookings">
+    <nav className="bk-tabs" aria-label={t("Bookings")}>
       <NavLink to="/" end>
-        Schedule
+        {t("Schedule")}
       </NavLink>
-      <NavLink to="/today">Today</NavLink>
-      <NavLink to="/page">Booking page</NavLink>
+      <NavLink to="/today">{t("Today")}</NavLink>
+      <NavLink to="/page">{t("Booking page")}</NavLink>
     </nav>
   );
 }

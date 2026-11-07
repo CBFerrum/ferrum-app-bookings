@@ -8,7 +8,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, Link, Outlet, RouterProvider, useRouteError } from "react-router";
-import { routeBase, shell } from "@ferrum/client";
+import { routeBase, shell, t } from "@ferrum/client";
 import { ConfirmHost, EmptyState, ErrorState, Toaster } from "@ferrum/kit";
 import "./styles.css";
 
@@ -26,8 +26,8 @@ function RouteError() {
 
 function NotFound() {
   return (
-    <EmptyState title="Page not found">
-      <Link to="/">Go to the schedule</Link>
+    <EmptyState title={t("Page not found")}>
+      <Link to="/">{t("Go to the schedule")}</Link>
     </EmptyState>
   );
 }
@@ -49,7 +49,7 @@ const router = createBrowserRouter(
         { path: "book/:tenant", lazy: () => import("./guest/Book").then((m) => ({ Component: m.BookPage })) },
         { path: "book/:tenant/manage/:token", lazy: () => import("./guest/Manage").then((m) => ({ Component: m.ManageRoute })) },
         // Anything else under the public address stays public: a guest is never sent to sign in.
-        { path: "book/*", element: <EmptyState title="Page not found" icon="calendar" /> },
+        { path: "book/*", element: <EmptyState title={t("Page not found")} icon="calendar" /> },
         {
           // For the team: signed in, in the frame.
           lazy: () => import("./Team").then((m) => ({ Component: m.Team })),

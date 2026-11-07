@@ -3,7 +3,7 @@
 
 import { type ReactNode, useCallback, useState } from "react";
 import { Link } from "react-router";
-import { ApiError, bootstrap } from "@ferrum/client";
+import { ApiError, bootstrap, t } from "@ferrum/client";
 import { EmptyState, ErrorState, Spinner } from "@ferrum/kit";
 import { browserZone, isZone, prefers12Hour } from "../zone";
 
@@ -12,7 +12,7 @@ export function Frame({ children, wide }: { children: ReactNode; wide?: boolean 
   return (
     <div className="gb-page">
       <a className="skip-link" href="#main">
-        Skip to content
+        {t("Skip to content")}
       </a>
       <header className="gb-top">
         <span className="gb-brand">{name ?? "Bookings"}</span>
@@ -38,21 +38,21 @@ export function Loading({ label }: { label: string }) {
 export function Closed({ error, what, home, onRetry }: { error: unknown; what: "page" | "link"; home?: string; onRetry?: () => void }) {
   if (error instanceof ApiError && error.status === 404) {
     return what === "page" ? (
-      <EmptyState title="This booking page is not open" icon="calendar">
-        <p className="muted">It may be switched off for now, or the address is not quite right. Please get in touch with the business directly.</p>
+      <EmptyState title={t("This booking page is not open")} icon="calendar">
+        <p className="muted">{t("It may be switched off for now, or the address is not quite right. Please get in touch with the business directly.")}</p>
       </EmptyState>
     ) : (
-      <EmptyState title="This link does not work" icon="calendar">
-        <p className="muted">Booking links stop working a month after the appointment, and only open the booking they were made for. Check the link in your confirmation email, or get in touch with the business.</p>
+      <EmptyState title={t("This link does not work")} icon="calendar">
+        <p className="muted">{t("Booking links stop working a month after the appointment, and only open the booking they were made for. Check the link in your confirmation email, or get in touch with the business.")}</p>
         {home && (
           <Link to={home} className="btn btn-primary btn-md">
-            Book an appointment
+            {t("Book an appointment")}
           </Link>
         )}
       </EmptyState>
     );
   }
-  return <ErrorState error={error} onRetry={onRetry} title="We could not load this page" />;
+  return <ErrorState error={error} onRetry={onRetry} title={t("We could not load this page")} />;
 }
 
 /** A setting the guest chose, kept in this browser (and quietly forgotten where storage is off). */
@@ -96,7 +96,7 @@ export function useDisplay() {
 
 export function ClockSwitch({ hour12, onChange }: { hour12: boolean; onChange: (h: boolean) => void }) {
   return (
-    <div className="segmented gb-clock" role="group" aria-label="Clock">
+    <div className="segmented gb-clock" role="group" aria-label={t("Clock")}>
       <button type="button" aria-pressed={hour12} onClick={() => onChange(true)}>
         12h
       </button>

@@ -6,7 +6,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { Link } from "react-router";
-import { api, ApiError, docPath, errorMessage } from "@ferrum/client";
+import { api, ApiError, docPath, errorMessage, t } from "@ferrum/client";
 import { Alert, Button, Dialog, Field, toast } from "@ferrum/kit";
 import type { Bk } from "./board";
 import type { Meta } from "./data";
@@ -81,25 +81,25 @@ export function NewBooking({ meta, zone, hour12, from, onClose, onCreated }: { m
     <Dialog
       open
       onClose={onClose}
-      title="New booking"
+      title={t("New booking")}
       footer={
         <>
           <Link className="btn btn-ghost btn-md" to={`/e/Booking/new${service ? `?service=${service}` : ""}`} onClick={onClose}>
-            All fields
+            {t("All fields")}
           </Link>
           <span className="spacer" />
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("Cancel")}</Button>
           <Button variant="primary" loading={busy} type="submit" form="bk-new">
-            Book
+            {t("Book")}
           </Button>
         </>
       }
     >
       <form id="bk-new" className="bk-new" onSubmit={(e) => void submit(e)} noValidate>
         {message && <Alert tone="error">{message}</Alert>}
-        <Field label="What" htmlFor="bk-service" required error={fieldError("service")}>
+        <Field label={t("What")} htmlFor="bk-service" required error={fieldError("service")}>
           <select id="bk-service" className="select" value={service} onChange={(e) => { setService(e.target.value); setStaff(""); }} data-autofocus={!service || undefined}>
-            <option value="">Choose a service…</option>
+            <option value="">{t("Choose a service…")}</option>
             {services.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.service_name}
@@ -108,9 +108,9 @@ export function NewBooking({ meta, zone, hour12, from, onClose, onCreated }: { m
             ))}
           </select>
         </Field>
-        <Field label="With" htmlFor="bk-staff" error={fieldError("staff")}>
+        <Field label={t("With")} htmlFor="bk-staff" error={fieldError("staff")}>
           <select id="bk-staff" className="select" value={staff} onChange={(e) => setStaff(e.target.value)}>
-            <option value="">Anyone free</option>
+            <option value="">{t("Anyone free")}</option>
             {people.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.display_name}
@@ -119,30 +119,30 @@ export function NewBooking({ meta, zone, hour12, from, onClose, onCreated }: { m
           </select>
         </Field>
         <div className="bk-new-when">
-          <Field label="Day" htmlFor="bk-date" required>
+          <Field label={t("Day")} htmlFor="bk-date" required>
             <input id="bk-date" className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
           </Field>
-          <Field label="Time" htmlFor="bk-time" required error={fieldError("start_time")} hint={endAt !== null ? `Until ${clockText(endAt, zone, hour12)}` : undefined}>
+          <Field label={t("Time")} htmlFor="bk-time" required error={fieldError("start_time")} hint={endAt !== null ? `Until ${clockText(endAt, zone, hour12)}` : undefined}>
             <input id="bk-time" className="input" type="time" step={900} value={time} onChange={(e) => setTime(e.target.value)} />
           </Field>
         </div>
         {chosen?.capacity && chosen.capacity > 1 && (
-          <Field label="Seats" htmlFor="bk-seats" error={fieldError("seats")} hint={`Up to ${chosen.capacity}`}>
+          <Field label={t("Seats")} htmlFor="bk-seats" error={fieldError("seats")} hint={`Up to ${chosen.capacity}`}>
             <input id="bk-seats" className="input" type="number" min={1} max={chosen.capacity} value={seats} onChange={(e) => setSeats(Math.min(chosen.capacity!, Math.max(1, Number(e.target.value) || 1)))} />
           </Field>
         )}
-        <Field label="Guest's name" htmlFor="bk-guest" required error={fieldError("guest_name")}>
+        <Field label={t("Guest's name")} htmlFor="bk-guest" required error={fieldError("guest_name")}>
           <input id="bk-guest" className="input" autoComplete="off" maxLength={200} value={guest.name} onChange={(e) => set({ name: e.target.value })} data-autofocus={!!service || undefined} />
         </Field>
         <div className="bk-new-when">
-          <Field label="Email" htmlFor="bk-email" hint="The confirmation goes here." error={fieldError("guest_email")}>
+          <Field label={t("Email")} htmlFor="bk-email" hint={t("The confirmation goes here.")} error={fieldError("guest_email")}>
             <input id="bk-email" className="input" type="email" autoComplete="off" value={guest.email} onChange={(e) => set({ email: e.target.value })} />
           </Field>
-          <Field label="Phone" htmlFor="bk-phone" error={fieldError("guest_phone")}>
+          <Field label={t("Phone")} htmlFor="bk-phone" error={fieldError("guest_phone")}>
             <input id="bk-phone" className="input" type="tel" autoComplete="off" value={guest.phone} onChange={(e) => set({ phone: e.target.value })} />
           </Field>
         </div>
-        <Field label="Notes" htmlFor="bk-notes">
+        <Field label={t("Notes")} htmlFor="bk-notes">
           <textarea id="bk-notes" className="textarea" rows={2} maxLength={5000} value={guest.notes} onChange={(e) => set({ notes: e.target.value })} />
         </Field>
       </form>

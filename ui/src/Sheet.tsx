@@ -8,7 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Mail, MapPin, Phone, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { api, docPath, errorMessage, formatMoment } from "@ferrum/client";
+import { api, docPath, errorMessage, formatMoment, t } from "@ferrum/client";
 import { Alert, Badge, Button, confirmDialog, Dialog, ErrorState, Field, Menu, MenuItem, Spinner, TabPanel, Tabs, toast } from "@ferrum/kit";
 import { type Bk, nextSteps, type Step, tone } from "./board";
 import { act } from "./data";
@@ -48,10 +48,10 @@ function History({ id }: { id: string }) {
     queryKey: ["bk", "audit", id],
     queryFn: ({ signal }) => api.get<{ events: { at: string; actor_name?: string | null; actor?: string | null; action: string }[] }>(docPath("Booking", id, "audit"), undefined, signal),
   });
-  if (q.isLoading) return <Spinner label="Loading the history" />;
-  if (q.error) return <p className="muted">The history is not available to you.</p>;
+  if (q.isLoading) return <Spinner label={t("Loading the history")} />;
+  if (q.error) return <p className="muted">{t("The history is not available to you.")}</p>;
   const events = (q.data?.events ?? []).filter((e) => HISTORY[e.action]).reverse();
-  if (!events.length) return <p className="muted">Nothing has happened to it yet.</p>;
+  if (!events.length) return <p className="muted">{t("Nothing has happened to it yet.")}</p>;
   return (
     <ol className="bk-history">
       {events.map((e, i) => (
@@ -85,13 +85,13 @@ function Cancel({ b, onClose, onDone }: { b: Full; onClose: () => void; onDone: 
   return (
     <div className="stack">
       <h3>{b.status === "Pending" ? "Decline this booking?" : "Cancel this booking?"}</h3>
-      <p className="muted">The time is freed. {told}</p>
-      <Field label="Reason (optional)" htmlFor="bk-reason" hint="The guest sees it.">
+      <p className="muted">{t("The time is freed. {told}", { told })}</p>
+      <Field label={t("Reason (optional)")} htmlFor="bk-reason" hint={t("The guest sees it.")}>
         <textarea id="bk-reason" className="textarea" rows={3} maxLength={1000} value={reason} onChange={(e) => setReason(e.target.value)} />
       </Field>
       {error && <Alert tone="error">{error}</Alert>}
       <div className="bk-sheet-actions">
-        <Button onClick={onClose}>Keep it</Button>
+        <Button onClick={onClose}>{t("Keep it")}</Button>
         <Button variant="danger" loading={busy} onClick={() => void go()}>
           {b.status === "Pending" ? "Decline booking" : "Cancel booking"}
         </Button>
@@ -122,32 +122,32 @@ function Repeat({ b, onClose, onDone }: { b: Full; onClose: () => void; onDone: 
     <Dialog
       open
       onClose={onClose}
-      title="Repeat this booking"
+      title={t("Repeat this booking")}
       footer={
         <>
-          <Button onClick={onClose}>Cancel</Button>
+          <Button onClick={onClose}>{t("Cancel")}</Button>
           <Button variant="primary" loading={busy} onClick={() => void go()}>
-            Repeat
+            {t("Repeat")}
           </Button>
         </>
       }
     >
       <div className="stack">
         {error && <Alert tone="error">{error}</Alert>}
-        <p className="muted">Each date is booked at the same time of day, checked like any booking. They are made together or not at all, unless you skip the dates that do not fit.</p>
-        <Field label="How often" htmlFor="bk-every">
+        <p className="muted">{t("Each date is booked at the same time of day, checked like any booking. They are made together or not at all, unless you skip the dates that do not fit.")}</p>
+        <Field label={t("How often")} htmlFor="bk-every">
           <select id="bk-every" className="select" value={every} onChange={(e) => setEvery(e.target.value)}>
-            <option value="week">Every week</option>
-            <option value="2 weeks">Every 2 weeks</option>
-            <option value="4 weeks">Every 4 weeks</option>
-            <option value="month">Every month</option>
+            <option value="week">{t("Every week")}</option>
+            <option value="2 weeks">{t("Every 2 weeks")}</option>
+            <option value="4 weeks">{t("Every 4 weeks")}</option>
+            <option value="month">{t("Every month")}</option>
           </select>
         </Field>
-        <Field label="How many bookings in all" htmlFor="bk-count" hint="This one included, up to 52.">
+        <Field label={t("How many bookings in all")} htmlFor="bk-count" hint={t("This one included, up to 52.")}>
           <input id="bk-count" className="input" type="number" min={2} max={52} value={count} onChange={(e) => setCount(Math.min(52, Math.max(2, Number(e.target.value) || 2)))} />
         </Field>
         <label className="check-field">
-          <input type="checkbox" checked={skip} onChange={(e) => setSkip(e.target.checked)} /> Skip the dates that do not fit
+          <input type="checkbox" checked={skip} onChange={(e) => setSkip(e.target.checked)} /> {t("Skip the dates that do not fit")}
         </label>
       </div>
     </Dialog>
@@ -157,25 +157,25 @@ function Repeat({ b, onClose, onDone }: { b: Full; onClose: () => void; onDone: 
 function GuestLink({ id, onClose }: { id: string; onClose: () => void }) {
   const q = useQuery({ queryKey: ["bk", "link", id], queryFn: () => act<{ url: string; note: string; expires_at: string }>(id, "guest_link"), staleTime: Infinity, gcTime: 0 });
   return (
-    <Dialog open onClose={onClose} title="Link for the guest" footer={<Button onClick={onClose}>Done</Button>}>
+    <Dialog open onClose={onClose} title={t("Link for the guest")} footer={<Button onClick={onClose}>{t("Done")}</Button>}>
       {q.isLoading ? (
-        <Spinner label="Making the link" />
+        <Spinner label={t("Making the link")} />
       ) : q.error ? (
         <Alert tone="error">{errorMessage(q.error)}</Alert>
       ) : (
         <div className="stack">
           <div className="secret">
-            <input className="input" readOnly value={q.data!.url} aria-label="The guest's link" onFocus={(e) => e.currentTarget.select()} />
+            <input className="input" readOnly value={q.data!.url} aria-label={t("The guest's link")} onFocus={(e) => e.currentTarget.select()} />
             <Button
               icon="copy"
               onClick={() =>
                 void navigator.clipboard
                   .writeText(q.data!.url)
-                  .then(() => toast("Link copied"))
-                  .catch(() => toast("Select the link and copy it", "error"))
+                  .then(() => toast(t("Link copied")))
+                  .catch(() => toast(t("Select the link and copy it"), "error"))
               }
             >
-              Copy
+              {t("Copy")}
             </Button>
           </div>
           <p className="muted">{q.data!.note}</p>
@@ -231,7 +231,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
     setBusy("make_sales_invoice");
     try {
       await act(id, "make_sales_invoice");
-      toast("A draft sales invoice was made");
+      toast(t("A draft sales invoice was made"));
       void qc.invalidateQueries({ queryKey: ["bk", "doc", id] });
     } catch (e) {
       toast(errorMessage(e), "error");
@@ -247,7 +247,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
   const primary: Step | undefined = steps.includes("confirm") ? "confirm" : steps.includes("complete") ? "complete" : steps.includes("reschedule") ? "reschedule" : undefined;
 
   return (
-    <aside className="bk-sheet" aria-label="Booking" onKeyDown={(e) => e.key === "Escape" && !e.defaultPrevented && !dialog && onClose()}>
+    <aside className="bk-sheet" aria-label={t("Booking")} onKeyDown={(e) => e.key === "Escape" && !e.defaultPrevented && !dialog && onClose()}>
       <header className="bk-sheet-head">
         <div>
           <h2 ref={head} tabIndex={-1}>
@@ -259,15 +259,15 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
             </p>
           )}
         </div>
-        <button type="button" className="icon-btn" aria-label="Close" title="Close (Esc)" onClick={onClose}>
+        <button type="button" className="icon-btn" aria-label={t("Close")} title={t("Close (Esc)")} onClick={onClose}>
           <X size={18} />
         </button>
       </header>
       {q.error ? (
-        <ErrorState error={q.error} onRetry={() => void q.refetch()} title="We could not open this booking" />
+        <ErrorState error={q.error} onRetry={() => void q.refetch()} title={t("We could not open this booking")} />
       ) : !b ? (
         <div className="bk-center">
-          <Spinner label="Loading the booking" />
+          <Spinner label={t("Loading the booking")} />
         </div>
       ) : (
         <>
@@ -285,22 +285,22 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
               {tab === "history" ? (
                 <History id={id} />
               ) : mode === "move" ? (
-                <Reschedule booking={b} zone={zone} hour12={hour12} onClose={() => setMode("info")} onDone={(next) => { changed(next); toast("Moved"); }} />
+                <Reschedule booking={b} zone={zone} hour12={hour12} onClose={() => setMode("info")} onDone={(next) => { changed(next); toast(t("Moved")); }} />
               ) : mode === "cancel" ? (
                 <Cancel b={b} onClose={() => setMode("info")} onDone={(next) => { changed(next); toast(b.status === "Pending" ? "Declined" : "Cancelled"); }} />
               ) : (
                 <>
                   <section className="bk-part">
-                    <h3>When</h3>
+                    <h3>{t("When")}</h3>
                     <p className="bk-big">{dayText(dayOf(start, zone), { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</p>
                     <p>
-                      {clockText(start, zone, hour12)} – {clockText(end, zone, hour12)} <span className="faint">({Math.round((end - start) / 60_000)} min)</span>
+                      {clockText(start, zone, hour12)} – {clockText(end, zone, hour12)} <span className="faint">({Math.round((end - start) / 60_000)} {t("min)")}</span>
                     </p>
                     {(b.status === "Pending" || b.status === "Confirmed") && <p className="faint">{note}</p>}
-                    {b.series && <p className="faint">Part of a repeating series.</p>}
+                    {b.series && <p className="faint">{t("Part of a repeating series.")}</p>}
                   </section>
                   <section className="bk-part">
-                    <h3>Who</h3>
+                    <h3>{t("Who")}</h3>
                     <p className="bk-big">{b.guest_name ?? "—"}</p>
                     {b.guest_email && (
                       <p>
@@ -313,7 +313,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                       </p>
                     )}
                     <p className="faint">
-                      With {b.staff_name ?? "—"}
+                      {t("With")} {b.staff_name ?? "—"}
                       {(b.seats ?? 1) > 1 ? ` · ${b.seats} seats` : ""}
                       {b.source === "Public" ? " · booked online" : ""}
                     </p>
@@ -325,7 +325,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                   </section>
                   {(b.location_type || b.location || b.resource) && (
                     <section className="bk-part">
-                      <h3>Where</h3>
+                      <h3>{t("Where")}</h3>
                       <p>
                         <MapPin size={13} aria-hidden="true" /> {b.location_type}
                         {b.location ? ` · ${b.location}` : ""}
@@ -335,7 +335,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                   )}
                   {(b.answers?.length || b.notes) && (
                     <section className="bk-part">
-                      <h3>What they said</h3>
+                      <h3>{t("What they said")}</h3>
                       <dl className="bk-answers">
                         {b.answers?.map((a) => (
                           <div key={a.question}>
@@ -345,7 +345,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                         ))}
                         {b.notes && (
                           <div>
-                            <dt>Notes</dt>
+                            <dt>{t("Notes")}</dt>
                             <dd>{b.notes}</dd>
                           </div>
                         )}
@@ -354,12 +354,12 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                   )}
                   {b.status === "Cancelled" && b.cancellation_reason && (
                     <section className="bk-part">
-                      <h3>Why it was cancelled</h3>
+                      <h3>{t("Why it was cancelled")}</h3>
                       <p>{b.cancellation_reason}</p>
                     </section>
                   )}
                   <section className="bk-part">
-                    <h3>Billing</h3>
+                    <h3>{t("Billing")}</h3>
                     <p>
                       {Number(b.amount) > 0 ? priceText(b.amount, null) : "Free"}
                       {b.sales_invoice ? (
@@ -371,12 +371,12 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                     </p>
                     {canWrite && !b.sales_invoice && Number(b.amount) > 0 && ["Confirmed", "Completed", "No Show"].includes(b.status) && (
                       <Button size="sm" loading={busy === "make_sales_invoice"} onClick={() => void invoice()}>
-                        Create invoice
+                        {t("Create invoice")}
                       </Button>
                     )}
                   </section>
                   <p className="faint bk-number">
-                    {b.number} · <Link to={`/e/Booking/${b.id}`}>Open the full record</Link>
+                    {b.number} · <Link to={`/e/Booking/${b.id}`}>{t("Open the full record")}</Link>
                   </p>
                 </>
               )}
@@ -386,22 +386,22 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
             <footer className="bk-sheet-foot">
               {steps.includes("confirm") && (
                 <Button variant={primary === "confirm" ? "primary" : "default"} loading={busy === "confirm"} onClick={() => void run("confirm", {}, "Confirmed. The guest is told.")}>
-                  Confirm
+                  {t("Confirm")}
                 </Button>
               )}
               {steps.includes("complete") && (
                 <Button variant={primary === "complete" ? "primary" : "default"} loading={busy === "complete"} onClick={() => void run("complete", {}, "Marked completed")}>
-                  Completed
+                  {t("Completed")}
                 </Button>
               )}
               {steps.includes("mark_no_show") && (
                 <Button loading={busy === "mark_no_show"} onClick={() => void noShow()}>
-                  No show
+                  {t("No show")}
                 </Button>
               )}
               {steps.includes("reschedule") && (
                 <Button variant={primary === "reschedule" ? "primary" : "default"} onClick={() => setMode("move")}>
-                  Move
+                  {t("Move")}
                 </Button>
               )}
               {steps.includes("cancel_booking") && (
@@ -410,14 +410,14 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                 </Button>
               )}
               <span className="spacer" />
-              <Menu ariaLabel="More about this booking" label="More" buttonClass="btn btn-default btn-md">
+              <Menu ariaLabel="More about this booking" label={t("More")} buttonClass="btn btn-default btn-md">
                 {(close) => (
                   <>
                     {b.status !== "Cancelled" && (
-                      <MenuItem onSelect={() => { close(); setDialog("link"); }}>Link for the guest…</MenuItem>
+                      <MenuItem onSelect={() => { close(); setDialog("link"); }}>{t("Link for the guest…")}</MenuItem>
                     )}
                     {!b.series && (b.status === "Pending" || b.status === "Confirmed") && (
-                      <MenuItem onSelect={() => { close(); setDialog("repeat"); }}>Repeat…</MenuItem>
+                      <MenuItem onSelect={() => { close(); setDialog("repeat"); }}>{t("Repeat…")}</MenuItem>
                     )}
                     {b.series && b.status !== "Cancelled" && (
                       <MenuItem
@@ -427,7 +427,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                           if (await confirmDialog({ title: "Cancel this and the later bookings?", message: "Every booking of this series from this one on is cancelled, and each guest is told.", confirmLabel: "Cancel them", danger: true })) void run("cancel_series", {}, "The series is cancelled");
                         }}
                       >
-                        Cancel this and later…
+                        {t("Cancel this and later…")}
                       </MenuItem>
                     )}
                   </>
@@ -461,17 +461,17 @@ export function SessionSheet({ bookings, zone, hour12, onOpen, onClose }: { book
   const end = Date.parse(first.end_time);
   const seats = bookings.reduce((n, x) => n + (x.seats ?? 1), 0);
   return (
-    <aside className="bk-sheet" aria-label="Class" onKeyDown={(e) => e.key === "Escape" && onClose()}>
+    <aside className="bk-sheet" aria-label={t("Class")} onKeyDown={(e) => e.key === "Escape" && onClose()}>
       <header className="bk-sheet-head">
         <div>
           <h2 ref={head} tabIndex={-1}>
             {first.service_name}
           </h2>
           <p className="muted">
-            {dayText(dayOf(start, zone), { weekday: "long", day: "numeric", month: "long" })}, {clockText(start, zone, hour12)} – {clockText(end, zone, hour12)} · with {first.staff_name}
+            {dayText(dayOf(start, zone), { weekday: "long", day: "numeric", month: "long" })}, {clockText(start, zone, hour12)} – {clockText(end, zone, hour12)} {t("· with {staff_name}", { staff_name: first.staff_name ?? "" })}
           </p>
         </div>
-        <button type="button" className="icon-btn" aria-label="Close" title="Close (Esc)" onClick={onClose}>
+        <button type="button" className="icon-btn" aria-label={t("Close")} title={t("Close (Esc)")} onClick={onClose}>
           <X size={18} />
         </button>
       </header>
