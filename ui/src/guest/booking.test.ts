@@ -88,6 +88,15 @@ describe("the form", () => {
     expect([named.staff, named.seats, named.waitlist]).toEqual(["st-2", 3, true]);
     expect(bookBody({ service: service(), start: "x", form: { ...form, seats: 5 }, zone: "UTC" }).seats).toBe(1);
   });
+
+  it("asks for a series only where the service offers one, never for a waitlist, and no longer than it allows", () => {
+    const weekly = { ...form, every: "week", times: 5 };
+    expect(bookBody({ service: service({ repeats: 3 }), start: "x", form: weekly, zone: "UTC" })).toMatchObject({ repeat_every: "week", repeat_count: 3 });
+    expect(bookBody({ service: service({ repeats: 3 }), start: "x", form: { ...weekly, times: 1 }, zone: "UTC" })).toMatchObject({ repeat_count: 2 });
+    expect(bookBody({ service: service(), start: "x", form: weekly, zone: "UTC" })).not.toHaveProperty("repeat_every");
+    expect(bookBody({ service: service({ repeats: 3, seats: 8 }), start: "x", form: weekly, zone: "UTC", waitlist: true })).not.toHaveProperty("repeat_every");
+    expect(bookBody({ service: service({ repeats: 3 }), start: "x", form: { ...weekly, every: "" }, zone: "UTC" })).not.toHaveProperty("repeat_count");
+  });
 });
 
 describe("the server's complaints", () => {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.15
+
+A guest books a series from the booking page: every week, 2 weeks, 4 weeks or month, as many times in all as the service lets them (BookingService.guest_repeat_max, 0 by default), each at the same local time. It is booked whole or not at all, and a date that is taken is named; the confirmation lists the later dates. Only free services repeat for guests: a paid one is booked one at a time, its deposit being the first booking's. The guest page's new words are in Arabic and Hindi.
+
 ## 0.4.14
 
 The assistant knows what its records mean in its pages (contributes.shell.assistant): their states, what counts and where figures come from, with questions it suggests asking there.

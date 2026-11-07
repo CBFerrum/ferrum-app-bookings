@@ -31,6 +31,8 @@ export interface Service {
   location?: string | null;
   staff: Person[];
   questions: Question[];
+  /** How many in a row a guest may book it (0: once). */
+  repeats?: number;
 }
 
 export interface Catalog {
@@ -129,6 +131,10 @@ export interface Form {
   seats: number;
   /** Answers by question text. */
   answers: Record<string, string>;
+  /** Booked again at the same time: "" (once), "week", "2 weeks", "4 weeks" or "month". */
+  every?: string;
+  /** How many in all, this one included, when it repeats. */
+  times?: number;
 }
 
 export interface FormErrors {
@@ -207,6 +213,7 @@ export function bookBody(o: { service: Service; start: string; staff?: string; f
     answers: service.questions.filter((q) => (form.answers[q.question] ?? "").trim()).map((q) => ({ question: q.question, answer: form.answers[q.question].trim() })),
     // A field people never see: only a program fills it in.
     website: o.website ?? "",
+    ...(form.every && !o.waitlist && (service.repeats ?? 0) >= 2 ? { repeat_every: form.every, repeat_count: Math.min(Math.max(form.times ?? 2, 2), service.repeats ?? 2) } : {}),
   };
 }
 
