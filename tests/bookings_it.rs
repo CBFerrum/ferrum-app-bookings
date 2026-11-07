@@ -1102,6 +1102,36 @@ async fn scenario() {
     assert_eq!(t.get("Booking", uid(middle)).await["cancellation_reason"], json!("Moved away"));
     assert!(t.action(&manager, "Booking", uid(&taken), "cancel_series", json!({})).await.is_err(), "not in a series");
 
+    // ───────────── a guest books a series from the page, where the service lets them ─────────────
+    t.update(&manager, "BookingSettings", settings_id, json!({"public_page": true})).await;
+    let week = |n: i64| today + Duration::days(7 * n);
+    let weekly = |name: &str, day: NaiveDate, count: i64| {
+        json!({"service": sid(&coaching), "staff": ben_id.to_string(), "start_time": rfc(local(london, day, "11:30")), "name": name,
+               "email": format!("{}@example.test", name.to_lowercase()), "time_zone": "Europe/London", "repeat_every": "week", "repeat_count": count})
+    };
+    let once = t.book(weekly("Sol", week(5), 3)).await.unwrap_err();
+    assert!(messages(&once).contains("one at a time"), "{}", messages(&once));
+    assert!(t.get_pub("/services").await["services"].as_array().unwrap().iter().all(|s| s["repeats"] == json!(0)), "nothing offers a series yet");
+    t.update(&manager, "BookingService", uid(&coaching), json!({"guest_repeat_max": 3})).await;
+    let page = t.get_pub("/services").await;
+    let offered = page["services"].as_array().unwrap().iter().find(|s| s["id"] == json!(sid(&coaching))).unwrap().clone();
+    assert_eq!(offered["repeats"], json!(3), "{page}");
+    assert!(messages(&t.book(weekly("Sol", week(5), 4)).await.unwrap_err()).contains("at most 3"));
+    assert!(messages(&t.book(weekly("Sol", week(5), 1)).await.unwrap_err()).contains("2 or more"));
+    let booked = t.book(weekly("Sol", week(5), 3)).await.unwrap();
+    assert_eq!(booked["later"].as_array().unwrap().len(), 2, "{booked}");
+    let sol = t.list(&a, "Booking", json!({"guest_email": "sol@example.test"})).await.unwrap();
+    assert_eq!(sol.len(), 3, "this one and two more weeks");
+    assert!(sol.iter().all(|r| r["series"] == sol[0]["series"] && !r["series"].is_null() && r["status"] == json!("Confirmed")));
+    let mut weeks: Vec<DateTime<Utc>> = sol.iter().map(|r| r["start_time"].as_str().unwrap().parse().unwrap()).collect();
+    weeks.sort();
+    assert_eq!(weeks, vec![local(london, week(5), "11:30"), local(london, week(6), "11:30"), local(london, week(7), "11:30")]);
+    // Whole or nothing for a guest too: the week that is taken is named, and nothing was booked.
+    let clash = t.book(weekly("Tam", week(4), 2)).await.unwrap_err();
+    assert!(messages(&clash).contains(&week(5).to_string()), "{}", messages(&clash));
+    assert_eq!(t.scalar("select count(*) from e_booking where tenant_id = $1 and guest_email = 'tam@example.test'", None).await, 0);
+    t.update(&manager, "BookingSettings", settings_id, json!({"public_page": false})).await;
+
     // ───────────── someone leaves: no more bookings, and those made stay for a person to move ─────────────
     let leaver = t.user("leaver@spa.test", &["Bookings User"]).await;
     let leaving = t

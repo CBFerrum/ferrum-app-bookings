@@ -23,7 +23,8 @@ export const freeSlots = (tenant: string, service: string, q: SlotQuery, signal?
   api.get<Slots>(`${base(tenant)}/slots`, { service, ...slotParams(q), waitlist: 1 }, signal);
 
 /** A booking, or `{status: "received"}` for the hidden field only a program fills in. */
-export type Booked = { booking: GuestBooking; token: string } | { status: "received" };
+/** `later`: the rest of a series booked with it, by their start. */
+export type Booked = { booking: GuestBooking; token: string; later?: { id: string; start_time: string }[] } | { status: "received" };
 
 export const book = (tenant: string, body: unknown) => api.post<Booked>(`${base(tenant)}/book`, body);
 

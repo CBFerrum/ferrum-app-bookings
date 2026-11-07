@@ -329,7 +329,7 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
       // That time is no longer free for the next guest, whatever the lists on screen last said.
       void qc.invalidateQueries({ queryKey: ["gb-slots"] });
       if ("status" in out) setReceived(true);
-      else navigate(`manage/${out.token}`, { replace: true, state: { booking: out.booking, fresh: true } });
+      else navigate(`manage/${out.token}`, { replace: true, state: { booking: out.booking, fresh: true, later: out.later ?? [] } });
     } catch (err) {
       if (isTaken(err)) {
         setTaken(true);
@@ -387,6 +387,24 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
       {service.questions.map((q) => (
         <Answer key={q.question} q={q} value={values.answers[q.question] ?? ""} error={errors.answers[q.question]} onChange={(v) => set({ answers: { ...values.answers, [q.question]: v } })} />
       ))}
+      {!waitlist && (service.repeats ?? 0) >= 2 && (
+        <div className="gb-form-grid">
+          <Field label={t("Repeat")} htmlFor="gb-every" hint={t("The same time each time. If one of the dates is taken, nothing is booked and we say which.")}>
+            <select id="gb-every" className="select" value={values.every ?? ""} onChange={(e) => set({ every: e.target.value, times: values.times ?? 2 })}>
+              <option value="">{t("Just this once")}</option>
+              <option value="week">{t("Every week")}</option>
+              <option value="2 weeks">{t("Every 2 weeks")}</option>
+              <option value="4 weeks">{t("Every 4 weeks")}</option>
+              <option value="month">{t("Every month")}</option>
+            </select>
+          </Field>
+          {values.every && (
+            <Field label={t("Times in all")} htmlFor="gb-times" hint={t("Up to {repeats}, this one included.", { repeats: service.repeats ?? 2 })}>
+              <input id="gb-times" className="input" type="number" min={2} max={service.repeats} value={values.times ?? 2} onChange={(e) => set({ times: Number(e.target.value) })} />
+            </Field>
+          )}
+        </div>
+      )}
       <Field label={t("Anything we should know? (optional)")} htmlFor="gb-notes" error={errors.notes}>
         <textarea id="gb-notes" className="textarea" rows={3} maxLength={2000} value={values.notes} onChange={(e) => set({ notes: e.target.value })} {...invalid("notes")} />
       </Field>

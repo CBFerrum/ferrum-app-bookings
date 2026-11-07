@@ -15,7 +15,7 @@ use crate::{Instant, doc_id, obj, time, ts};
 use chrono::{Duration, Months, NaiveDate, Timelike};
 use chrono_tz::Tz;
 use ferrum_domain::util::{elevated, id, s, sys};
-use ferrum_kernel::{Doc, Error, HookCtx, Result};
+use ferrum_kernel::{Ctx, Doc, Error, HookCtx, Kernel, Result, Tx};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -80,6 +80,11 @@ fn refusal(e: &Error) -> String {
 /// Makes `booking` the first of a series (`{every, count, skip_conflicts?}`) and books the rest in
 /// its transaction.
 pub async fn repeat(hc: &mut HookCtx<'_>, booking: &Doc, params: &Value) -> Result<Value> {
+    repeat_in(hc.kernel, hc.ctx, hc.tx, booking, params).await
+}
+
+/// [`repeat`], for a caller with a transaction of its own: the booking page, for a guest.
+pub async fn repeat_in(kernel: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, params: &Value) -> Result<Value> {
     if !ACTIVE.contains(&s(booking, "status").unwrap_or_default()) {
         return Err(Error::invalid("only a pending or confirmed booking can be repeated"));
     }
@@ -93,18 +98,18 @@ pub async fn repeat(hc: &mut HookCtx<'_>, booking: &Doc, params: &Value) -> Resu
     let skip = params.get("skip_conflicts").is_some_and(|v| v.as_bool().unwrap_or(v.as_str() == Some("Yes")));
     let first = time(booking, "start_time").ok_or_else(|| Error::internal("booking without a start"))?;
     let staff = id(booking, "staff").ok_or_else(|| Error::internal("a placed booking has its staff"))?;
-    let tz = calendar::staff(hc.tx, hc.ctx.tenant, &[staff]).await?.first().map(|st| st.tz).ok_or_else(|| Error::internal("a booking's staff is gone"))?;
+    let tz = calendar::staff(tx, ctx.tenant, &[staff]).await?.first().map(|st| st.tz).ok_or_else(|| Error::internal("a booking's staff is gone"))?;
     let series = Uuid::now_v7();
-    let engine = elevated(hc.ctx);
+    let engine = elevated(ctx);
     let (mut booked, mut skipped) = (Vec::new(), Vec::new());
     for date in dates(first.with_timezone(&tz).date_naive(), every, count).into_iter().skip(1) {
         let start = same_local_time(first, tz, date);
         // A refused occurrence must not cost the others the transaction.
-        sqlx::query("savepoint occurrence").execute(&mut **hc.tx).await?;
-        match hc.kernel.insert_tx(&engine, hc.tx, "Booking", occurrence(booking, series, start)).await {
+        sqlx::query("savepoint occurrence").execute(&mut **tx).await?;
+        match kernel.insert_tx(&engine, tx, "Booking", occurrence(booking, series, start)).await {
             Ok(doc) => booked.push(json!({"id": doc.get("id"), "start_time": ts(start)})),
             Err(e @ (Error::Validation(_) | Error::Invalid(_) | Error::Conflict(_))) => {
-                sqlx::query("rollback to savepoint occurrence").execute(&mut **hc.tx).await?;
+                sqlx::query("rollback to savepoint occurrence").execute(&mut **tx).await?;
                 let why = refusal(&e);
                 if !skip {
                     return Err(Error::Invalid(format!(
@@ -119,7 +124,7 @@ pub async fn repeat(hc: &mut HookCtx<'_>, booking: &Doc, params: &Value) -> Resu
     if booked.is_empty() {
         return Err(Error::invalid("none of the later dates can be booked"));
     }
-    hc.kernel.set_values_tx(&sys(hc.ctx), hc.tx, "Booking", doc_id(booking)?, obj(json!({"series": series}))).await?;
+    kernel.set_values_tx(&sys(ctx), tx, "Booking", doc_id(booking)?, obj(json!({"series": series}))).await?;
     Ok(json!({"series": series, "booked": booked, "skipped": skipped}))
 }
 

@@ -41,6 +41,8 @@ pub struct ServiceInfo {
     pub staff: Vec<Uuid>,
     pub resources: Vec<Uuid>,
     pub questions: Vec<Question>,
+    /// Times in a row a guest may book it from the booking page (0 or 1: once).
+    pub guest_repeats: i64,
 }
 
 impl ServiceInfo {
@@ -90,18 +92,19 @@ type ServiceRow = (
     Option<Uuid>,
     Option<String>,
     Option<String>,
+    Option<i64>,
 );
 
 pub async fn service(tx: &mut Tx, tenant: Uuid, id: Uuid) -> Result<Option<ServiceInfo>> {
     let row: Option<ServiceRow> = sqlx::query_as(
         "select id, service_name, active, description, duration_minutes, buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, \
-         capacity, price, item, location_type, location_details from e_booking_service where tenant_id = $1 and id = $2",
+         capacity, price, item, location_type, location_details, guest_repeat_max from e_booking_service where tenant_id = $1 and id = $2",
     )
     .bind(tenant)
     .bind(id)
     .fetch_optional(&mut **tx)
     .await?;
-    let Some((id, name, active, description, duration, before, after, interval, capacity, price, item, location_type, location)) = row else {
+    let Some((id, name, active, description, duration, before, after, interval, capacity, price, item, location_type, location, guest_repeats)) = row else {
         return Ok(None);
     };
     let staff: Vec<Uuid> =
@@ -137,6 +140,7 @@ pub async fn service(tx: &mut Tx, tenant: Uuid, id: Uuid) -> Result<Option<Servi
         item,
         location_type: location_type.unwrap_or_else(|| "In Person".into()),
         location: location.filter(|l| !l.trim().is_empty()),
+        guest_repeats: guest_repeats.unwrap_or(0).max(0),
         staff: dedup(staff),
         resources: dedup(resources),
         questions: questions

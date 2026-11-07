@@ -193,7 +193,7 @@ function Move({ tenant, token, b, onClose, onDone }: { tenant: string; token: st
 }
 
 export function ManagePage({ tenant, token }: { tenant: string; token: string }) {
-  const state = useLocation().state as { booking?: GuestBooking; fresh?: boolean } | null;
+  const state = useLocation().state as { booking?: GuestBooking; fresh?: boolean; later?: { id: string; start_time: string }[] } | null;
   const qc = useQueryClient();
   const { hour12 } = useDisplay();
   const [mode, setMode] = useState<"view" | "move">("view");
@@ -261,6 +261,16 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
               <p className="muted">
                 <Mail size={14} aria-hidden="true" /> {b.status === "Pending" ? t("We will email you as soon as it is confirmed.") : t("We are emailing the details to {value}.", { value: b.guest.email ?? "you" })}
               </p>
+            )}
+            {fresh && (state?.later?.length ?? 0) > 0 && (
+              <div className="muted">
+                <p>{t("Also booked, at the same time:")}</p>
+                <ul>
+                  {state?.later?.map((o) => (
+                    <li key={o.id}>{isolate(until(o.start_time))}</li>
+                  ))}
+                </ul>
+              </div>
             )}
             {b.status === "Pending" && !fresh && <p className="muted">{t("The business will confirm it by email. The time is held for you meanwhile.")}</p>}
             {b.status === "Waitlisted" && (

@@ -136,6 +136,7 @@
     - {name: slot_interval_minutes, type: int, label: Slot Interval (Minutes), min: 5, max: 1440, description: "Empty = Booking Settings"}
     - {name: capacity, type: int, label: Seats, default: 1, required: true, min: 1, max: 1000, in_list: true, description: "1 = one-to-one appointment; more = a group class with this many seats per session"}
     - {name: price, type: currency, default: 0, min: "0", in_list: true, description: "Per seat, in the company currency"}
+    - {name: guest_repeat_max, type: int, label: Guests May Book It Up To, default: 0, min: 0, max: 52, description: "Times in a row a guest may book it on the booking page, every week, 2 weeks, 4 weeks or month, when it is free: 0 or 1 is once"}
     - {name: item, type: link, to: Item, required_if: "doc.price > 0.0", description: "Item bookings are invoiced as (a service item)"}
     - {name: location_type, type: select, options: [In Person, Video, Phone], default: In Person, required: true, in_list: true}
     - {name: location_details, type: text, description: "Address, video meeting link or phone number; guests see it once booked"}
@@ -147,7 +148,7 @@
     - {name: find_slots, label: Find Free Slots, permission: read, hidden: true}
   form:
     - {label: Service, fields: [service_name, active, description, location_type, location_details]}
-    - {label: Time, fields: [duration_minutes, buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, capacity]}
+    - {label: Time, fields: [duration_minutes, buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, capacity, guest_repeat_max]}
     - {label: Price, fields: [price, item]}
     - {label: Staff and Resources, fields: [staff, resources]}
     - {label: Intake Questions, collapsible: true, fields: [questions]}

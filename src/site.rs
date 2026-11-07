@@ -9,7 +9,7 @@ use crate::booking::{self, ACTIVE};
 use crate::calendar::{self, ServiceInfo};
 use crate::notify::{self, booking_event};
 use crate::settings::{self, Settings};
-use crate::{doc_id, ics, int, obj, slots, time, token, ts, when};
+use crate::{doc_id, ics, int, obj, series, slots, time, token, ts, when};
 use async_trait::async_trait;
 use chrono::Utc;
 use chrono_tz::Tz;
@@ -149,6 +149,8 @@ async fn services(k: &Kernel, ctx: &Ctx) -> Result<Value> {
                     "duration_minutes": svc.duration,
                     "seats": svc.capacity,
                     "price": money(svc.price),
+                    // How many in a row a guest may book: a free service the business lets them repeat.
+                    "repeats": guest_repeats(svc),
                     "location_type": svc.location_type,
                     // Video links and phone numbers go to booked guests only.
                     "location": if svc.location_type == "In Person" { svc.location.clone() } else { None },
@@ -159,6 +161,12 @@ async fn services(k: &Kernel, ctx: &Ctx) -> Result<Value> {
         })
         .collect();
     Ok(json!({"time_zone": ctx.schema.timezone, "currency": code, "services": list}))
+}
+
+/// How many in a row a guest may book `svc` from the page: a free service its business lets them
+/// repeat, up to what it says (a paid one is booked one at a time: its deposit is the first's).
+fn guest_repeats(svc: &ServiceInfo) -> i64 {
+    if svc.price.is_zero() && svc.guest_repeats >= 2 { svc.guest_repeats.min(52) } else { 0 }
 }
 
 /// `GET /slots?service=&from=&to=&time_zone=&staff=&seats=&waitlist=1`: with `waitlist`, a full
@@ -305,12 +313,29 @@ async fn book(k: &Kernel, ctx: &Ctx, body: &Map<String, Value>) -> Result<(u16, 
     if !errors.is_empty() {
         return Err(Error::Validation(errors));
     }
+    // A series (`repeat_every`, `repeat_count`, this booking included): booked whole or not at all.
+    let repeat = match body.get("repeat_every").and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()) {
+        None => None,
+        Some(every) => match body.get("repeat_count").and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|x| x.trim().parse().ok()))) {
+            Some(n) if n >= 2 => Some((every.to_string(), n)),
+            _ => return Err(Error::Validation(vec![FieldError::new("repeat_count", "must be 2 or more, this booking included")])),
+        },
+    };
     let waitlist = body.get("waitlist").and_then(Value::as_bool).unwrap_or(false);
     let service = body.get("service").and_then(Value::as_str).map(str::to_string);
     let view = with_retry(|| async {
         let mut tx = k.db.tenant_tx(ctx.tenant).await?;
         let st = open_page(&mut tx, ctx.tenant).await?;
         let svc = bookable(&mut tx, ctx.tenant, service.as_deref()).await?;
+        if let Some((_, count)) = &repeat {
+            let most = guest_repeats(&svc);
+            if most < 2 || waitlist {
+                return Err(Error::Validation(vec![FieldError::new("repeat_every", "this service is booked one at a time")]));
+            }
+            if *count > most {
+                return Err(Error::Validation(vec![FieldError::new("repeat_count", format!("can be at most {most}, this booking included"))]));
+            }
+        }
         let rows = answers(&svc, body.get("answers"))?;
         let input = obj(json!({
             "service": svc.id.to_string(),
@@ -327,13 +352,18 @@ async fn book(k: &Kernel, ctx: &Ctx, body: &Map<String, Value>) -> Result<(u16, 
             "answers": rows,
         }));
         let doc = k.insert_tx(ctx, &mut tx, "Booking", input).await?;
+        let series = match &repeat {
+            Some((every, count)) => Some(series::repeat_in(k, ctx, &mut tx, &doc, &json!({"every": every, "count": count})).await?),
+            None => None,
+        };
         // As saved, with what its hooks added (a deposit asked for).
         let doc = k.get_tx(ctx, &mut tx, "Booking", doc_id(&doc)?, false).await?;
         let token = token::mint(&mut tx, ctx.tenant, doc_id(&doc)?).await?;
         let root = settings::site_root(&mut tx, ctx.tenant).await?;
         let view = guest_view(ctx, &mut tx, &doc, &st, &root, &token).await?;
         tx.commit().await?;
-        Ok(json!({"booking": view, "token": token}))
+        let later: Vec<Value> = series.as_ref().and_then(|s| s["booked"].as_array().cloned()).unwrap_or_default();
+        Ok(json!({"booking": view, "token": token, "later": later}))
     })
     .await?;
     Ok((201, view))
@@ -583,7 +613,17 @@ mod tests {
             staff: vec![],
             resources: vec![],
             questions,
+            guest_repeats: 0,
         }
+    }
+
+    #[test]
+    fn guests_repeat_only_a_free_service_that_lets_them() {
+        let with = |price: i64, most: i64| ServiceInfo { price: price.into(), guest_repeats: most, ..svc(vec![]) };
+        assert_eq!(guest_repeats(&with(0, 4)), 4);
+        assert_eq!(guest_repeats(&with(0, 1)), 0, "once is not a series");
+        assert_eq!(guest_repeats(&with(25, 4)), 0, "a paid service is booked one at a time");
+        assert_eq!(guest_repeats(&with(0, 400)), 52, "a year of weeks at most");
     }
 
     fn question(q: &str, kind: &str, options: &[&str], required: bool) -> Question {
