@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarPlus, CircleCheck, Hourglass, CalendarX, Mail } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { Link, useLocation, useParams } from "react-router";
-import { errorMessage } from "@ferrum/client";
+import { errorMessage, t } from "@ferrum/client";
 import { Alert, Badge, Button, Dialog, Field, toast, useShellTitle } from "@ferrum/kit";
 import { clockText, dayOf, dayText, whenText, zoneText } from "../zone";
 import { calendarLinks, type GuestBooking, isLink, isTaken, priceText } from "./booking";
@@ -45,18 +45,18 @@ function AddToCalendar({ tenant, token, b, hour12 }: { tenant: string; token: st
       className="gb-menu"
       summary={
         <>
-          <CalendarPlus size={16} aria-hidden="true" /> Add to calendar
+          <CalendarPlus size={16} aria-hidden="true" /> {t("Add to calendar")}
         </>
       }
     >
       <a href={site.calendarFile(tenant, token)} download>
-        Apple Calendar or Outlook (.ics file)
+        {t("Apple Calendar or Outlook (.ics file)")}
       </a>
       <a href={links.google} target="_blank" rel="noopener noreferrer">
-        Google Calendar
+        {t("Google Calendar")}
       </a>
       <a href={links.outlook} target="_blank" rel="noopener noreferrer">
-        Outlook on the web
+        {t("Outlook on the web")}
       </a>
     </Pop>
   );
@@ -93,7 +93,7 @@ function CancelDialog({ tenant, token, waitlisted, onClose, onDone }: { tenant: 
       <div className="stack">
         {error && <Alert tone="error">{error}</Alert>}
         <p className="muted">{waitlisted ? "You lose your place in line. You can join again whenever you like." : "The time is given up and the business is told. You can book again whenever you like."}</p>
-        <Field label="Why are you cancelling? (optional)" htmlFor="gb-reason">
+        <Field label={t("Why are you cancelling? (optional)")} htmlFor="gb-reason">
           <textarea id="gb-reason" className="textarea" rows={3} maxLength={1000} value={reason} onChange={(e) => setReason(e.target.value)} />
         </Field>
       </div>
@@ -136,17 +136,17 @@ function Move({ tenant, token, b, onClose, onDone }: { tenant: string; token: st
   };
 
   return (
-    <section className="gb-move" aria-label="Choose a new time">
+    <section className="gb-move" aria-label={t("Choose a new time")}>
       <div className="gb-stage-head">
-        <h2 className="gb-h2">Choose a new time</h2>
+        <h2 className="gb-h2">{t("Choose a new time")}</h2>
         <ClockSwitch hour12={hour12} onChange={setHour12} />
       </div>
       <p className="muted">
-        Now {whenText(Date.parse(b.start_time), zone, hour12)} · times shown in {zoneText(zone)}
+        {t("Now")} {whenText(Date.parse(b.start_time), zone, hour12)} {t("· times shown in")} {zoneText(zone)}
       </p>
       {service && service.staff.length > 1 && (
         <fieldset className="gb-people">
-          <legend className="field-label">With</legend>
+          <legend className="field-label">{t("With")}</legend>
           <div className="gb-chips">
             {[{ id: null, name: "Anyone free" }, ...service.staff].map((p) => (
               <label key={p.id ?? "any"} className="gb-chip" data-checked={staff === p.id || undefined}>
@@ -180,11 +180,11 @@ function Move({ tenant, token, b, onClose, onDone }: { tenant: string; token: st
       />
       {error && <Alert tone="error">{error}</Alert>}
       <div className="gb-submit">
-        <p className="gb-total">{chosen ? <>Move to <strong>{whenText(Date.parse(chosen), zone, hour12)}</strong></> : "Pick a time to move to."}</p>
+        <p className="gb-total">{chosen ? <>{t("Move to")} <strong>{whenText(Date.parse(chosen), zone, hour12)}</strong></> : "Pick a time to move to."}</p>
         <div className="row">
-          <Button onClick={onClose}>Keep the current time</Button>
+          <Button onClick={onClose}>{t("Keep the current time")}</Button>
           <Button variant="primary" loading={busy} disabled={!chosen} onClick={() => void confirm()}>
-            Confirm new time
+            {t("Confirm new time")}
           </Button>
         </div>
       </div>
@@ -220,7 +220,7 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
   useShellTitle(b ? `${b.service.name} · ${dayText(dayOf(Date.parse(b.start_time), b.time_zone), { day: "numeric", month: "short" })}` : "Your booking");
 
   if (q.error) return <Frame><Closed error={q.error} what="link" home={home} onRetry={() => void q.refetch()} /></Frame>;
-  if (!b) return <Frame><Loading label="Finding your booking" /></Frame>;
+  if (!b) return <Frame><Loading label={t("Finding your booking")} /></Frame>;
 
   const head = HEAD[b.status];
   const fresh = !!state?.fresh && (b.status === "Confirmed" || b.status === "Pending" || b.status === "Waitlisted");
@@ -241,7 +241,7 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
           onDone={(next) => {
             update(next);
             setMode("view");
-            toast("Your booking has been moved");
+            toast(t("Your booking has been moved"));
           }}
         />
       </Frame>
@@ -262,13 +262,13 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
                 <Mail size={14} aria-hidden="true" /> {b.status === "Pending" ? "We will email you as soon as it is confirmed." : `We are emailing the details to ${b.guest.email ?? "you"}.`}
               </p>
             )}
-            {b.status === "Pending" && !fresh && <p className="muted">The business will confirm it by email. The time is held for you meanwhile.</p>}
+            {b.status === "Pending" && !fresh && <p className="muted">{t("The business will confirm it by email. The time is held for you meanwhile.")}</p>}
             {b.status === "Waitlisted" && (
               <p className="muted">
-                {b.waitlist_position ? `You are number ${b.waitlist_position} in line. ` : ""}We will email you if a seat becomes free.
+                {b.waitlist_position ? `You are number ${b.waitlist_position} in line. ` : ""}{t("We will email you if a seat becomes free.")}
               </p>
             )}
-            {b.status === "Cancelled" && b.cancellation_reason && <p className="muted">Reason given: {b.cancellation_reason}</p>}
+            {b.status === "Cancelled" && b.cancellation_reason && <p className="muted">{t("Reason given: {cancellation_reason}", { cancellation_reason: b.cancellation_reason })}</p>}
           </div>
         </header>
 
@@ -279,7 +279,7 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
           </div>
           <dl className="gb-details">
             <div>
-              <dt>When</dt>
+              <dt>{t("When")}</dt>
               <dd>
                 <strong>{dayText(dayOf(start, b.time_zone), { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</strong>
                 <br />
@@ -288,13 +288,13 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
             </div>
             {b.staff.name && (
               <div>
-                <dt>With</dt>
+                <dt>{t("With")}</dt>
                 <dd>{b.staff.name}</dd>
               </div>
             )}
             {b.status !== "Cancelled" && (
               <div>
-                <dt>Where</dt>
+                <dt>{t("Where")}</dt>
                 <dd>
                   {b.location_type === "Video" ? "Video call" : b.location_type === "Phone" ? "Phone call" : b.location ? null : "In person"}
                   {b.location &&
@@ -310,18 +310,18 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
             )}
             {b.seats > 1 && (
               <div>
-                <dt>Seats</dt>
+                <dt>{t("Seats")}</dt>
                 <dd>{b.seats}</dd>
               </div>
             )}
             {Number(b.amount) > 0 && (
               <div>
-                <dt>Price</dt>
+                <dt>{t("Price")}</dt>
                 <dd>{priceText(b.amount, catalog.data?.currency ?? null)}</dd>
               </div>
             )}
             <div>
-              <dt>Booked by</dt>
+              <dt>{t("Booked by")}</dt>
               <dd>
                 {[b.guest.name, b.guest.email, b.guest.phone].filter(Boolean).map((v) => (
                   <span key={v} className="gb-line">
@@ -338,7 +338,7 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
             ))}
             {b.number && (
               <div>
-                <dt>Reference</dt>
+                <dt>{t("Reference")}</dt>
                 <dd>{b.number}</dd>
               </div>
             )}
@@ -349,7 +349,7 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
           <div className="gb-actions">
             {active && <AddToCalendar tenant={tenant} token={token} b={b} hour12={hour12} />}
             {b.can_reschedule && (
-              <Button onClick={() => setMode("move")}>Choose another time</Button>
+              <Button onClick={() => setMode("move")}>{t("Choose another time")}</Button>
             )}
             {b.can_cancel && (
               <Button variant="danger" onClick={() => setCancelling(true)}>
@@ -362,8 +362,8 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
           <p className="gb-windows muted">
             {b.can_reschedule || b.can_cancel ? (
               <>
-                {b.can_reschedule && <>You can move it until {until(b.reschedule_until)}. </>}
-                {b.can_cancel && <>You can cancel it until {until(b.cancel_until)}.</>}
+                {b.can_reschedule && <>{t("You can move it until")} {until(b.reschedule_until)}. </>}
+                {b.can_cancel && <>{t("You can cancel it until")} {until(b.cancel_until)}.</>}
               </>
             ) : (
               "It can no longer be changed online. Please get in touch with the business if your plans have changed."
@@ -373,11 +373,11 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
         {b.status === "Cancelled" && (
           <div className="gb-actions">
             <Link className="btn btn-primary btn-md" to={`${home}?service=${b.service.id}`}>
-              Book another time
+              {t("Book another time")}
             </Link>
           </div>
         )}
-        <p className="gb-keep faint">Keep this link: it is how you come back to this booking.</p>
+        <p className="gb-keep faint">{t("Keep this link: it is how you come back to this booking.")}</p>
       </article>
       {cancelling && (
         <CancelDialog

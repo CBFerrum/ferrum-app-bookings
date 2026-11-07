@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { errorMessage } from "@ferrum/client";
+import { errorMessage, t } from "@ferrum/client";
 import { Badge, Button, EmptyState, ErrorState, PageLoading, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, useEntityMeta, useMe } from "@ferrum/records";
 import { type Bk, blocks as makeBlocks, type Block, inOrder, nextSteps, tone } from "./board";
@@ -26,17 +26,17 @@ function Quick({ b, now, canWrite, busy, run }: { b: Bk; now: number; canWrite: 
     <div className="bk-quick">
       {steps.includes("confirm") && (
         <Button size="sm" variant="primary" loading={busy === `${b.id}confirm`} onClick={() => void run(b, "confirm")}>
-          Confirm
+          {t("Confirm")}
         </Button>
       )}
       {steps.includes("complete") && (
         <Button size="sm" variant={ended ? "primary" : "default"} loading={busy === `${b.id}complete`} onClick={() => void run(b, "complete")}>
-          Came
+          {t("Came")}
         </Button>
       )}
       {steps.includes("mark_no_show") && (
         <Button size="sm" loading={busy === `${b.id}mark_no_show`} onClick={() => void run(b, "mark_no_show")}>
-          No show
+          {t("No show")}
         </Button>
       )}
     </div>
@@ -61,7 +61,7 @@ function Row({ block, zone, hour12, now, canWrite, showWho, busy, run, onOpen, o
           ) : (
             <span className="bk-row-title">{block.title}</span>
           )}
-          {next && <Badge tone="blue">Next</Badge>}
+          {next && <Badge tone="blue">{t("Next")}</Badge>}
         </span>
         <span className="muted">
           {block.kind === "booking" ? first.service_name : `${block.seats} of ${block.capacity} seats`}
@@ -170,18 +170,18 @@ export function Today() {
         </div>
         <div className="bk-tools">
           {myIds.length > 0 && (
-            <div className="segmented" role="group" aria-label="Whose bookings">
+            <div className="segmented" role="group" aria-label={t("Whose bookings")}>
               <button type="button" aria-pressed={mine} onClick={() => put("who", "me")}>
-                Mine
+                {t("Mine")}
               </button>
               <button type="button" aria-pressed={!mine} onClick={() => put("who", "all")}>
-                Everyone
+                {t("Everyone")}
               </button>
             </div>
           )}
           {canCreate && (
             <Link className="btn btn-primary btn-md" to="/new">
-              <Plus size={16} aria-hidden="true" /> New booking
+              <Plus size={16} aria-hidden="true" /> {t("New booking")}
             </Link>
           )}
         </div>
@@ -190,20 +190,20 @@ export function Today() {
       <div className="bk-layout" data-sheet={openId ? "open" : undefined}>
         <div className="bk-main">
           {meta.error || day.error ? (
-            <ErrorState error={meta.error ?? day.error} onRetry={() => { void meta.refetch(); void day.refetch(); }} title="We could not load today" />
+            <ErrorState error={meta.error ?? day.error} onRetry={() => { void meta.refetch(); void day.refetch(); }} title={t("We could not load today")} />
           ) : loading ? (
-            <PageLoading label="Loading today…" />
+            <PageLoading label={t("Loading today…")} />
           ) : nothing ? (
             <EmptyState title={mine ? "Nothing booked for you today" : "Nothing booked today"} icon="calendar">
-              <p className="muted">When guests book, or you book for them, it shows here in the order it happens.</p>
-              <Link to="/">Open the schedule</Link>
+              <p className="muted">{t("When guests book, or you book for them, it shows here in the order it happens.")}</p>
+              <Link to="/">{t("Open the schedule")}</Link>
             </EmptyState>
           ) : (
             <div className="bk-lists">
               {asks.length > 0 && (
-                <section aria-label="Needs your answer">
+                <section aria-label={t("Needs your answer")}>
                   <h2 className="bk-group">
-                    Needs your answer <Badge tone="amber">{asks.length}</Badge>
+                    {t("Needs your answer")} <Badge tone="amber">{asks.length}</Badge>
                   </h2>
                   <ul className="bk-rows">
                     {asks.map((b) => (
@@ -228,26 +228,26 @@ export function Today() {
                 </section>
               )}
               {open.length > 0 && (
-                <section aria-label="Needs closing">
-                  <h2 className="bk-group">Did they come? <Badge tone="amber">{open.length}</Badge></h2>
+                <section aria-label={t("Needs closing")}>
+                  <h2 className="bk-group">{t("Did they come?")} <Badge tone="amber">{open.length}</Badge></h2>
                   <ul className="bk-rows">{rows(open)}</ul>
                 </section>
               )}
               {order.now.length > 0 && (
-                <section aria-label="Under way">
-                  <h2 className="bk-group">Under way</h2>
+                <section aria-label={t("Under way")}>
+                  <h2 className="bk-group">{t("Under way")}</h2>
                   <ul className="bk-rows">{rows(order.now)}</ul>
                 </section>
               )}
               {order.next.length > 0 && (
-                <section aria-label="Coming up">
-                  <h2 className="bk-group">Coming up</h2>
+                <section aria-label={t("Coming up")}>
+                  <h2 className="bk-group">{t("Coming up")}</h2>
                   <ul className="bk-rows">{rows(order.next, order.next[0]?.key)}</ul>
                 </section>
               )}
               {closed.length > 0 && (
-                <section aria-label="Done">
-                  <h2 className="bk-group">Done</h2>
+                <section aria-label={t("Done")}>
+                  <h2 className="bk-group">{t("Done")}</h2>
                   <ul className="bk-rows">{rows(closed)}</ul>
                 </section>
               )}

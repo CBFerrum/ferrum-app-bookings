@@ -5,7 +5,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { errorMessage } from "@ferrum/client";
+import { errorMessage, t } from "@ferrum/client";
 import { Alert, Button, Spinner } from "@ferrum/kit";
 import type { Bk } from "./board";
 import { act, type FreeSlot, findSlots } from "./data";
@@ -56,17 +56,17 @@ export function Reschedule({ booking, zone, hour12, onClose, onDone }: { booking
   return (
     <div className="bk-move">
       <div className="bk-strip-head">
-        <h3>Choose a new time</h3>
+        <h3>{t("Choose a new time")}</h3>
         <div className="row">
-          <button type="button" className="icon-btn icon-btn-sm" aria-label="Earlier week" disabled={from <= today} onClick={() => { setFrom(addDays(from, -7) < today ? today : addDays(from, -7)); setSlot(null); }}>
+          <button type="button" className="icon-btn icon-btn-sm" aria-label={t("Earlier week")} disabled={from <= today} onClick={() => { setFrom(addDays(from, -7) < today ? today : addDays(from, -7)); setSlot(null); }}>
             <ChevronLeft size={16} />
           </button>
-          <button type="button" className="icon-btn icon-btn-sm" aria-label="Later week" onClick={() => { setFrom(addDays(from, 7)); setSlot(null); }}>
+          <button type="button" className="icon-btn icon-btn-sm" aria-label={t("Later week")} onClick={() => { setFrom(addDays(from, 7)); setSlot(null); }}>
             <ChevronRight size={16} />
           </button>
         </div>
       </div>
-      <div className="bk-strip" role="group" aria-label="Days">
+      <div className="bk-strip" role="group" aria-label={t("Days")}>
         {days.map((d) => (
           <button key={d} type="button" className="bk-strip-day" aria-pressed={d === day} data-free={free.has(d) || undefined} disabled={!free.has(d)} onClick={() => { setDay(d); setSlot(null); }}>
             <span>{dayText(d, { weekday: "short" })}</span>
@@ -76,7 +76,7 @@ export function Reschedule({ booking, zone, hour12, onClose, onDone }: { booking
       </div>
       {week.isLoading ? (
         <div className="bk-center">
-          <Spinner label="Looking for free times" />
+          <Spinner label={t("Looking for free times")} />
         </div>
       ) : week.error ? (
         <Alert tone="error">{errorMessage(week.error)}</Alert>
@@ -96,7 +96,7 @@ export function Reschedule({ booking, zone, hour12, onClose, onDone }: { booking
       {slot && slot.staff.length > 1 && (
         <div className="field">
           <label className="field-label" htmlFor="bk-person">
-            With
+            {t("With")}
           </label>
           <select id="bk-person" className="select" value={person} onChange={(e) => setPerson(e.target.value)}>
             {slot.staff.map((s) => (
@@ -109,7 +109,7 @@ export function Reschedule({ booking, zone, hour12, onClose, onDone }: { booking
       )}
       {error && <Alert tone="error">{error}</Alert>}
       <div className="bk-sheet-actions">
-        <Button onClick={onClose}>Keep it where it is</Button>
+        <Button onClick={onClose}>{t("Keep it where it is")}</Button>
         <Button variant="primary" loading={busy} disabled={!slot} onClick={() => void move()}>
           {slot ? `Move to ${clockText(Date.parse(slot.start), zone, hour12)}` : "Move"}
         </Button>

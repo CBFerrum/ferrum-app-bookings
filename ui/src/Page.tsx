@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
-import { api, bootstrap, errorMessage, routeBase } from "@ferrum/client";
+import { api, bootstrap, errorMessage, routeBase, t } from "@ferrum/client";
 import { Badge, Button, EmptyState, ErrorState, PageLoading, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { type Doc, type EntityMeta, useEntityMeta, useRecord } from "@ferrum/records";
 import { rows } from "./data";
@@ -81,12 +81,12 @@ function Reminders({ doc, save, writable }: { doc: Doc; save: Save; writable: bo
   return (
     <div className="bk-setting bk-reminders">
       <div className="bk-setting-text">
-        <span id="bk-reminders-label">Reminders</span>
-        <p className="faint">Each confirmed booking reminds the guest by email. One already due when the booking is made is skipped.</p>
+        <span id="bk-reminders-label">{t("Reminders")}</span>
+        <p className="faint">{t("Each confirmed booking reminds the guest by email. One already due when the booking is made is skipped.")}</p>
       </div>
       <div>
         <ul className="bk-chips" aria-labelledby="bk-reminders-label">
-          {kept.length === 0 && <li className="muted">None</li>}
+          {kept.length === 0 && <li className="muted">{t("None")}</li>}
           {kept.map((m) => (
             <li key={m} className="bk-chip">
               {before(m)}
@@ -101,11 +101,11 @@ function Reminders({ doc, save, writable }: { doc: Doc; save: Save; writable: bo
         {writable && free.length > 0 && (
           <select
             className="select bk-add"
-            aria-label="Add a reminder"
+            aria-label={t("Add a reminder")}
             value=""
             onChange={(e) => e.target.value && void write([...kept, Number(e.target.value)])}
           >
-            <option value="">Add a reminder…</option>
+            <option value="">{t("Add a reminder…")}</option>
             {free.map((m) => (
               <option key={m} value={m}>
                 {before(m)}
@@ -132,26 +132,26 @@ function Address({ doc, services }: { doc: Doc; services: { id: string; service_
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
       })
-      .catch(() => toast("Select the address and copy it", "error"));
+      .catch(() => toast(t("Select the address and copy it"), "error"));
   return (
     <div className="bk-address">
       <label className="field-label" htmlFor="bk-url">
-        The address to share
+        {t("The address to share")}
       </label>
       <div className="secret">
         <input id="bk-url" className="input" readOnly value={url} onFocus={(e) => e.currentTarget.select()} />
         <Button onClick={() => void copy()}>{copied ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />} {copied ? "Copied" : "Copy"}</Button>
         <a className="btn btn-default btn-md" href={url} target="_blank" rel="noopener noreferrer">
-          <ExternalLink size={15} aria-hidden="true" /> Open
+          <ExternalLink size={15} aria-hidden="true" /> {t("Open")}
         </a>
       </div>
       {services.length > 1 && (
         <div className="field">
           <label className="field-label" htmlFor="bk-url-one">
-            Send guests straight to
+            {t("Send guests straight to")}
           </label>
           <select id="bk-url-one" className="select" value={one} onChange={(e) => setOne(e.target.value)}>
-            <option value="">Every service</option>
+            <option value="">{t("Every service")}</option>
             {services.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.service_name}
@@ -182,59 +182,59 @@ function Settings({ meta, id }: { meta: EntityMeta; id: string }) {
       <section className="card" aria-labelledby="bk-online">
         <div className="card-body stack">
           <div className="bk-online">
-            <h2 id="bk-online">Online booking</h2>
+            <h2 id="bk-online">{t("Online booking")}</h2>
             <Badge tone={open ? "green" : "neutral"}>{open ? "Open to guests" : "Closed"}</Badge>
           </div>
           <Switch
             id="bk-public"
-            label="Guests can book online"
+            label={t("Guests can book online")}
             hint={open ? "Anyone with the address can choose a time, without signing in." : "While it is off, the address shows that booking is closed. Your calendar feeds keep working."}
             checked={open}
             disabled={!writable}
             onChange={(v) => void save("public_page", v)}
           />
           {open && <Address doc={doc} services={active} />}
-          {open && active.length === 0 && <p className="muted">No service can be booked yet. <Link to="/e/BookingService">Set up a service</Link> and the people who give it.</p>}
+          {open && active.length === 0 && <p className="muted">{t("No service can be booked yet.")} <Link to="/e/BookingService">{t("Set up a service")}</Link> {t("and the people who give it.")}</p>}
         </div>
       </section>
 
       <section className="card" aria-labelledby="bk-rules">
         <div className="card-body stack">
-          <h2 id="bk-rules">How guests book</h2>
-          <Switch id="bk-approve" label="Confirm online bookings myself" hint="The time is held, and the booking waits as pending until someone confirms it." checked={doc.approval_required === true} disabled={!writable} onChange={(v) => void save("approval_required", v)} />
-          <Count id="bk-notice" label="Earliest a guest can book" hint="Bookings and moves must start at least this long from now." value={num(doc.min_notice_minutes, 120)} min={0} max={525600} unit="minutes ahead" disabled={!writable} onSave={(n) => void save("min_notice_minutes", n)} />
-          <Count id="bk-ahead" label="Furthest ahead" hint="How many days ahead guests see times." value={num(doc.max_advance_days, 60)} min={1} max={730} unit="days" disabled={!writable} onSave={(n) => void save("max_advance_days", n)} />
-          <Count id="bk-grid" label="A start time every" hint="A service can have its own." value={num(doc.slot_interval_minutes, 30)} min={5} max={1440} unit="minutes" disabled={!writable} onSave={(n) => void save("slot_interval_minutes", n)} />
+          <h2 id="bk-rules">{t("How guests book")}</h2>
+          <Switch id="bk-approve" label={t("Confirm online bookings myself")} hint={t("The time is held, and the booking waits as pending until someone confirms it.")} checked={doc.approval_required === true} disabled={!writable} onChange={(v) => void save("approval_required", v)} />
+          <Count id="bk-notice" label={t("Earliest a guest can book")} hint={t("Bookings and moves must start at least this long from now.")} value={num(doc.min_notice_minutes, 120)} min={0} max={525600} unit="minutes ahead" disabled={!writable} onSave={(n) => void save("min_notice_minutes", n)} />
+          <Count id="bk-ahead" label={t("Furthest ahead")} hint={t("How many days ahead guests see times.")} value={num(doc.max_advance_days, 60)} min={1} max={730} unit="days" disabled={!writable} onSave={(n) => void save("max_advance_days", n)} />
+          <Count id="bk-grid" label={t("A start time every")} hint={t("A service can have its own.")} value={num(doc.slot_interval_minutes, 30)} min={5} max={1440} unit="minutes" disabled={!writable} onSave={(n) => void save("slot_interval_minutes", n)} />
         </div>
       </section>
 
       <section className="card" aria-labelledby="bk-changes">
         <div className="card-body stack">
-          <h2 id="bk-changes">When guests change their minds</h2>
-          <Count id="bk-cancel" label="Guests can cancel until" hint="0 means until it starts." value={num(doc.cancellation_window_hours, 24)} min={0} max={8760} unit="hours before" disabled={!writable} onSave={(n) => void save("cancellation_window_hours", n)} />
-          <Count id="bk-move" label="Guests can move it until" hint="0 means until it starts." value={num(doc.reschedule_window_hours, 24)} min={0} max={8760} unit="hours before" disabled={!writable} onSave={(n) => void save("reschedule_window_hours", n)} />
+          <h2 id="bk-changes">{t("When guests change their minds")}</h2>
+          <Count id="bk-cancel" label={t("Guests can cancel until")} hint={t("0 means until it starts.")} value={num(doc.cancellation_window_hours, 24)} min={0} max={8760} unit="hours before" disabled={!writable} onSave={(n) => void save("cancellation_window_hours", n)} />
+          <Count id="bk-move" label={t("Guests can move it until")} hint={t("0 means until it starts.")} value={num(doc.reschedule_window_hours, 24)} min={0} max={8760} unit="hours before" disabled={!writable} onSave={(n) => void save("reschedule_window_hours", n)} />
           <Reminders doc={doc} save={save} writable={writable} />
         </div>
       </section>
 
       <section className="card" aria-labelledby="bk-more">
         <div className="card-body">
-          <h2 id="bk-more">Set up</h2>
+          <h2 id="bk-more">{t("Set up")}</h2>
           <ul className="bk-links">
             <li>
-              <Link to="/e/BookingService">Services</Link> <span className="faint">length, price, buffers, who gives them, what to ask</span>
+              <Link to="/e/BookingService">{t("Services")}</Link> <span className="faint">{t("length, price, buffers, who gives them, what to ask")}</span>
             </li>
             <li>
-              <Link to="/e/BookingStaff">Staff</Link> <span className="faint">the hours they work, in their own time zone</span>
+              <Link to="/e/BookingStaff">{t("Staff")}</Link> <span className="faint">{t("the hours they work, in their own time zone")}</span>
             </li>
             <li>
-              <Link to="/e/StaffTimeOff">Time off</Link> <span className="faint">holidays and days away</span>
+              <Link to="/e/StaffTimeOff">{t("Time off")}</Link> <span className="faint">{t("holidays and days away")}</span>
             </li>
             <li>
-              <Link to="/e/BookingResource">Rooms and equipment</Link> <span className="faint">what services share</span>
+              <Link to="/e/BookingResource">{t("Rooms and equipment")}</Link> <span className="faint">{t("what services share")}</span>
             </li>
             <li>
-              <Link to={`/e/BookingSettings/${id}`}>More settings</Link> <span className="faint">the server address, the company invoiced, the page that links point to</span>
+              <Link to={`/e/BookingSettings/${id}`}>{t("More settings")}</Link> <span className="faint">{t("the server address, the company invoiced, the page that links point to")}</span>
             </li>
           </ul>
         </div>
@@ -268,7 +268,7 @@ export function BookingPage() {
       <header className="bk-head">
         <div>
           <Tabs />
-          <p className="page-sub">Whether guests can book online, and how.</p>
+          <p className="page-sub">{t("Whether guests can book online, and how.")}</p>
         </div>
       </header>
       {meta.error || found.error ? (
@@ -276,11 +276,11 @@ export function BookingPage() {
       ) : !meta.data || !found.data ? (
         <PageLoading />
       ) : !id ? (
-        <EmptyState title="The booking page is not set up yet" icon="calendar">
-          <p className="muted">Start with the defaults: guests cannot book online until you open the page.</p>
+        <EmptyState title={t("The booking page is not set up yet")} icon="calendar">
+          <p className="muted">{t("Start with the defaults: guests cannot book online until you open the page.")}</p>
           {meta.data.permissions.create !== "none" && (
             <Button variant="primary" loading={starting} onClick={() => void start()}>
-              Set up the booking page
+              {t("Set up the booking page")}
             </Button>
           )}
         </EmptyState>

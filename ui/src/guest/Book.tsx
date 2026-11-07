@@ -9,7 +9,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Banknote, ChevronLeft, Clock, Globe, MapPin, Users } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { ApiError, bootstrap } from "@ferrum/client";
+import { ApiError, bootstrap, t } from "@ferrum/client";
 import { Alert, Button, EmptyState, Field, useShellTitle } from "@ferrum/kit";
 import { dayOf, isDate, whenText, zoneList, zoneText } from "../zone";
 import { type Catalog, check, bookBody, durationText, type Form, hasErrors, isTaken, noErrors, priceText, type Question, type Service, serverErrors, whereText } from "./booking";
@@ -41,7 +41,7 @@ function Facts({ service, currency }: { service: Service; currency: string | nul
       </li>
       {service.seats > 1 && (
         <li>
-          <Users size={15} aria-hidden="true" /> Group class · up to {service.seats} seats
+          <Users size={15} aria-hidden="true" /> {t("Group class · up to {seats} seats", { seats: service.seats })}
         </li>
       )}
     </ul>
@@ -53,7 +53,7 @@ function ServiceList({ catalog }: { catalog: Catalog }) {
   return (
     <div className="gb-services">
       <h1 className="gb-h1">{name ? `Book with ${name}` : "Book an appointment"}</h1>
-      <p className="muted">What would you like to book?</p>
+      <p className="muted">{t("What would you like to book?")}</p>
       <ul className="gb-service-list">
         {catalog.services.map((s) => (
           <li key={s.id}>
@@ -61,7 +61,7 @@ function ServiceList({ catalog }: { catalog: Catalog }) {
               <strong>{s.name}</strong>
               <Facts service={s} currency={catalog.currency} />
               {s.description && <p className="gb-clamp">{s.description}</p>}
-              {s.staff.length > 1 && <span className="faint">With {s.staff.map((p) => p.name).join(", ")}</span>}
+              {s.staff.length > 1 && <span className="faint">{t("With")} {s.staff.map((p) => p.name).join(", ")}</span>}
             </Link>
           </li>
         ))}
@@ -76,7 +76,7 @@ function People({ service, value, onChange }: { service: Service; value: string 
   const options = [{ id: null, name: "Anyone free" }, ...service.staff];
   return (
     <fieldset className="gb-people">
-      <legend className="field-label">Who would you like to see?</legend>
+      <legend className="field-label">{t("Who would you like to see?")}</legend>
       <div className="gb-chips">
         {options.map((p) => (
           <label key={p.id ?? "any"} className="gb-chip" data-checked={value === p.id || undefined}>
@@ -94,14 +94,14 @@ function Seats({ max, value, onChange }: { max: number; value: number; onChange:
   return (
     <div className="gb-seats">
       <span className="field-label" id="gb-seats-label">
-        Seats
+        {t("Seats")}
       </span>
       <div className="gb-stepper" role="group" aria-labelledby="gb-seats-label">
-        <button type="button" className="icon-btn" aria-label="One seat fewer" disabled={value <= 1} onClick={() => onChange(value - 1)}>
+        <button type="button" className="icon-btn" aria-label={t("One seat fewer")} disabled={value <= 1} onClick={() => onChange(value - 1)}>
           −
         </button>
         <output aria-live="polite">{value}</output>
-        <button type="button" className="icon-btn" aria-label="One seat more" disabled={value >= max} onClick={() => onChange(value + 1)}>
+        <button type="button" className="icon-btn" aria-label={t("One seat more")} disabled={value >= max} onClick={() => onChange(value + 1)}>
           +
         </button>
       </div>
@@ -116,7 +116,7 @@ function ZoneSelect({ zone, workspace, onChange }: { zone: string; workspace: st
   return (
     <label className="gb-zone" title={zoneText(zone)}>
       <Globe size={14} aria-hidden="true" />
-      <span className="sr-only">Time zone</span>
+      <span className="sr-only">{t("Time zone")}</span>
       <select className="select" value={zone} onChange={(e) => onChange(e.target.value)}>
         {zones.map((z) => (
           <option key={z} value={z}>
@@ -157,12 +157,12 @@ function Booker({ tenant }: { tenant: string }) {
   };
 
   if (cat.error) return <Frame><Closed error={cat.error} what="page" onRetry={() => void cat.refetch()} /></Frame>;
-  if (!catalog) return <Frame><Loading label="Loading what you can book" /></Frame>;
+  if (!catalog) return <Frame><Loading label={t("Loading what you can book")} /></Frame>;
   if (!catalog.services.length) {
     return (
       <Frame>
-        <EmptyState title="Nothing to book yet" icon="calendar">
-          <p className="muted">There are no appointments open for booking at the moment. Please check back soon.</p>
+        <EmptyState title={t("Nothing to book yet")} icon="calendar">
+          <p className="muted">{t("There are no appointments open for booking at the moment. Please check back soon.")}</p>
         </EmptyState>
       </Frame>
     );
@@ -178,10 +178,10 @@ function Booker({ tenant }: { tenant: string }) {
   return (
     <Frame wide>
       <div className="gb-booker" data-step={at ? "details" : "times"}>
-        <aside className="gb-panel" aria-label="About this booking">
+        <aside className="gb-panel" aria-label={t("About this booking")}>
           {catalog.services.length > 1 && (
             <Link className="gb-back" to={{ search: "" }}>
-              <ChevronLeft size={15} aria-hidden="true" /> All services
+              <ChevronLeft size={15} aria-hidden="true" /> {t("All services")}
             </Link>
           )}
           <h1 className="gb-h1">{service.name}</h1>
@@ -192,7 +192,7 @@ function Booker({ tenant }: { tenant: string }) {
               <strong>{whenText(Date.parse(at), zone, hour12)}</strong>
               <span className="faint">{zoneText(zone)}</span>
               <button type="button" className="link-btn" onClick={() => go({ at: null, wait: null })}>
-                Choose another time
+                {t("Choose another time")}
               </button>
             </div>
           ) : (
@@ -208,7 +208,7 @@ function Booker({ tenant }: { tenant: string }) {
           ) : (
             <>
               <div className="gb-stage-head">
-                <h2 className="gb-h2">Choose a time</h2>
+                <h2 className="gb-h2">{t("Choose a time")}</h2>
                 <div className="gb-stage-tools">
                   <ZoneSelect zone={zone} workspace={catalog.time_zone} onChange={(z) => { setZone(z); go({ day: null, at: null }); }} />
                   <ClockSwitch hour12={hour12} onChange={setHour12} />
@@ -266,7 +266,7 @@ function Answer({ q, value, error, onChange }: { q: Question; value: string; err
         <textarea id={id} className="textarea" rows={3} maxLength={2000} value={value} onChange={(e) => onChange(e.target.value)} {...invalid} />
       ) : q.type === "Choice" ? (
         <select id={id} className="select" value={value} onChange={(e) => onChange(e.target.value)} {...invalid}>
-          <option value="">Choose…</option>
+          <option value="">{t("Choose…")}</option>
           {q.options.map((o) => (
             <option key={o}>{o}</option>
           ))}
@@ -348,8 +348,8 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
 
   if (received) {
     return (
-      <EmptyState title="Thank you" icon="check">
-        <p className="muted">We have your request.</p>
+      <EmptyState title={t("Thank you")} icon="check">
+        <p className="muted">{t("We have your request.")}</p>
       </EmptyState>
     );
   }
@@ -360,10 +360,10 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
       <h2 className="gb-h2" ref={heading} tabIndex={-1}>
         {waitlist ? "Join the waitlist" : "Your details"}
       </h2>
-      {waitlist && !gone && <Alert tone="info">This class is full. Join the waitlist and we will email you if a seat becomes free.</Alert>}
+      {waitlist && !gone && <Alert tone="info">{t("This class is full. Join the waitlist and we will email you if a seat becomes free.")}</Alert>}
       {gone && (
-        <Alert tone="warning" action={<Button size="sm" onClick={onAnother}>Choose another time</Button>}>
-          {taken ? "Someone has just taken that time." : "That time is no longer free."} Please choose another.
+        <Alert tone="warning" action={<Button size="sm" onClick={onAnother}>{t("Choose another time")}</Button>}>
+          {taken ? "Someone has just taken that time." : "That time is no longer free."} {t("Please choose another.")}
         </Alert>
       )}
       {errors.general.length > 0 && (
@@ -374,26 +374,26 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
         </Alert>
       )}
       <div className="gb-form-grid">
-        <Field label="Your name" htmlFor="gb-name" required error={errors.name}>
+        <Field label={t("Your name")} htmlFor="gb-name" required error={errors.name}>
           <input id="gb-name" className="input" autoComplete="name" maxLength={200} value={values.name} onChange={(e) => set({ name: e.target.value })} {...invalid("name")} />
         </Field>
-        <Field label="Email" htmlFor="gb-email" required error={errors.email} hint="Your confirmation and the link to change your booking go here.">
+        <Field label={t("Email")} htmlFor="gb-email" required error={errors.email} hint={t("Your confirmation and the link to change your booking go here.")}>
           <input id="gb-email" className="input" type="email" inputMode="email" autoComplete="email" maxLength={254} value={values.email} onChange={(e) => set({ email: e.target.value })} {...invalid("email")} />
         </Field>
-        <Field label="Phone (optional)" htmlFor="gb-phone" error={errors.phone}>
+        <Field label={t("Phone (optional)")} htmlFor="gb-phone" error={errors.phone}>
           <input id="gb-phone" className="input" type="tel" inputMode="tel" autoComplete="tel" maxLength={40} value={values.phone} onChange={(e) => set({ phone: e.target.value })} {...invalid("phone")} />
         </Field>
       </div>
       {service.questions.map((q) => (
         <Answer key={q.question} q={q} value={values.answers[q.question] ?? ""} error={errors.answers[q.question]} onChange={(v) => set({ answers: { ...values.answers, [q.question]: v } })} />
       ))}
-      <Field label="Anything we should know? (optional)" htmlFor="gb-notes" error={errors.notes}>
+      <Field label={t("Anything we should know? (optional)")} htmlFor="gb-notes" error={errors.notes}>
         <textarea id="gb-notes" className="textarea" rows={3} maxLength={2000} value={values.notes} onChange={(e) => set({ notes: e.target.value })} {...invalid("notes")} />
       </Field>
       {/* A field people never see: whatever fills it is a program. */}
       <div className="gb-trap" aria-hidden="true">
         <label>
-          Website
+          {t("Website")}
           <input name="website" tabIndex={-1} autoComplete="off" value={trap} onChange={(e) => setTrap(e.target.value)} />
         </label>
       </div>
