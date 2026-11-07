@@ -86,7 +86,7 @@ export function MonthGrid({ month, first, open, selected, today, busy, canPrev, 
               {week.map((d) => {
                 if (monthOf(d) !== month) return <td key={d} aria-hidden="true" />;
                 const times = open.get(d)?.length ?? 0;
-                const label = `${dayText(d, { weekday: "long", day: "numeric", month: "long" })}, ${times ? `${times} ${times === 1 ? "time" : "times"} free` : "nothing free"}`;
+                const label = `${dayText(d, { weekday: "long", day: "numeric", month: "long" })}, ${times ? (times === 1 ? t("1 time free") : t("{times} times free", { times })) : "nothing free"}`;
                 return (
                   <td key={d} role="gridcell" aria-selected={d === selected}>
                     <button

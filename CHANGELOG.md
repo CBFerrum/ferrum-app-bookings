@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.16
+
+Rebuilt with Ferrum-Frontend 155518c: the sentences its pages built in code (counts, dates, what a toast or a screen reader says) go through t() too, as whole sentences where code chose a word, and carry built-in Arabic and Hindi (339 words each in ui/src/locales, translated by the model and to be reviewed by native speakers). The later dates of a guest's series are recorded as booked from the page, as the first is.
+
 ## 0.4.15
 
 A guest books a series from the booking page: every week, 2 weeks, 4 weeks or month, as many times in all as the service lets them (BookingService.guest_repeat_max, 0 by default), each at the same local time. It is booked whole or not at all, and a date that is taken is named; the confirmation lists the later dates. Only free services repeat for guests: a paid one is booked one at a time, its deposit being the first booking's. The guest page's new words are in Arabic and Hindi.

@@ -25,9 +25,9 @@ export const refreshBookings = (qc: ReturnType<typeof useQueryClient>) => {
 
 const span = (ms: number) => {
   const m = Math.max(1, Math.round(ms / 60_000));
-  if (m < 90) return `${m} minute${m === 1 ? "" : "s"}`;
-  if (m < 36 * 60) return `${Math.round(m / 60)} hours`;
-  return `${Math.round(m / 1440)} days`;
+  if (m < 90) return (m === 1 ? t("1 minute") : t("{m} minutes", { m }));
+  if (m < 36 * 60) return t("{n} hours", { n: Math.round(m / 60) });
+  return t("{n} days", { n: Math.round(m / 1440) });
 };
 
 const HISTORY: Record<string, string> = {
@@ -71,7 +71,7 @@ function Cancel({ b, onClose, onDone }: { b: Full; onClose: () => void; onDone: 
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const told = b.guest_email ? `${b.guest_name ?? "The guest"} is told by email at ${b.guest_email}.` : "There is no email address for the guest, so they are not told.";
+  const told = b.guest_email ? t("{value} is told by email at {guest_email}.", { value: b.guest_name ?? "The guest", guest_email: b.guest_email }) : "There is no email address for the guest, so they are not told.";
   const go = async () => {
     setBusy(true);
     setError(null);

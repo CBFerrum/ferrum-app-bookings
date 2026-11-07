@@ -243,7 +243,7 @@ export function Schedule() {
   };
   const count = (lane: Lane) => {
     const n = placed.filter((b) => laneOf(b) === lane.id).length;
-    return n === 0 ? "Nothing booked" : `${n} booked`;
+    return n === 0 ? "Nothing booked" : tr("{n} booked", { n });
   };
 
   const heading = view === "week" ? `${dayText(days[0], { day: "numeric", month: "short" })} – ${dayText(days[6], { day: "numeric", month: "short", year: "numeric" })}` : dayText(date, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -311,7 +311,7 @@ export function Schedule() {
         <div>
           <Tabs />
           <p className="page-sub" aria-live="polite">
-            {range.data ? `${placed.length} ${placed.length === 1 ? "booking" : "bookings"}${pendingCount ? ` · ${pendingCount} to confirm` : ""}` : " "}
+            {range.data ? `${placed.length} ${placed.length === 1 ? "booking" : "bookings"}${pendingCount ? tr(" · {pendingCount} to confirm", { pendingCount }) : ""}` : " "}
           </p>
         </div>
         <div className="row">
@@ -362,7 +362,7 @@ export function Schedule() {
             </div>
           )}
           {meta.data && by === "staff" && view === "day" && meta.data.staff.length > 1 && (
-            <Pop summary={chosen.length ? `${chosen.length} of ${everyone.length} people` : "Everyone"}>
+            <Pop summary={chosen.length ? tr("{length} of {length2} people", { length: chosen.length, length2: everyone.length }) : "Everyone"}>
               <fieldset className="bk-checks">
                 <legend className="sr-only">{tr("People to show")}</legend>
                 {everyone.map((p) => (

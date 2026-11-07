@@ -171,7 +171,7 @@ export function Board(p: BoardProps) {
         e.preventDefault();
         e.stopPropagation();
         refocus.current = drag.key;
-        setSaid(`${block.title} stays where it was.`);
+        setSaid(tr("{title} stays where it was.", { title: block.title }));
         return setDrag(null);
       } else return;
       e.preventDefault();
@@ -182,7 +182,7 @@ export function Board(p: BoardProps) {
       start = Math.min(Math.max(start, lane.start), lane.end - (block.end - block.start));
       const hint = hintFor(block, lane, start);
       setDrag({ ...drag, lane: lane.id, start, hint });
-      setSaid(`${block.title}: ${clockText(start, zone, hour12)} to ${clockText(start + (block.end - block.start), zone, hour12)}, ${lane.label}. ${dropText(hint)} Enter to move it here, Escape to leave it.`);
+      setSaid(tr("{title}: {start} to {value}, {label}. {hint} Enter to move it here, Escape to leave it.", { title: block.title, start: clockText(start, zone, hour12), value: clockText(start + (block.end - block.start), zone, hour12), label: lane.label, hint: dropText(hint) }));
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
@@ -192,7 +192,7 @@ export function Board(p: BoardProps) {
   const pickUp = (b: Block, lane: string) => {
     const d: Dragging = { key: b.key, lane, start: b.start, source: "keyboard", hint: { kind: "ok" } };
     setDrag(d);
-    setSaid(`Moving ${b.title}. Arrow keys move it${p.acrossLanes ? " between columns and" : ""} by ${STEP} minutes, Enter to move it here, Escape to leave it.`);
+    setSaid((p.acrossLanes ? tr("Moving {title}. Arrow keys move it between columns and by {step} minutes, Enter to move it here, Escape to leave it.", { title: b.title, step: STEP }) : tr("Moving {title}. Arrow keys move it by {step} minutes, Enter to move it here, Escape to leave it.", { title: b.title, step: STEP })));
   };
 
   const at = (t: number, lane: Lane) => (minutesIn(lane, t) - win.from) * PX;
@@ -255,7 +255,7 @@ export function Board(p: BoardProps) {
                   const minutes = (b.end - b.start) / 60_000;
                   const h = Math.max(minutes * PX, LEAST * PX * 0.7);
                   const first = b.bookings[0];
-                  const label = `${range(b)}, ${b.title}${b.kind === "session" ? `, ${b.seats} of ${b.capacity} seats` : first.service_name ? `, ${first.service_name}` : ""}, ${b.status}`;
+                  const label = `${range(b)}, ${b.title}${b.kind === "session" ? tr(", {seats} of {capacity} seats", { seats: b.seats, capacity: b.capacity }) : first.service_name ? `, ${first.service_name}` : ""}, ${b.status}`;
                   return (
                     <div key={b.key} className="bk-slot" style={{ top: at(b.from, lane), left: `calc(${(col / cols) * 100}% + 2px)`, width: `calc(${100 / cols}% - 4px)` }} data-lifted={lifted || undefined}>
                       {before > 0 && <div className="bk-buffer" style={{ height: before * PX }} aria-hidden="true" />}

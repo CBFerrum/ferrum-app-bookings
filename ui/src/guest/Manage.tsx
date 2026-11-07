@@ -34,11 +34,11 @@ const HEAD: Record<GuestBooking["status"], { title: string; icon: ReactNode; ton
 function AddToCalendar({ tenant, token, b, hour12 }: { tenant: string; token: string; b: GuestBooking; hour12: boolean }) {
   const start = Date.parse(b.start_time);
   const links = calendarLinks({
-    title: `${b.service.name}${b.staff.name ? ` with ${b.staff.name}` : ""}`,
+    title: `${b.service.name}${b.staff.name ? t(" with {name}", { name: b.staff.name }) : ""}`,
     start,
     end: Date.parse(b.end_time),
     where: b.location,
-    details: `${whenText(start, b.time_zone, hour12)}${b.number ? `\nBooking ${b.number}` : ""}`,
+    details: `${whenText(start, b.time_zone, hour12)}${b.number ? t("\nBooking {number}", { number: b.number }) : ""}`,
   });
   return (
     <Pop
