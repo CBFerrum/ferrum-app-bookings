@@ -9,7 +9,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Banknote, ChevronLeft, Clock, Globe, MapPin, Users } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
-import { ApiError, bootstrap, t } from "@ferrum/client";
+import { ApiError, bootstrap, t, isolate } from "@ferrum/client";
 import { Alert, Button, EmptyState, Field, useShellTitle } from "@ferrum/kit";
 import { dayOf, isDate, whenText, zoneList, zoneText } from "../zone";
 import { type Catalog, check, bookBody, durationText, type Form, hasErrors, isTaken, noErrors, priceText, type Question, type Service, serverErrors, whereText } from "./booking";
@@ -30,14 +30,14 @@ function Facts({ service, currency }: { service: Service; currency: string | nul
   return (
     <ul className="gb-facts">
       <li>
-        <Clock size={15} aria-hidden="true" /> {durationText(service.duration_minutes)}
+        <Clock size={15} aria-hidden="true" /> {isolate(durationText(service.duration_minutes))}
       </li>
       <li>
-        <MapPin size={15} aria-hidden="true" /> {whereText(service.location_type, service.location)}
+        <MapPin size={15} aria-hidden="true" /> {isolate(whereText(service.location_type, service.location))}
       </li>
       <li>
-        <Banknote size={15} aria-hidden="true" /> {priceText(service.price, currency)}
-        {service.seats > 1 && Number(service.price) > 0 ? " a seat" : ""}
+        <Banknote size={15} aria-hidden="true" /> {isolate(priceText(service.price, currency))}
+        {service.seats > 1 && Number(service.price) > 0 ? t(" a seat") : ""}
       </li>
       {service.seats > 1 && (
         <li>
@@ -52,16 +52,16 @@ function ServiceList({ catalog }: { catalog: Catalog }) {
   const name = bootstrap()?.workspace.name;
   return (
     <div className="gb-services">
-      <h1 className="gb-h1">{name ? `Book with ${name}` : "Book an appointment"}</h1>
+      <h1 className="gb-h1">{name ? t("Book with {name}", { name }) : t("Book an appointment")}</h1>
       <p className="muted">{t("What would you like to book?")}</p>
       <ul className="gb-service-list">
         {catalog.services.map((s) => (
           <li key={s.id}>
             <Link className="gb-service-card" to={{ search: `?service=${s.id}` }}>
-              <strong>{s.name}</strong>
+              <strong>{isolate(s.name)}</strong>
               <Facts service={s} currency={catalog.currency} />
-              {s.description && <p className="gb-clamp">{s.description}</p>}
-              {s.staff.length > 1 && <span className="faint">{t("With")} {s.staff.map((p) => p.name).join(", ")}</span>}
+              {s.description && <p className="gb-clamp">{isolate(s.description)}</p>}
+              {s.staff.length > 1 && <span className="faint">{t("With")} {isolate(s.staff.map((p) => p.name).join(", "))}</span>}
             </Link>
           </li>
         ))}
@@ -81,7 +81,7 @@ function People({ service, value, onChange }: { service: Service; value: string 
         {options.map((p) => (
           <label key={p.id ?? "any"} className="gb-chip" data-checked={value === p.id || undefined}>
             <input type="radio" name="gb-person" checked={value === p.id} onChange={() => onChange(p.id)} />
-            {p.name}
+            {isolate(p.name)}
           </label>
         ))}
       </div>
@@ -120,7 +120,7 @@ function ZoneSelect({ zone, workspace, onChange }: { zone: string; workspace: st
       <select className="select" value={zone} onChange={(e) => onChange(e.target.value)}>
         {zones.map((z) => (
           <option key={z} value={z}>
-            {z.replace(/_/g, " ")}
+            {isolate(z.replace(/_/g, " "))}
           </option>
         ))}
       </select>
@@ -145,7 +145,7 @@ function Booker({ tenant }: { tenant: string }) {
   const waitlist = sp.get("wait") === "1";
   const today = dayOf(Date.now(), zone);
   const workspaceName = bootstrap()?.workspace.name;
-  useShellTitle(service ? `${service.name}${workspaceName ? ` · ${workspaceName}` : ""}` : workspaceName ? `Book with ${workspaceName}` : "Book an appointment");
+  useShellTitle(service ? `${service.name}${workspaceName ? ` · ${workspaceName}` : ""}` : workspaceName ? t("Book with {workspaceName}", { workspaceName }) : t("Book an appointment"));
 
   const go = (patch: Record<string, string | null>, replace = false) => {
     const next = new URLSearchParams(sp);
@@ -184,13 +184,13 @@ function Booker({ tenant }: { tenant: string }) {
               <ChevronLeft size={15} aria-hidden="true" /> {t("All services")}
             </Link>
           )}
-          <h1 className="gb-h1">{service.name}</h1>
+          <h1 className="gb-h1">{isolate(service.name)}</h1>
           <Facts service={service} currency={catalog.currency} />
-          {service.description && <p className="gb-about">{service.description}</p>}
+          {service.description && <p className="gb-about">{isolate(service.description)}</p>}
           {at ? (
             <div className="gb-when">
-              <strong>{whenText(Date.parse(at), zone, hour12)}</strong>
-              <span className="faint">{zoneText(zone)}</span>
+              <strong>{isolate(whenText(Date.parse(at), zone, hour12))}</strong>
+              <span className="faint">{isolate(zoneText(zone))}</span>
               <button type="button" className="link-btn" onClick={() => go({ at: null, wait: null })}>
                 {t("Choose another time")}
               </button>
@@ -202,7 +202,7 @@ function Booker({ tenant }: { tenant: string }) {
             </>
           )}
         </aside>
-        <section className="gb-stage" aria-label={at ? "Your details" : "Choose a time"}>
+        <section className="gb-stage" aria-label={at ? t("Your details") : t("Choose a time")}>
           {at ? (
             <Details tenant={tenant} service={service} currency={catalog.currency} at={at} staff={staff} seats={seats} zone={zone} waitlist={waitlist} onAnother={() => go({ at: null, wait: null })} />
           ) : (
@@ -238,25 +238,25 @@ function Booker({ tenant }: { tenant: string }) {
 
 function Answer({ q, value, error, onChange }: { q: Question; value: string; error?: string; onChange: (v: string) => void }) {
   const id = `gb-q-${q.question.replace(/\W+/g, "-").toLowerCase()}`;
-  const label = q.required ? q.question : `${q.question} (optional)`;
+  const label = q.required ? q.question : t("{question} (optional)", { question: q.question });
   const invalid = { "aria-invalid": error ? true : undefined, "aria-describedby": error ? `${id}-error` : undefined } as const;
   if (q.type === "Yes/No" || (q.type === "Choice" && q.options.length <= 4)) {
     const options = q.type === "Yes/No" ? ["Yes", "No"] : q.options;
     return (
       <fieldset className={`field gb-radios ${error ? "field-invalid" : ""}`}>
         <legend className="field-label">
-          {label}
+          {isolate(label)}
           {q.required && <span className="req" aria-hidden="true">*</span>}
         </legend>
         <div className="gb-chips">
           {options.map((o) => (
             <label key={o} className="gb-chip" data-checked={value === o || undefined}>
               <input type="radio" name={id} checked={value === o} onChange={() => onChange(o)} {...(error ? { "aria-describedby": `${id}-error` } : {})} />
-              {o}
+              {isolate(o)}
             </label>
           ))}
         </div>
-        {error && <p className="field-error" id={`${id}-error`}>{error}</p>}
+        {error && <p className="field-error" id={`${id}-error`}>{isolate(error)}</p>}
       </fieldset>
     );
   }
@@ -268,7 +268,7 @@ function Answer({ q, value, error, onChange }: { q: Question; value: string; err
         <select id={id} className="select" value={value} onChange={(e) => onChange(e.target.value)} {...invalid}>
           <option value="">{t("Choose…")}</option>
           {q.options.map((o) => (
-            <option key={o}>{o}</option>
+            <option key={o}>{isolate(o)}</option>
           ))}
         </select>
       ) : (
@@ -358,18 +358,18 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
   return (
     <form ref={form} className="gb-form" onSubmit={(e) => void submit(e)} noValidate>
       <h2 className="gb-h2" ref={heading} tabIndex={-1}>
-        {waitlist ? "Join the waitlist" : "Your details"}
+        {waitlist ? t("Join the waitlist") : t("Your details")}
       </h2>
       {waitlist && !gone && <Alert tone="info">{t("This class is full. Join the waitlist and we will email you if a seat becomes free.")}</Alert>}
       {gone && (
         <Alert tone="warning" action={<Button size="sm" onClick={onAnother}>{t("Choose another time")}</Button>}>
-          {taken ? "Someone has just taken that time." : "That time is no longer free."} {t("Please choose another.")}
+          {taken ? t("Someone has just taken that time.") : t("That time is no longer free.")} {t("Please choose another.")}
         </Alert>
       )}
       {errors.general.length > 0 && (
         <Alert tone="error">
           {errors.general.map((m) => (
-            <p key={m}>{m}</p>
+            <p key={m}>{isolate(m)}</p>
           ))}
         </Alert>
       )}
@@ -399,11 +399,11 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
       </div>
       <div className="gb-submit">
         <p className="gb-total">
-          {service.name}
-          {seats > 1 ? ` · ${seats} seats` : ""} · <strong>{priceText(Number(service.price) * seats, currency)}</strong>
+          {isolate(service.name)}
+          {seats > 1 ? t(" · {seats} seats", { seats }) : ""} · <strong>{isolate(priceText(Number(service.price) * seats, currency))}</strong>
         </p>
         <Button type="submit" variant="primary" loading={busy} disabled={gone}>
-          {waitlist ? "Join the waitlist" : "Confirm booking"}
+          {waitlist ? t("Join the waitlist") : t("Confirm booking")}
         </Button>
       </div>
     </form>

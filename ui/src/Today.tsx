@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { errorMessage, t } from "@ferrum/client";
+import { errorMessage, t, isolate } from "@ferrum/client";
 import { Badge, Button, EmptyState, ErrorState, PageLoading, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, useEntityMeta, useMe } from "@ferrum/records";
 import { type Bk, blocks as makeBlocks, type Block, inOrder, nextSteps, tone } from "./board";
@@ -49,34 +49,34 @@ function Row({ block, zone, hour12, now, canWrite, showWho, busy, run, onOpen, o
   return (
     <li className="bk-row" data-live={live || undefined} data-selected={block.bookings.some((x) => x.id === open) || undefined}>
       <time className="bk-row-time">
-        <strong>{clockText(block.start, zone, hour12)}</strong>
-        <span className="faint">{clockText(block.end, zone, hour12)}</span>
+        <strong>{isolate(clockText(block.start, zone, hour12))}</strong>
+        <span className="faint">{isolate(clockText(block.end, zone, hour12))}</span>
       </time>
       <div className="bk-row-main">
         <span className="bk-row-line">
           {block.kind === "booking" ? (
             <button type="button" className="bk-row-title" onClick={() => onOpen(first.id)}>
-              {first.guest_name ?? "Guest"}
+              {first.guest_name ?? t("Guest")}
             </button>
           ) : (
-            <span className="bk-row-title">{block.title}</span>
+            <span className="bk-row-title">{isolate(block.title)}</span>
           )}
           {next && <Badge tone="blue">{t("Next")}</Badge>}
         </span>
         <span className="muted">
-          {block.kind === "booking" ? first.service_name : `${block.seats} of ${block.capacity} seats`}
+          {block.kind === "booking" ? first.service_name : t("{seats} of {capacity} seats", { seats: block.seats, capacity: block.capacity })}
           {showWho && first.staff_name ? ` · ${first.staff_name}` : ""}
-          {(first.seats ?? 1) > 1 && block.kind === "booking" ? ` · ${first.seats} seats` : ""}
+          {(first.seats ?? 1) > 1 && block.kind === "booking" ? t(" · {seats} seats", { seats: String(first.seats) }) : ""}
         </span>
         {block.kind === "session" && (
           <ul className="bk-seats">
             {block.bookings.map((x) => (
               <li key={x.id}>
                 <button type="button" className="bk-row-title" onClick={() => onOpen(x.id)}>
-                  {x.guest_name}
+                  {isolate(x.guest_name ?? "")}
                   {(x.seats ?? 1) > 1 ? ` · ${x.seats}` : ""}
                 </button>
-                <Badge tone={tone(x.status)}>{x.status}</Badge>
+                <Badge tone={tone(x.status)}>{isolate(x.status)}</Badge>
                 <Quick b={x} now={now} canWrite={canWrite} busy={busy} run={run} />
               </li>
             ))}
@@ -85,7 +85,7 @@ function Row({ block, zone, hour12, now, canWrite, showWho, busy, run, onOpen, o
       </div>
       {block.kind === "booking" && (
         <>
-          <Badge tone={tone(first.status)}>{first.status}</Badge>
+          <Badge tone={tone(first.status)}>{isolate(first.status)}</Badge>
           <Quick b={first} now={now} canWrite={canWrite} busy={busy} run={run} />
         </>
       )}
@@ -94,7 +94,7 @@ function Row({ block, zone, hour12, now, canWrite, showWho, busy, run, onOpen, o
 }
 
 export function Today() {
-  useShellTitle("Today");
+  useShellTitle(t("Today"));
   const qc = useQueryClient();
   const me = useMe().data;
   const zone = me?.timezone || browserZone();
@@ -133,7 +133,7 @@ export function Today() {
     setBusy(`${b.id}${action}`);
     try {
       await act(b.id, action);
-      toast(action === "confirm" ? `Confirmed ${b.guest_name ?? "the booking"}. They are told.` : action === "complete" ? "Marked as came" : "Marked as a no show");
+      toast(action === "confirm" ? t("Confirmed {value}. They are told.", { value: b.guest_name ?? "the booking" }) : action === "complete" ? t("Marked as came") : t("Marked as a no show"));
       refresh();
     } catch (e) {
       toast(errorMessage(e), "error");
@@ -164,8 +164,8 @@ export function Today() {
         <div>
           <Tabs />
           <p className="page-sub" aria-live="polite">
-            {dayText(today, { weekday: "long", day: "numeric", month: "long" })}
-            {!loading && blocks.length > 0 ? ` · ${left} to go, ${order.done.length} done` : ""}
+            {isolate(dayText(today, { weekday: "long", day: "numeric", month: "long" }))}
+            {!loading && blocks.length > 0 ? t(" · {left} to go, {length} done", { left, length: order.done.length }) : ""}
           </p>
         </div>
         <div className="bk-tools">
@@ -194,7 +194,7 @@ export function Today() {
           ) : loading ? (
             <PageLoading label={t("Loading today…")} />
           ) : nothing ? (
-            <EmptyState title={mine ? "Nothing booked for you today" : "Nothing booked today"} icon="calendar">
+            <EmptyState title={mine ? t("Nothing booked for you today") : t("Nothing booked today")} icon="calendar">
               <p className="muted">{t("When guests book, or you book for them, it shows here in the order it happens.")}</p>
               <Link to="/">{t("Open the schedule")}</Link>
             </EmptyState>
@@ -209,15 +209,15 @@ export function Today() {
                     {asks.map((b) => (
                       <li key={b.id} className="bk-row">
                         <time className="bk-row-time">
-                          <strong>{clockText(Date.parse(b.start_time), zone, hour12)}</strong>
-                          <span className="faint">{dayText(dayOf(Date.parse(b.start_time), zone), { weekday: "short", day: "numeric", month: "short" })}</span>
+                          <strong>{isolate(clockText(Date.parse(b.start_time), zone, hour12))}</strong>
+                          <span className="faint">{isolate(dayText(dayOf(Date.parse(b.start_time), zone), { weekday: "short", day: "numeric", month: "short" }))}</span>
                         </time>
                         <div className="bk-row-main">
                           <button type="button" className="bk-row-title" onClick={() => put("b", b.id)}>
-                            {b.guest_name ?? "Guest"}
+                            {b.guest_name ?? t("Guest")}
                           </button>
                           <span className="muted">
-                            {b.service_name}
+                            {isolate(b.service_name ?? "")}
                             {b.staff_name ? ` · ${b.staff_name}` : ""}
                           </span>
                         </div>

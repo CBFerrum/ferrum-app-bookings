@@ -5,7 +5,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { errorMessage, t } from "@ferrum/client";
+import { errorMessage, t, isolate } from "@ferrum/client";
 import { Alert, Button, Spinner } from "@ferrum/kit";
 import type { Bk } from "./board";
 import { act, type FreeSlot, findSlots } from "./data";
@@ -69,7 +69,7 @@ export function Reschedule({ booking, zone, hour12, onClose, onDone }: { booking
       <div className="bk-strip" role="group" aria-label={t("Days")}>
         {days.map((d) => (
           <button key={d} type="button" className="bk-strip-day" aria-pressed={d === day} data-free={free.has(d) || undefined} disabled={!free.has(d)} onClick={() => { setDay(d); setSlot(null); }}>
-            <span>{dayText(d, { weekday: "short" })}</span>
+            <span>{isolate(dayText(d, { weekday: "short" }))}</span>
             <strong>{Number(d.slice(8))}</strong>
           </button>
         ))}
@@ -79,15 +79,15 @@ export function Reschedule({ booking, zone, hour12, onClose, onDone }: { booking
           <Spinner label={t("Looking for free times")} />
         </div>
       ) : week.error ? (
-        <Alert tone="error">{errorMessage(week.error)}</Alert>
+        <Alert tone="error">{isolate(errorMessage(week.error))}</Alert>
       ) : !slots.length ? (
-        <p className="muted">{free.size ? "Pick a day with times." : "Nothing is free this week. Try a later one."}</p>
+        <p className="muted">{free.size ? t("Pick a day with times.") : t("Nothing is free this week. Try a later one.")}</p>
       ) : (
-        <ul className="bk-times" aria-label={`Free times on ${dayText(day!, { weekday: "long", day: "numeric", month: "long" })}`}>
+        <ul className="bk-times" aria-label={t("Free times on {value}", { value: dayText(day!, { weekday: "long", day: "numeric", month: "long" }) })}>
           {slots.map((s) => (
             <li key={s.start}>
               <button type="button" className="bk-time" aria-pressed={slot?.start === s.start} onClick={() => pick(s)}>
-                {clockText(Date.parse(s.start), zone, hour12)}
+                {isolate(clockText(Date.parse(s.start), zone, hour12))}
               </button>
             </li>
           ))}
@@ -101,17 +101,17 @@ export function Reschedule({ booking, zone, hour12, onClose, onDone }: { booking
           <select id="bk-person" className="select" value={person} onChange={(e) => setPerson(e.target.value)}>
             {slot.staff.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.name}
+                {isolate(s.name)}
               </option>
             ))}
           </select>
         </div>
       )}
-      {error && <Alert tone="error">{error}</Alert>}
+      {error && <Alert tone="error">{isolate(error)}</Alert>}
       <div className="bk-sheet-actions">
         <Button onClick={onClose}>{t("Keep it where it is")}</Button>
         <Button variant="primary" loading={busy} disabled={!slot} onClick={() => void move()}>
-          {slot ? `Move to ${clockText(Date.parse(slot.start), zone, hour12)}` : "Move"}
+          {slot ? t("Move to {value}", { value: clockText(Date.parse(slot.start), zone, hour12) }) : t("Move")}
         </Button>
       </div>
     </div>

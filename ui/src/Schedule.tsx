@@ -8,7 +8,7 @@ import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-quer
 import { CalendarOff, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { errorMessage, t as tr } from "@ferrum/client";
+import { errorMessage, t as tr, isolate } from "@ferrum/client";
 import { Alert, Badge, Button, EmptyState, ErrorState, PageLoading, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, useEntityMeta, useMe } from "@ferrum/records";
 import { Board } from "./Grid";
@@ -36,7 +36,7 @@ function Approvals({ waiting, zone, hour12, canWrite, onOpen, onDone }: { waitin
     setBusy(b.id);
     try {
       await act(b.id, "confirm");
-      toast(`Confirmed ${b.guest_name ?? "the booking"}. They are told.`);
+      toast(tr("Confirmed {value}. They are told.", { value: b.guest_name ?? "the booking" }));
       onDone();
     } catch (e) {
       toast(errorMessage(e), "error");
@@ -50,13 +50,13 @@ function Approvals({ waiting, zone, hour12, canWrite, onOpen, onDone }: { waitin
     return (
       <li key={b.id} className="bk-ask">
         <button type="button" className="bk-ask-main" onClick={() => onOpen(b)}>
-          <strong>{b.guest_name ?? "Guest"}</strong>
+          <strong>{b.guest_name ?? tr("Guest")}</strong>
           <span>
-            {b.service_name}
+            {isolate(b.service_name ?? "")}
             {b.staff_name ? ` · ${b.staff_name}` : ""}
           </span>
           <span className="faint">
-            {dayText(dayOf(start, zone), { weekday: "short", day: "numeric", month: "short" })}, {clockText(start, zone, hour12)}
+            {isolate(dayText(dayOf(start, zone), { weekday: "short", day: "numeric", month: "short" }))}, {isolate(clockText(start, zone, hour12))}
           </span>
         </button>
         {canWrite && b.status === "Pending" && (
@@ -78,11 +78,11 @@ function Approvals({ waiting, zone, hour12, canWrite, onOpen, onDone }: { waitin
     <section className="bk-approvals" aria-label={tr("Needs your answer")}>
       <header>
         <h2>
-          {pending.length ? `${pending.length} to confirm` : "No one to confirm"}
+          {pending.length ? tr("{length} to confirm", { length: pending.length }) : tr("No one to confirm")}
           {queued.length > 0 && <span className="faint"> {tr("· {length} waiting for a seat", { length: queued.length })}</span>}
         </h2>
         <button type="button" className="link-btn" aria-expanded={open} onClick={() => setOpen(!open)}>
-          {open ? "Hide" : "Show"}
+          {open ? tr("Hide") : tr("Show")}
         </button>
       </header>
       {open && <ul className="bk-asks">{[...pending, ...queued].map(card)}</ul>}
@@ -91,7 +91,7 @@ function Approvals({ waiting, zone, hour12, canWrite, onOpen, onDone }: { waitin
 }
 
 export function Schedule() {
-  useShellTitle("Schedule");
+  useShellTitle(tr("Schedule"));
   const qc = useQueryClient();
   const me = useMe().data;
   const zone = me?.timezone || browserZone();
@@ -172,7 +172,7 @@ export function Schedule() {
       return days.map((d) => makeLane({ id: d, label: dayText(d, { weekday: "short" }), sub: dayText(d, { day: "numeric", month: "short" }), date: d, zone, people: who, offs: off }));
     }
     if (by === "room") {
-      const rooms = [...resources.map((r) => ({ id: r.id, label: r.resource_name, sub: r.resource_type ?? undefined })), { id: NONE, label: "No room", sub: undefined }];
+      const rooms = [...resources.map((r) => ({ id: r.id, label: r.resource_name, sub: r.resource_type ?? undefined })), { id: NONE, label: tr("No room"), sub: undefined }];
       return rooms.map((r) => makeLane({ id: r.id, label: r.label, sub: r.sub, date, zone, people: everyone, offs: [] }));
     }
     return people.map((p) => makeLane({ id: p.id, label: p.display_name, date, zone, people: [p], offs: off }));
@@ -218,7 +218,7 @@ export function Schedule() {
     try {
       const saved = await act(b.id, "reschedule", { start_time: new Date(start).toISOString(), ...(staff ? { staff } : {}) });
       qc.setQueriesData<Range>({ queryKey: ["bk", "range"] }, (old) => old && { ...old, bookings: old.bookings.map((x) => (x.id === b.id ? { ...x, ...saved } : x)) });
-      toast(`${b.guest_name ?? "The booking"} moved to ${clockText(start, zone, hour12)}`);
+      toast(tr("{value} moved to {start}", { value: b.guest_name ?? "The booking", start: clockText(start, zone, hour12) }));
       void qc.invalidateQueries({ queryKey: ["bk", "doc", b.id] });
     } catch (e) {
       for (const [key, data] of before) qc.setQueryData(key, data);
@@ -265,8 +265,8 @@ export function Schedule() {
   } else if (range.error && !range.data) body = <ErrorState error={range.error} onRetry={() => void range.refetch()} title={tr("We could not load the bookings")} />;
   else if (!lanes.length) {
     body = (
-      <EmptyState title={by === "room" ? "No rooms yet" : "No one is selected"} icon="calendar">
-        <p className="muted">{by === "room" ? "Rooms and equipment that services need are set up in Resources." : "Choose who to show in People."}</p>
+      <EmptyState title={by === "room" ? tr("No rooms yet") : tr("No one is selected")} icon="calendar">
+        <p className="muted">{by === "room" ? tr("Rooms and equipment that services need are set up in Resources.") : tr("Choose who to show in People.")}</p>
       </EmptyState>
     );
   } else {
@@ -296,11 +296,11 @@ export function Schedule() {
         />
         {range.data && !placed.length && (
           <p className="bk-empty muted">
-            {tr("Nothing is booked")} {view === "week" ? "this week" : date === today ? "today" : "this day"}.
-            {canCreate ? " Press a time to book it." : ""}
+            {tr("Nothing is booked")} {view === "week" ? tr("this week") : date === today ? tr("today") : tr("this day")}.
+            {canCreate ? tr(" Press a time to book it.") : ""}
           </p>
         )}
-        <p className="bk-hint faint">{canWrite ? "Drag a booking to move it, or select it and press M, then the arrow keys." : "Select a booking to see it."} {tr("Shaded time is outside working hours; hatched is time off.")}</p>
+        <p className="bk-hint faint">{canWrite ? tr("Drag a booking to move it, or select it and press M, then the arrow keys.") : tr("Select a booking to see it.")} {tr("Shaded time is outside working hours; hatched is time off.")}</p>
       </div>
     );
   }
@@ -330,16 +330,16 @@ export function Schedule() {
 
       <div className="bk-tools" role="toolbar" aria-label={tr("Schedule")}>
         <div className="bk-nav">
-          <button type="button" className="icon-btn" aria-label={view === "week" ? "Earlier week" : "Earlier day"} onClick={() => step(-1)}>
+          <button type="button" className="icon-btn" aria-label={view === "week" ? tr("Earlier week") : tr("Earlier day")} onClick={() => step(-1)}>
             <ChevronLeft size={18} />
           </button>
           <Button size="sm" onClick={() => set({ date: null }, true)} disabled={days.includes(today)}>
             {tr("Today")}
           </Button>
-          <button type="button" className="icon-btn" aria-label={view === "week" ? "Later week" : "Later day"} onClick={() => step(1)}>
+          <button type="button" className="icon-btn" aria-label={view === "week" ? tr("Later week") : tr("Later day")} onClick={() => step(1)}>
             <ChevronRight size={18} />
           </button>
-          <h2 className="bk-date">{heading}</h2>
+          <h2 className="bk-date">{isolate(heading)}</h2>
           <input className="input bk-date-input" type="date" aria-label={tr("Go to a date")} value={date} onChange={(e) => isDate(e.target.value) && set({ date: e.target.value }, true)} />
         </div>
         <div className="bk-filters">
@@ -376,7 +376,7 @@ export function Schedule() {
                         set({ staff: next.length === everyone.length || !next.length ? null : next.join(",") }, true);
                       }}
                     />
-                    {p.display_name}
+                    {isolate(p.display_name)}
                   </label>
                 ))}
                 {chosen.length > 0 && (
@@ -392,7 +392,7 @@ export function Schedule() {
               <option value="">{tr("Everyone")}</option>
               {everyone.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.display_name}
+                  {isolate(p.display_name)}
                 </option>
               ))}
             </select>
@@ -402,7 +402,7 @@ export function Schedule() {
               <option value="">{tr("All services")}</option>
               {meta.data.services.map((s) => (
                 <option key={s.id} value={s.id}>
-                  {s.service_name}
+                  {isolate(s.service_name)}
                 </option>
               ))}
             </select>

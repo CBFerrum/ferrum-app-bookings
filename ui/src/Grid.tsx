@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { clockText } from "./zone";
 import { type Block, type Drop, dropText, hourMarks, landing, type Lane, minutesIn, pack, STEP, type Window } from "./board";
-import { t as tr } from "@ferrum/client";
+import { t as tr, isolate } from "@ferrum/client";
 
 /** Pixels an hour takes, and the shortest a block is drawn (minutes). */
 const HOUR = 56;
@@ -205,16 +205,16 @@ export function Board(p: BoardProps) {
           <div className="bk-corner" />
           {lanes.map((l) => (
             <button key={l.id} type="button" className="bk-lane-head" data-today={(p.now >= l.start && p.now < l.end) || undefined} onClick={() => p.onLane(l)}>
-              <strong>{l.label}</strong>
-              {l.sub && <span>{l.sub}</span>}
-              <small>{p.note(l)}</small>
+              <strong>{isolate(l.label)}</strong>
+              {l.sub && <span>{isolate(l.sub)}</span>}
+              <small>{isolate(p.note(l))}</small>
             </button>
           ))}
           <div className="bk-gutter" style={{ height }} aria-hidden="true">
             {lanes[0] &&
               hourMarks(lanes[0], win, p.zone, p.hour12).map((m) => (
                 <span key={m.at} style={{ top: (m.at - win.from) * PX }}>
-                  {m.label}
+                  {isolate(m.label)}
                 </span>
               ))}
           </div>
@@ -284,9 +284,9 @@ export function Board(p: BoardProps) {
                         }}
                       >
                         <span className="bk-block-time">{h < 44 ? clockText(b.start, p.zone, p.hour12) : range(b)}</span>
-                        <strong className="bk-block-title">{b.title}</strong>
+                        <strong className="bk-block-title">{isolate(b.title)}</strong>
                         <span className="bk-block-sub">
-                          {b.kind === "session" ? `${b.seats} of ${b.capacity} seats` : first.service_name}
+                          {b.kind === "session" ? tr("{seats} of {capacity} seats", { seats: b.seats, capacity: b.capacity }) : first.service_name}
                           {p.showWho && b.staff ? ` · ${p.whoInitials(b.staff)}` : ""}
                           {statusNote(b) ? ` · ${statusNote(b)}` : ""}
                         </span>
@@ -301,8 +301,8 @@ export function Board(p: BoardProps) {
                   const end = drag.start + (b.end - b.start);
                   return (
                     <div className="bk-ghost" data-hint={drag.hint.kind} style={{ top: at(drag.start, lane), height: Math.max(((b.end - b.start) / 60_000) * PX, LEAST * PX * 0.7) }} aria-hidden="true">
-                      <strong>{clockText(drag.start, p.zone, p.hour12)} – {clockText(end, p.zone, p.hour12)}</strong>
-                      {drag.hint.kind !== "ok" && <span>{dropText(drag.hint)}</span>}
+                      <strong>{isolate(clockText(drag.start, p.zone, p.hour12))} – {isolate(clockText(end, p.zone, p.hour12))}</strong>
+                      {drag.hint.kind !== "ok" && <span>{isolate(dropText(drag.hint))}</span>}
                     </div>
                   );
                 })()}
@@ -312,7 +312,7 @@ export function Board(p: BoardProps) {
         </div>
       </div>
       <div className="sr-only" role="status" aria-live="assertive">
-        {said}
+        {isolate(said)}
       </div>
     </div>
   );

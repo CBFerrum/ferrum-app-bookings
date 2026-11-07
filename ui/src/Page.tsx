@@ -7,7 +7,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Copy, ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
-import { api, bootstrap, errorMessage, routeBase, t } from "@ferrum/client";
+import { api, bootstrap, errorMessage, routeBase, t, isolate } from "@ferrum/client";
 import { Badge, Button, EmptyState, ErrorState, PageLoading, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { type Doc, type EntityMeta, useEntityMeta, useRecord } from "@ferrum/records";
 import { rows } from "./data";
@@ -20,8 +20,8 @@ function Switch({ id, label, hint, checked, disabled, onChange }: { id: string; 
   return (
     <div className="bk-setting">
       <div className="bk-setting-text">
-        <label htmlFor={id}>{label}</label>
-        {hint && <p className="faint">{hint}</p>}
+        <label htmlFor={id}>{isolate(label)}</label>
+        {hint && <p className="faint">{isolate(hint)}</p>}
       </div>
       <input id={id} className="bk-switch" type="checkbox" role="switch" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
     </div>
@@ -45,9 +45,9 @@ function Count({ id, label, hint, value, min, max, unit, disabled, onSave }: { i
   return (
     <div className="bk-setting">
       <div className="bk-setting-text">
-        <label htmlFor={id}>{label}</label>
+        <label htmlFor={id}>{isolate(label)}</label>
         <p className={bad ? "field-error" : "faint"} id={`${id}-hint`}>
-          {bad ? `Enter a whole number from ${min} to ${max}.` : hint}
+          {bad ? t("Enter a whole number from {min} to {max}.", { min, max }) : hint}
         </p>
       </div>
       <span className="bk-count">
@@ -63,7 +63,7 @@ function Count({ id, label, hint, value, min, max, unit, disabled, onSave }: { i
           onBlur={commit}
           onKeyDown={(e) => e.key === "Enter" && commit()}
         />
-        <span className="muted">{unit}</span>
+        <span className="muted">{isolate(unit)}</span>
       </span>
     </div>
   );
@@ -89,9 +89,9 @@ function Reminders({ doc, save, writable }: { doc: Doc; save: Save; writable: bo
           {kept.length === 0 && <li className="muted">{t("None")}</li>}
           {kept.map((m) => (
             <li key={m} className="bk-chip">
-              {before(m)}
+              {isolate(before(m))}
               {writable && (
-                <button type="button" aria-label={`Remove the reminder ${before(m)}`} onClick={() => void write(kept.filter((x) => x !== m))}>
+                <button type="button" aria-label={t("Remove the reminder {m}", { m: before(m) })} onClick={() => void write(kept.filter((x) => x !== m))}>
                   ×
                 </button>
               )}
@@ -108,7 +108,7 @@ function Reminders({ doc, save, writable }: { doc: Doc; save: Save; writable: bo
             <option value="">{t("Add a reminder…")}</option>
             {free.map((m) => (
               <option key={m} value={m}>
-                {before(m)}
+                {isolate(before(m))}
               </option>
             ))}
           </select>
@@ -140,7 +140,7 @@ function Address({ doc, services }: { doc: Doc; services: { id: string; service_
       </label>
       <div className="secret">
         <input id="bk-url" className="input" readOnly value={url} onFocus={(e) => e.currentTarget.select()} />
-        <Button onClick={() => void copy()}>{copied ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />} {copied ? "Copied" : "Copy"}</Button>
+        <Button onClick={() => void copy()}>{copied ? <Check size={15} aria-hidden="true" /> : <Copy size={15} aria-hidden="true" />} {copied ? t("Copied") : t("Copy")}</Button>
         <a className="btn btn-default btn-md" href={url} target="_blank" rel="noopener noreferrer">
           <ExternalLink size={15} aria-hidden="true" /> {t("Open")}
         </a>
@@ -154,7 +154,7 @@ function Address({ doc, services }: { doc: Doc; services: { id: string; service_
             <option value="">{t("Every service")}</option>
             {services.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.service_name}
+                {isolate(s.service_name)}
               </option>
             ))}
           </select>
@@ -183,12 +183,12 @@ function Settings({ meta, id }: { meta: EntityMeta; id: string }) {
         <div className="card-body stack">
           <div className="bk-online">
             <h2 id="bk-online">{t("Online booking")}</h2>
-            <Badge tone={open ? "green" : "neutral"}>{open ? "Open to guests" : "Closed"}</Badge>
+            <Badge tone={open ? "green" : "neutral"}>{open ? t("Open to guests") : t("Closed")}</Badge>
           </div>
           <Switch
             id="bk-public"
             label={t("Guests can book online")}
-            hint={open ? "Anyone with the address can choose a time, without signing in." : "While it is off, the address shows that booking is closed. Your calendar feeds keep working."}
+            hint={open ? t("Anyone with the address can choose a time, without signing in.") : t("While it is off, the address shows that booking is closed. Your calendar feeds keep working.")}
             checked={open}
             disabled={!writable}
             onChange={(v) => void save("public_page", v)}
@@ -244,7 +244,7 @@ function Settings({ meta, id }: { meta: EntityMeta; id: string }) {
 }
 
 export function BookingPage() {
-  useShellTitle("Booking page");
+  useShellTitle(t("Booking page"));
   const meta = useEntityMeta("BookingSettings");
   const found = useQuery({ queryKey: ["bk", "settings"], queryFn: ({ signal }) => rows<{ id: string }>("BookingSettings", { fields: "public_page", limit: 1 }, signal) });
   const [starting, setStarting] = useState(false);

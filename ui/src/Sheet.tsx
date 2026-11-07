@@ -8,7 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Mail, MapPin, Phone, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
-import { api, docPath, errorMessage, formatMoment, t } from "@ferrum/client";
+import { api, docPath, errorMessage, formatMoment, t, isolate } from "@ferrum/client";
 import { Alert, Badge, Button, confirmDialog, Dialog, ErrorState, Field, Menu, MenuItem, Spinner, TabPanel, Tabs, toast } from "@ferrum/kit";
 import { type Bk, nextSteps, type Step, tone } from "./board";
 import { act } from "./data";
@@ -56,9 +56,9 @@ function History({ id }: { id: string }) {
     <ol className="bk-history">
       {events.map((e, i) => (
         <li key={`${e.at}-${i}`}>
-          <strong>{HISTORY[e.action]}</strong>
+          <strong>{isolate(HISTORY[e.action])}</strong>
           <span className="faint">
-            {formatMoment(e.at, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}
+            {isolate(formatMoment(e.at, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }))}
             {e.actor_name || e.actor ? ` · ${e.actor_name ?? e.actor}` : ""}
           </span>
         </li>
@@ -84,16 +84,16 @@ function Cancel({ b, onClose, onDone }: { b: Full; onClose: () => void; onDone: 
   };
   return (
     <div className="stack">
-      <h3>{b.status === "Pending" ? "Decline this booking?" : "Cancel this booking?"}</h3>
+      <h3>{b.status === "Pending" ? t("Decline this booking?") : t("Cancel this booking?")}</h3>
       <p className="muted">{t("The time is freed. {told}", { told })}</p>
       <Field label={t("Reason (optional)")} htmlFor="bk-reason" hint={t("The guest sees it.")}>
         <textarea id="bk-reason" className="textarea" rows={3} maxLength={1000} value={reason} onChange={(e) => setReason(e.target.value)} />
       </Field>
-      {error && <Alert tone="error">{error}</Alert>}
+      {error && <Alert tone="error">{isolate(error)}</Alert>}
       <div className="bk-sheet-actions">
         <Button onClick={onClose}>{t("Keep it")}</Button>
         <Button variant="danger" loading={busy} onClick={() => void go()}>
-          {b.status === "Pending" ? "Decline booking" : "Cancel booking"}
+          {b.status === "Pending" ? t("Decline booking") : t("Cancel booking")}
         </Button>
       </div>
     </div>
@@ -111,7 +111,7 @@ function Repeat({ b, onClose, onDone }: { b: Full; onClose: () => void; onDone: 
     setError(null);
     try {
       const out = await act<{ booked: unknown[]; skipped: { date: string; reason: string }[] }>(b.id, "repeat", { every, count, skip_conflicts: skip });
-      toast(out.skipped.length ? `Repeated: ${out.booked.length} booked, ${out.skipped.length} skipped (${out.skipped.map((s) => s.date).join(", ")})` : `Repeated: ${out.booked.length} more booked`);
+      toast(out.skipped.length ? t("Repeated: {length} booked, {length2} skipped ({value})", { length: out.booked.length, length2: out.skipped.length, value: out.skipped.map((s) => s.date).join(", ") }) : t("Repeated: {length} more booked", { length: out.booked.length }));
       onDone();
     } catch (e) {
       setError(errorMessage(e));
@@ -133,7 +133,7 @@ function Repeat({ b, onClose, onDone }: { b: Full; onClose: () => void; onDone: 
       }
     >
       <div className="stack">
-        {error && <Alert tone="error">{error}</Alert>}
+        {error && <Alert tone="error">{isolate(error)}</Alert>}
         <p className="muted">{t("Each date is booked at the same time of day, checked like any booking. They are made together or not at all, unless you skip the dates that do not fit.")}</p>
         <Field label={t("How often")} htmlFor="bk-every">
           <select id="bk-every" className="select" value={every} onChange={(e) => setEvery(e.target.value)}>
@@ -161,7 +161,7 @@ function GuestLink({ id, onClose }: { id: string; onClose: () => void }) {
       {q.isLoading ? (
         <Spinner label={t("Making the link")} />
       ) : q.error ? (
-        <Alert tone="error">{errorMessage(q.error)}</Alert>
+        <Alert tone="error">{isolate(errorMessage(q.error))}</Alert>
       ) : (
         <div className="stack">
           <div className="secret">
@@ -178,7 +178,7 @@ function GuestLink({ id, onClose }: { id: string; onClose: () => void }) {
               {t("Copy")}
             </Button>
           </div>
-          <p className="muted">{q.data!.note}</p>
+          <p className="muted">{isolate(q.data!.note)}</p>
         </div>
       )}
     </Dialog>
@@ -223,7 +223,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
   };
 
   const noShow = async () => {
-    const ok = await confirmDialog({ title: `Mark ${b?.guest_name ?? "the guest"} as a no show?`, message: "It counts against them in the attendance report. The guest is not told.", confirmLabel: "Mark as no show", danger: true });
+    const ok = await confirmDialog({ title: t("Mark {value} as a no show?", { value: b?.guest_name ?? "the guest" }), message: t("It counts against them in the attendance report. The guest is not told."), confirmLabel: t("Mark as no show"), danger: true });
     if (ok) void run("mark_no_show", {}, "Marked as a no show");
   };
 
@@ -243,7 +243,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
   const steps: Step[] = b && canWrite ? nextSteps(b, now) : [];
   const start = b ? Date.parse(b.start_time) : 0;
   const end = b ? Date.parse(b.end_time) : 0;
-  const note = !b ? "" : now < start ? `Starts in ${span(start - now)}` : now < end ? "Under way" : `Ended ${span(now - end)} ago`;
+  const note = !b ? "" : now < start ? t("Starts in {value}", { value: span(start - now) }) : now < end ? t("Under way") : t("Ended {value} ago", { value: span(now - end) });
   const primary: Step | undefined = steps.includes("confirm") ? "confirm" : steps.includes("complete") ? "complete" : steps.includes("reschedule") ? "reschedule" : undefined;
 
   return (
@@ -251,11 +251,11 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
       <header className="bk-sheet-head">
         <div>
           <h2 ref={head} tabIndex={-1}>
-            {b ? (b.guest_name ?? "Booking") : "Booking"}
+            {b ? (b.guest_name ?? t("Booking")) : t("Booking")}
           </h2>
           {b && (
             <p className="muted">
-              {b.service_name} <Badge tone={tone(b.status)}>{b.status}</Badge>
+              {isolate(b.service_name ?? "")} <Badge tone={tone(b.status)}>{isolate(b.status)}</Badge>
             </p>
           )}
         </div>
@@ -274,8 +274,8 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
           <Tabs
             id="bk-sheet"
             tabs={[
-              { id: "info", label: "Details" },
-              { id: "history", label: "History" },
+              { id: "info", label: t("Details") },
+              { id: "history", label: t("History") },
             ]}
             value={tab}
             onChange={setTab}
@@ -287,16 +287,16 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
               ) : mode === "move" ? (
                 <Reschedule booking={b} zone={zone} hour12={hour12} onClose={() => setMode("info")} onDone={(next) => { changed(next); toast(t("Moved")); }} />
               ) : mode === "cancel" ? (
-                <Cancel b={b} onClose={() => setMode("info")} onDone={(next) => { changed(next); toast(b.status === "Pending" ? "Declined" : "Cancelled"); }} />
+                <Cancel b={b} onClose={() => setMode("info")} onDone={(next) => { changed(next); toast(b.status === "Pending" ? t("Declined") : t("Cancelled")); }} />
               ) : (
                 <>
                   <section className="bk-part">
                     <h3>{t("When")}</h3>
-                    <p className="bk-big">{dayText(dayOf(start, zone), { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</p>
+                    <p className="bk-big">{isolate(dayText(dayOf(start, zone), { weekday: "long", day: "numeric", month: "long", year: "numeric" }))}</p>
                     <p>
-                      {clockText(start, zone, hour12)} – {clockText(end, zone, hour12)} <span className="faint">({Math.round((end - start) / 60_000)} {t("min)")}</span>
+                      {isolate(clockText(start, zone, hour12))} – {isolate(clockText(end, zone, hour12))} <span className="faint">({Math.round((end - start) / 60_000)} {t("min)")}</span>
                     </p>
-                    {(b.status === "Pending" || b.status === "Confirmed") && <p className="faint">{note}</p>}
+                    {(b.status === "Pending" || b.status === "Confirmed") && <p className="faint">{isolate(note)}</p>}
                     {b.series && <p className="faint">{t("Part of a repeating series.")}</p>}
                   </section>
                   <section className="bk-part">
@@ -304,22 +304,22 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                     <p className="bk-big">{b.guest_name ?? "—"}</p>
                     {b.guest_email && (
                       <p>
-                        <Mail size={13} aria-hidden="true" /> <a href={`mailto:${b.guest_email}`}>{b.guest_email}</a>
+                        <Mail size={13} aria-hidden="true" /> <a href={`mailto:${b.guest_email}`}>{isolate(b.guest_email)}</a>
                       </p>
                     )}
                     {b.guest_phone && (
                       <p>
-                        <Phone size={13} aria-hidden="true" /> <a href={`tel:${b.guest_phone}`}>{b.guest_phone}</a>
+                        <Phone size={13} aria-hidden="true" /> <a href={`tel:${b.guest_phone}`}>{isolate(b.guest_phone)}</a>
                       </p>
                     )}
                     <p className="faint">
                       {t("With")} {b.staff_name ?? "—"}
-                      {(b.seats ?? 1) > 1 ? ` · ${b.seats} seats` : ""}
-                      {b.source === "Public" ? " · booked online" : ""}
+                      {(b.seats ?? 1) > 1 ? t(" · {seats} seats", { seats: String(b.seats) }) : ""}
+                      {b.source === "Public" ? t(" · booked online") : ""}
                     </p>
                     {b.customer && (
                       <p>
-                        <a href={`/open/Customer/${b.customer}`}>{b._titles?.customer ?? "Customer"}</a>
+                        <a href={`/open/Customer/${b.customer}`}>{b._titles?.customer ?? t("Customer")}</a>
                       </p>
                     )}
                   </section>
@@ -327,10 +327,10 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                     <section className="bk-part">
                       <h3>{t("Where")}</h3>
                       <p>
-                        <MapPin size={13} aria-hidden="true" /> {b.location_type}
+                        <MapPin size={13} aria-hidden="true" /> {isolate(b.location_type ?? "")}
                         {b.location ? ` · ${b.location}` : ""}
                       </p>
-                      {b.resource && <p className="faint">{b._titles?.resource ?? "A room"}</p>}
+                      {b.resource && <p className="faint">{b._titles?.resource ?? t("A room")}</p>}
                     </section>
                   )}
                   {(b.answers?.length || b.notes) && (
@@ -339,14 +339,14 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                       <dl className="bk-answers">
                         {b.answers?.map((a) => (
                           <div key={a.question}>
-                            <dt>{a.question}</dt>
-                            <dd>{a.answer}</dd>
+                            <dt>{isolate(a.question)}</dt>
+                            <dd>{isolate(a.answer)}</dd>
                           </div>
                         ))}
                         {b.notes && (
                           <div>
                             <dt>{t("Notes")}</dt>
-                            <dd>{b.notes}</dd>
+                            <dd>{isolate(b.notes)}</dd>
                           </div>
                         )}
                       </dl>
@@ -355,17 +355,17 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                   {b.status === "Cancelled" && b.cancellation_reason && (
                     <section className="bk-part">
                       <h3>{t("Why it was cancelled")}</h3>
-                      <p>{b.cancellation_reason}</p>
+                      <p>{isolate(b.cancellation_reason)}</p>
                     </section>
                   )}
                   <section className="bk-part">
                     <h3>{t("Billing")}</h3>
                     <p>
-                      {Number(b.amount) > 0 ? priceText(b.amount, null) : "Free"}
+                      {Number(b.amount) > 0 ? priceText(b.amount, null) : t("Free")}
                       {b.sales_invoice ? (
                         <>
-                          {" · "}
-                          <a href={`/open/SalesInvoice/${b.sales_invoice}`}>{b._titles?.sales_invoice ?? "Invoice"}</a>
+                          {isolate(" · ")}
+                          <a href={`/open/SalesInvoice/${b.sales_invoice}`}>{b._titles?.sales_invoice ?? t("Invoice")}</a>
                         </>
                       ) : null}
                     </p>
@@ -376,7 +376,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                     )}
                   </section>
                   <p className="faint bk-number">
-                    {b.number} · <Link to={`/e/Booking/${b.id}`}>{t("Open the full record")}</Link>
+                    {isolate(b.number ?? "")} · <Link to={`/e/Booking/${b.id}`}>{t("Open the full record")}</Link>
                   </p>
                 </>
               )}
@@ -406,7 +406,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
               )}
               {steps.includes("cancel_booking") && (
                 <Button variant="danger" onClick={() => setMode("cancel")}>
-                  {b.status === "Pending" ? "Decline" : "Cancel"}
+                  {b.status === "Pending" ? t("Decline") : t("Cancel")}
                 </Button>
               )}
               <span className="spacer" />
@@ -424,7 +424,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                         danger
                         onSelect={async () => {
                           close();
-                          if (await confirmDialog({ title: "Cancel this and the later bookings?", message: "Every booking of this series from this one on is cancelled, and each guest is told.", confirmLabel: "Cancel them", danger: true })) void run("cancel_series", {}, "The series is cancelled");
+                          if (await confirmDialog({ title: t("Cancel this and the later bookings?"), message: t("Every booking of this series from this one on is cancelled, and each guest is told."), confirmLabel: t("Cancel them"), danger: true })) void run("cancel_series", {}, "The series is cancelled");
                         }}
                       >
                         {t("Cancel this and later…")}
@@ -465,10 +465,10 @@ export function SessionSheet({ bookings, zone, hour12, onOpen, onClose }: { book
       <header className="bk-sheet-head">
         <div>
           <h2 ref={head} tabIndex={-1}>
-            {first.service_name}
+            {isolate(first.service_name ?? "")}
           </h2>
           <p className="muted">
-            {dayText(dayOf(start, zone), { weekday: "long", day: "numeric", month: "long" })}, {clockText(start, zone, hour12)} – {clockText(end, zone, hour12)} {t("· with {staff_name}", { staff_name: first.staff_name ?? "" })}
+            {isolate(dayText(dayOf(start, zone), { weekday: "long", day: "numeric", month: "long" }))}, {isolate(clockText(start, zone, hour12))} – {isolate(clockText(end, zone, hour12))} {t("· with {staff_name}", { staff_name: first.staff_name ?? "" })}
           </p>
         </div>
         <button type="button" className="icon-btn" aria-label={t("Close")} title={t("Close (Esc)")} onClick={onClose}>
@@ -477,17 +477,17 @@ export function SessionSheet({ bookings, zone, hour12, onOpen, onClose }: { book
       </header>
       <div className="bk-sheet-body">
         <p className="bk-big">
-          {seats} {seats === 1 ? "seat" : "seats"} taken
+          {seats} {seats === 1 ? t("seat") : t("seats")} {t("taken")}
         </p>
         <ul className="bk-attendees">
           {bookings.map((x) => (
             <li key={x.id}>
               <button type="button" className="bk-attendee" onClick={() => onOpen(x.id)}>
                 <span>
-                  <strong>{x.guest_name}</strong>
-                  {(x.seats ?? 1) > 1 && <span className="faint"> · {x.seats} seats</span>}
+                  <strong>{isolate(x.guest_name ?? "")}</strong>
+                  {(x.seats ?? 1) > 1 && <span className="faint"> {t("· {seats} seats", { seats: x.seats ?? "" })}</span>}
                 </span>
-                <Badge tone={tone(x.status)}>{x.status}</Badge>
+                <Badge tone={tone(x.status)}>{isolate(x.status)}</Badge>
               </button>
             </li>
           ))}

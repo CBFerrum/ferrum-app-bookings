@@ -8,7 +8,7 @@ import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react"
 import { EmptyState, ErrorState, Icon } from "@ferrum/kit";
 import { addDays, addMonths, clockText, dayText, firstWeekday, monthEnd, monthOf, monthWeeks } from "../zone";
 import { firstDay, openDays, type Slot, type Slots } from "./booking";
-import { t } from "@ferrum/client";
+import { t, isolate } from "@ferrum/client";
 
 /** How many months ahead we look for the first day with times. */
 const LOOK_AHEAD = 6;
@@ -59,7 +59,7 @@ export function MonthGrid({ month, first, open, selected, today, busy, canPrev, 
     <div className="gb-cal" aria-busy={busy}>
       <div className="gb-cal-head">
         <h2 className="gb-cal-title" aria-live="polite">
-          {title}
+          {isolate(title)}
         </h2>
         <div className="gb-cal-nav">
           <button type="button" className="icon-btn" aria-label={t("Previous month")} disabled={!canPrev} onClick={() => onMonth(addMonths(month, -1))}>
@@ -75,7 +75,7 @@ export function MonthGrid({ month, first, open, selected, today, busy, canPrev, 
           <tr>
             {weeks[0].map((d) => (
               <th key={d} scope="col" abbr={dayText(d, { weekday: "long" })}>
-                {dayText(d, { weekday: "short" })}
+                {isolate(dayText(d, { weekday: "short" }))}
               </th>
             ))}
           </tr>
@@ -127,7 +127,7 @@ export function Times({ day, slots, zone, hour12, at, showSeats, onPick }: {
   return (
     <div className="gb-times">
       <h3 className="gb-times-title" id="gb-times-title">
-        {heading}
+        {isolate(heading)}
       </h3>
       <ul className="gb-slots" aria-labelledby="gb-times-title">
         {slots.map((s) => (
@@ -137,11 +137,11 @@ export function Times({ day, slots, zone, hour12, at, showSeats, onPick }: {
               className="gb-slot"
               data-full={s.full || undefined}
               aria-pressed={s.start === at}
-              aria-label={s.full ? `${clockText(Date.parse(s.start), zone, hour12)}, full, join the waitlist` : undefined}
+              aria-label={s.full ? t("{value}, full, join the waitlist", { value: clockText(Date.parse(s.start), zone, hour12) }) : undefined}
               onClick={() => onPick(s)}
             >
-              {clockText(Date.parse(s.start), zone, hour12)}
-              {s.full ? <small>{t("Full · waitlist")}</small> : showSeats && <small>{s.seats_left} left</small>}
+              {isolate(clockText(Date.parse(s.start), zone, hour12))}
+              {s.full ? <small>{t("Full · waitlist")}</small> : showSeats && <small>{t("{seats_left} left", { seats_left: s.seats_left })}</small>}
             </button>
           </li>
         ))}
@@ -240,7 +240,7 @@ export function Picker(p: PickerProps) {
       />
       <div ref={times} className="gb-times-wrap">
         <p className="sr-only" role="status">
-          {here && slots ? `${slots.length} ${slots.length === 1 ? "time" : "times"} on ${dayText(here, { weekday: "long", day: "numeric", month: "long" })}` : ""}
+          {here && slots ? t("{length} {value} on {here}", { length: slots.length, value: slots.length === 1 ? "time" : "times", here: dayText(here, { weekday: "long", day: "numeric", month: "long" }) }) : ""}
         </p>
         {!q.data ? (
           <div className="gb-slots-loading" aria-label={t("Loading times")} role="status">
@@ -259,7 +259,7 @@ export function Picker(p: PickerProps) {
             <p className="muted">{t("Choose another day. Days with times are in bold.")}</p>
           </EmptyState>
         ) : (
-          <p className="muted gb-looking">{open.size ? "Pick a day to see its times." : "Looking for the first free day…"}</p>
+          <p className="muted gb-looking">{open.size ? t("Pick a day to see its times.") : t("Looking for the first free day…")}</p>
         )}
       </div>
     </div>
