@@ -52,9 +52,9 @@ export function NewBooking({ meta, zone, hour12, from, onClose, onCreated }: { m
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!service) return setError("Choose what is being booked.");
-    if (startAt === null) return setError("Choose a day and a time.");
-    if (!guest.name.trim()) return setError("Enter the guest's name.");
+    if (!service) return setError(t("Choose what is being booked."));
+    if (startAt === null) return setError(t("Choose a day and a time."));
+    if (!guest.name.trim()) return setError(t("Enter the guest's name."));
     setBusy(true);
     setError(null);
     try {

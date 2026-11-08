@@ -8,7 +8,7 @@ import { CalendarPlus, CircleCheck, Hourglass, CalendarX, Mail } from "lucide-re
 import { type ReactNode, useEffect, useState } from "react";
 import { Link, useLocation, useParams } from "react-router";
 import { errorMessage, t, isolate } from "@ferrum/client";
-import { Alert, Badge, Button, Dialog, Field, toast, useShellTitle } from "@ferrum/kit";
+import { Alert, Badge, Button, Dialog, Field, toast, useShellTitle, placed } from "@ferrum/kit";
 import { clockText, dayOf, dayText, whenText, zoneText } from "../zone";
 import { calendarLinks, type GuestBooking, isLink, isTaken, priceText } from "./booking";
 import { ClockSwitch, Closed, Frame, Loading, useDisplay } from "./Frame";
@@ -142,13 +142,13 @@ function Move({ tenant, token, b, onClose, onDone }: { tenant: string; token: st
         <ClockSwitch hour12={hour12} onChange={setHour12} />
       </div>
       <p className="muted">
-        {t("Now")} {isolate(whenText(Date.parse(b.start_time), zone, hour12))} {t("· times shown in")} {isolate(zoneText(zone))}
+        {placed(t("Now {p1} · times shown in {p2}"), { p1: isolate(whenText(Date.parse(b.start_time), zone, hour12)), p2: isolate(zoneText(zone)) })}
       </p>
       {service && service.staff.length > 1 && (
         <fieldset className="gb-people">
           <legend className="field-label">{t("With")}</legend>
           <div className="gb-chips">
-            {[{ id: null, name: "Anyone free" }, ...service.staff].map((p) => (
+            {[{ id: null, name: t("Anyone free") }, ...service.staff].map((p) => (
               <label key={p.id ?? "any"} className="gb-chip" data-checked={staff === p.id || undefined}>
                 <input
                   type="radio"
@@ -275,7 +275,7 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
             {b.status === "Pending" && !fresh && <p className="muted">{t("The business will confirm it by email. The time is held for you meanwhile.")}</p>}
             {b.status === "Waitlisted" && (
               <p className="muted">
-                {b.waitlist_position ? t("You are number {waitlist_position} in line. ", { waitlist_position: b.waitlist_position }) : ""}{t("We will email you if a seat becomes free.")}
+                {(b.waitlist_position ? t("You are number {waitlist_position} in line. We will email you if a seat becomes free.", { waitlist_position: b.waitlist_position }) : t("We will email you if a seat becomes free."))}
               </p>
             )}
             {b.status === "Cancelled" && b.cancellation_reason && <p className="muted">{t("Reason given: {cancellation_reason}", { cancellation_reason: b.cancellation_reason })}</p>}

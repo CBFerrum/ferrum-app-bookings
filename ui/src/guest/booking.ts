@@ -98,7 +98,7 @@ export function onlyPerson(slot: Slot): string | undefined {
 
 export function priceText(price: string | number | null | undefined, currency: string | null): string {
   const n = Number(price ?? 0);
-  if (!(n > 0)) return "Free";
+  if (!(n > 0)) return t("Free");
   try {
     return currency ? new Intl.NumberFormat(undefined, { style: "currency", currency }).format(n) : new Intl.NumberFormat().format(n);
   } catch {
@@ -114,9 +114,9 @@ export function durationText(minutes: number): string {
 
 /** How the service meets: its address when it is in person; video links and numbers come after booking. */
 export function whereText(type: string | null | undefined, location?: string | null): string {
-  if (type === "Video") return "Video call";
-  if (type === "Phone") return "Phone call";
-  return location ? t("In person · {location}", { location }) : "In person";
+  if (type === "Video") return t("Video call");
+  if (type === "Phone") return t("Phone call");
+  return location ? t("In person · {location}", { location }) : t("In person");
 }
 
 export const isLink = (v: string | null | undefined): v is string => !!v && /^https?:\/\/\S+$/i.test(v.trim());
@@ -158,18 +158,18 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** What can be seen to be wrong before asking the server (which decides all the same). */
 export function check(form: Form, questions: Question[]): FormErrors {
   const e = noErrors();
-  if (!form.name.trim()) e.name = "Tell us your name";
-  if (!form.email.trim()) e.email = "We need your email to send the confirmation";
-  else if (!EMAIL.test(form.email.trim())) e.email = "That does not look like an email address";
+  if (!form.name.trim()) e.name = t("Tell us your name");
+  if (!form.email.trim()) e.email = t("We need your email to send the confirmation");
+  else if (!EMAIL.test(form.email.trim())) e.email = t("That does not look like an email address");
   for (const q of questions) {
     const a = (form.answers[q.question] ?? "").trim();
-    if (!a && q.required) e.answers[q.question] = "Please answer this";
-    else if (a && q.type === "Number" && Number.isNaN(Number(a))) e.answers[q.question] = "Enter a number";
+    if (!a && q.required) e.answers[q.question] = t("Please answer this");
+    else if (a && q.type === "Number" && Number.isNaN(Number(a))) e.answers[q.question] = t("Enter a number");
   }
   return e;
 }
 
-const LABELS = { name: "Your name", email: "Email", phone: "Phone number", notes: "Notes", seats: "Seats" } as const;
+const LABELS = { get name() { return t("Your name"); }, get email() { return t("Email"); }, get phone() { return t("Phone number"); }, get notes() { return t("Notes"); }, get seats() { return t("Seats"); } } as const;
 
 /** "is required" is the server's half of a sentence; the field's name is the other half. */
 const sentence = (label: string, message: string) => `${label} ${message.replace(/^at most/, "can have at most")}`;

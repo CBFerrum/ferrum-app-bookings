@@ -31,16 +31,16 @@ const span = (ms: number) => {
 };
 
 const HISTORY: Record<string, string> = {
-  create: "Booked",
-  "action:confirm": "Confirmed",
-  "action:reschedule": "Moved to another time",
-  "action:cancel_booking": "Cancelled",
-  "action:complete": "Marked completed",
-  "action:mark_no_show": "Marked as no show",
-  "action:make_sales_invoice": "Invoice created",
-  "action:guest_link": "Guest link made",
-  "action:repeat": "Repeated",
-  "action:cancel_series": "Series cancelled",
+  get create() { return t("Booked"); },
+  get "action:confirm"() { return t("Confirmed"); },
+  get "action:reschedule"() { return t("Moved to another time"); },
+  get "action:cancel_booking"() { return t("Cancelled"); },
+  get "action:complete"() { return t("Marked completed"); },
+  get "action:mark_no_show"() { return t("Marked as no show"); },
+  get "action:make_sales_invoice"() { return t("Invoice created"); },
+  get "action:guest_link"() { return t("Guest link made"); },
+  get "action:repeat"() { return t("Repeated"); },
+  get "action:cancel_series"() { return t("Series cancelled"); },
 };
 
 function History({ id }: { id: string }) {
@@ -71,7 +71,7 @@ function Cancel({ b, onClose, onDone }: { b: Full; onClose: () => void; onDone: 
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const told = b.guest_email ? t("{value} is told by email at {guest_email}.", { value: b.guest_name ?? "The guest", guest_email: b.guest_email }) : "There is no email address for the guest, so they are not told.";
+  const told = b.guest_email ? t("{value} is told by email at {guest_email}.", { value: b.guest_name ?? t("The guest"), guest_email: b.guest_email }) : t("There is no email address for the guest, so they are not told.");
   const go = async () => {
     setBusy(true);
     setError(null);
@@ -223,8 +223,8 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
   };
 
   const noShow = async () => {
-    const ok = await confirmDialog({ title: t("Mark {value} as a no show?", { value: b?.guest_name ?? "the guest" }), message: t("It counts against them in the attendance report. The guest is not told."), confirmLabel: t("Mark as no show"), danger: true });
-    if (ok) void run("mark_no_show", {}, "Marked as a no show");
+    const ok = await confirmDialog({ title: t("Mark {value} as a no show?", { value: b?.guest_name ?? t("the guest") }), message: t("It counts against them in the attendance report. The guest is not told."), confirmLabel: t("Mark as no show"), danger: true });
+    if (ok) void run("mark_no_show", {}, t("Marked as a no show"));
   };
 
   const invoice = async () => {
@@ -385,12 +385,12 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
           {mode === "info" && tab === "info" && canWrite && steps.length > 0 && (
             <footer className="bk-sheet-foot">
               {steps.includes("confirm") && (
-                <Button variant={primary === "confirm" ? "primary" : "default"} loading={busy === "confirm"} onClick={() => void run("confirm", {}, "Confirmed. The guest is told.")}>
+                <Button variant={primary === "confirm" ? "primary" : "default"} loading={busy === "confirm"} onClick={() => void run("confirm", {}, t("Confirmed. The guest is told."))}>
                   {t("Confirm")}
                 </Button>
               )}
               {steps.includes("complete") && (
-                <Button variant={primary === "complete" ? "primary" : "default"} loading={busy === "complete"} onClick={() => void run("complete", {}, "Marked completed")}>
+                <Button variant={primary === "complete" ? "primary" : "default"} loading={busy === "complete"} onClick={() => void run("complete", {}, t("Marked completed"))}>
                   {t("Completed")}
                 </Button>
               )}
@@ -410,7 +410,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                 </Button>
               )}
               <span className="spacer" />
-              <Menu ariaLabel="More about this booking" label={t("More")} buttonClass="btn btn-default btn-md">
+              <Menu ariaLabel={t("More about this booking")} label={t("More")} buttonClass="btn btn-default btn-md">
                 {(close) => (
                   <>
                     {b.status !== "Cancelled" && (
@@ -424,7 +424,7 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                         danger
                         onSelect={async () => {
                           close();
-                          if (await confirmDialog({ title: t("Cancel this and the later bookings?"), message: t("Every booking of this series from this one on is cancelled, and each guest is told."), confirmLabel: t("Cancel them"), danger: true })) void run("cancel_series", {}, "The series is cancelled");
+                          if (await confirmDialog({ title: t("Cancel this and the later bookings?"), message: t("Every booking of this series from this one on is cancelled, and each guest is told."), confirmLabel: t("Cancel them"), danger: true })) void run("cancel_series", {}, t("The series is cancelled"));
                         }}
                       >
                         {t("Cancel this and later…")}
@@ -477,7 +477,7 @@ export function SessionSheet({ bookings, zone, hour12, onOpen, onClose }: { book
       </header>
       <div className="bk-sheet-body">
         <p className="bk-big">
-          {seats} {seats === 1 ? t("seat") : t("seats")} {t("taken")}
+          {seats} {(seats === 1 ? t("seat taken") : t("seats taken"))}
         </p>
         <ul className="bk-attendees">
           {bookings.map((x) => (

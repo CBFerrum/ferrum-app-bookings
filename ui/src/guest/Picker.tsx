@@ -240,7 +240,7 @@ export function Picker(p: PickerProps) {
       />
       <div ref={times} className="gb-times-wrap">
         <p className="sr-only" role="status">
-          {here && slots ? t("{length} {value} on {here}", { length: slots.length, value: slots.length === 1 ? "time" : "times", here: dayText(here, { weekday: "long", day: "numeric", month: "long" }) }) : ""}
+          {here && slots ? (slots.length === 1 ? t("{length} time on {here}", { length: slots.length, here: dayText(here, { weekday: "long", day: "numeric", month: "long" }) }) : t("{length} times on {here}", { length: slots.length, here: dayText(here, { weekday: "long", day: "numeric", month: "long" }) })) : ""}
         </p>
         {!q.data ? (
           <div className="gb-slots-loading" aria-label={t("Loading times")} role="status">

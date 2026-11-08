@@ -73,7 +73,7 @@ function ServiceList({ catalog }: { catalog: Catalog }) {
 /** Who the guest sees, when more than one person gives the service. */
 function People({ service, value, onChange }: { service: Service; value: string | null; onChange: (id: string | null) => void }) {
   if (service.staff.length < 2) return null;
-  const options = [{ id: null, name: "Anyone free" }, ...service.staff];
+  const options = [{ id: null, name: t("Anyone free") }, ...service.staff];
   return (
     <fieldset className="gb-people">
       <legend className="field-label">{t("Who would you like to see?")}</legend>
@@ -338,7 +338,7 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
       }
       const found = serverErrors(err, service.questions);
       // A connection that dropped may have booked it: say so, rather than invite a second try.
-      if (err instanceof ApiError && err.status === 0) found.general = ["We could not reach the server, so we cannot tell whether your booking went through. Please check your email for a confirmation before trying again."];
+      if (err instanceof ApiError && err.status === 0) found.general = [t("We could not reach the server, so we cannot tell whether your booking went through. Please check your email for a confirmation before trying again.")];
       setErrors(found);
       firstProblem();
     } finally {
@@ -363,7 +363,7 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
       {waitlist && !gone && <Alert tone="info">{t("This class is full. Join the waitlist and we will email you if a seat becomes free.")}</Alert>}
       {gone && (
         <Alert tone="warning" action={<Button size="sm" onClick={onAnother}>{t("Choose another time")}</Button>}>
-          {taken ? t("Someone has just taken that time.") : t("That time is no longer free.")} {t("Please choose another.")}
+          {(taken ? t("Someone has just taken that time. Please choose another.") : t("That time is no longer free. Please choose another."))}
         </Alert>
       )}
       {errors.general.length > 0 && (

@@ -36,7 +36,7 @@ function Approvals({ waiting, zone, hour12, canWrite, onOpen, onDone }: { waitin
     setBusy(b.id);
     try {
       await act(b.id, "confirm");
-      toast(tr("Confirmed {value}. They are told.", { value: b.guest_name ?? "the booking" }));
+      toast(tr("Confirmed {value}. They are told.", { value: b.guest_name ?? tr("the booking") }));
       onDone();
     } catch (e) {
       toast(errorMessage(e), "error");
@@ -218,7 +218,7 @@ export function Schedule() {
     try {
       const saved = await act(b.id, "reschedule", { start_time: new Date(start).toISOString(), ...(staff ? { staff } : {}) });
       qc.setQueriesData<Range>({ queryKey: ["bk", "range"] }, (old) => old && { ...old, bookings: old.bookings.map((x) => (x.id === b.id ? { ...x, ...saved } : x)) });
-      toast(tr("{value} moved to {start}", { value: b.guest_name ?? "The booking", start: clockText(start, zone, hour12) }));
+      toast(tr("{value} moved to {start}", { value: b.guest_name ?? tr("The booking"), start: clockText(start, zone, hour12) }));
       void qc.invalidateQueries({ queryKey: ["bk", "doc", b.id] });
     } catch (e) {
       for (const [key, data] of before) qc.setQueryData(key, data);
@@ -243,7 +243,7 @@ export function Schedule() {
   };
   const count = (lane: Lane) => {
     const n = placed.filter((b) => laneOf(b) === lane.id).length;
-    return n === 0 ? "Nothing booked" : tr("{n} booked", { n });
+    return n === 0 ? tr("Nothing booked") : tr("{n} booked", { n });
   };
 
   const heading = view === "week" ? `${dayText(days[0], { day: "numeric", month: "short" })} – ${dayText(days[6], { day: "numeric", month: "short", year: "numeric" })}` : dayText(date, { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -296,11 +296,11 @@ export function Schedule() {
         />
         {range.data && !placed.length && (
           <p className="bk-empty muted">
-            {tr("Nothing is booked")} {view === "week" ? tr("this week") : date === today ? tr("today") : tr("this day")}.
+            {view === "week" ? tr("Nothing is booked this week.") : date === today ? tr("Nothing is booked today.") : tr("Nothing is booked this day.")}
             {canCreate ? tr(" Press a time to book it.") : ""}
           </p>
         )}
-        <p className="bk-hint faint">{canWrite ? tr("Drag a booking to move it, or select it and press M, then the arrow keys.") : tr("Select a booking to see it.")} {tr("Shaded time is outside working hours; hatched is time off.")}</p>
+        <p className="bk-hint faint">{(canWrite ? tr("Drag a booking to move it, or select it and press M, then the arrow keys. Shaded time is outside working hours; hatched is time off.") : tr("Select a booking to see it. Shaded time is outside working hours; hatched is time off."))}</p>
       </div>
     );
   }
@@ -362,7 +362,7 @@ export function Schedule() {
             </div>
           )}
           {meta.data && by === "staff" && view === "day" && meta.data.staff.length > 1 && (
-            <Pop summary={chosen.length ? tr("{length} of {length2} people", { length: chosen.length, length2: everyone.length }) : "Everyone"}>
+            <Pop summary={chosen.length ? tr("{length} of {length2} people", { length: chosen.length, length2: everyone.length }) : tr("Everyone")}>
               <fieldset className="bk-checks">
                 <legend className="sr-only">{tr("People to show")}</legend>
                 {everyone.map((p) => (
