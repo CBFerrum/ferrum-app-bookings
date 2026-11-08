@@ -24,12 +24,12 @@ export function TimeOff({ meta, zone, day, mine, onClose, onSaved }: { meta: Met
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     const [a, b] = [hhmm(starts), hhmm(ends)];
-    if (!staff) return setError("Choose who is away.");
-    if (!allDay && (a === null || b === null)) return setError("Enter the times as hours and minutes.");
+    if (!staff) return setError(t("Choose who is away."));
+    if (!allDay && (a === null || b === null)) return setError(t("Enter the times as hours and minutes."));
     const fromAt = instantAt(zone, from, allDay ? 0 : a!);
     // A whole day runs to the next midnight, so the last day counts.
     const toAt = allDay ? instantAt(zone, addDays(to, 1), 0) : instantAt(zone, to, b!);
-    if (toAt <= fromAt) return setError("Time off must end after it starts.");
+    if (toAt <= fromAt) return setError(t("Time off must end after it starts."));
     setBusy(true);
     setError(null);
     try {
@@ -40,7 +40,7 @@ export function TimeOff({ meta, zone, day, mine, onClose, onSaved }: { meta: Met
         reason: reason.trim() || undefined,
       });
       const clashes = made.conflicting_bookings ?? 0;
-      toast(clashes ? t("Time blocked. {clashes} {value} inside it: move or cancel {value2}.", { clashes, value: clashes === 1 ? "booking falls" : "bookings fall", value2: clashes === 1 ? "it" : "them" }) : t("Time blocked"), clashes ? "info" : "success");
+      toast(clashes ? (clashes === 1 ? t("Time blocked. {clashes} {value} inside it: move or cancel it.", { clashes, value: clashes === 1 ? t("booking falls") : t("bookings fall") }) : t("Time blocked. {clashes} {value} inside it: move or cancel them.", { clashes, value: clashes === 1 ? t("booking falls") : t("bookings fall") })) : t("Time blocked"), clashes ? "info" : "success");
       onSaved(clashes);
     } catch (err) {
       setError(err instanceof ApiError && err.fields.length ? err.fields.map((f) => f.message).join(". ") : errorMessage(err));

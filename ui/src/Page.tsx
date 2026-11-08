@@ -8,7 +8,7 @@ import { Check, Copy, ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { api, bootstrap, errorMessage, routeBase, t, isolate } from "@ferrum/client";
-import { Badge, Button, EmptyState, ErrorState, PageLoading, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
+import { Badge, Button, EmptyState, ErrorState, PageLoading, toast, useLiveEntity, useShellTitle, placed } from "@ferrum/kit";
 import { type Doc, type EntityMeta, useEntityMeta, useRecord } from "@ferrum/records";
 import { rows } from "./data";
 import { Tabs } from "./Tabs";
@@ -194,7 +194,7 @@ function Settings({ meta, id }: { meta: EntityMeta; id: string }) {
             onChange={(v) => void save("public_page", v)}
           />
           {open && <Address doc={doc} services={active} />}
-          {open && active.length === 0 && <p className="muted">{t("No service can be booked yet.")} <Link to="/e/BookingService">{t("Set up a service")}</Link> {t("and the people who give it.")}</p>}
+          {open && active.length === 0 && <p className="muted">{placed(t("No service can be booked yet. {p1} and the people who give it."), { p1: <Link to="/e/BookingService">{t("Set up a service")}</Link> })}</p>}
         </div>
       </section>
 
@@ -202,7 +202,7 @@ function Settings({ meta, id }: { meta: EntityMeta; id: string }) {
         <div className="card-body stack">
           <h2 id="bk-rules">{t("How guests book")}</h2>
           <Switch id="bk-approve" label={t("Confirm online bookings myself")} hint={t("The time is held, and the booking waits as pending until someone confirms it.")} checked={doc.approval_required === true} disabled={!writable} onChange={(v) => void save("approval_required", v)} />
-          <Count id="bk-notice" label={t("Earliest a guest can book")} hint={t("Bookings and moves must start at least this long from now.")} value={num(doc.min_notice_minutes, 120)} min={0} max={525600} unit="minutes ahead" disabled={!writable} onSave={(n) => void save("min_notice_minutes", n)} />
+          <Count id="bk-notice" label={t("Earliest a guest can book")} hint={t("Bookings and moves must start at least this long from now.")} value={num(doc.min_notice_minutes, 120)} min={0} max={525600} unit={t("minutes ahead")} disabled={!writable} onSave={(n) => void save("min_notice_minutes", n)} />
           <Count id="bk-ahead" label={t("Furthest ahead")} hint={t("How many days ahead guests see times.")} value={num(doc.max_advance_days, 60)} min={1} max={730} unit="days" disabled={!writable} onSave={(n) => void save("max_advance_days", n)} />
           <Count id="bk-grid" label={t("A start time every")} hint={t("A service can have its own.")} value={num(doc.slot_interval_minutes, 30)} min={5} max={1440} unit="minutes" disabled={!writable} onSave={(n) => void save("slot_interval_minutes", n)} />
         </div>
@@ -211,8 +211,8 @@ function Settings({ meta, id }: { meta: EntityMeta; id: string }) {
       <section className="card" aria-labelledby="bk-changes">
         <div className="card-body stack">
           <h2 id="bk-changes">{t("When guests change their minds")}</h2>
-          <Count id="bk-cancel" label={t("Guests can cancel until")} hint={t("0 means until it starts.")} value={num(doc.cancellation_window_hours, 24)} min={0} max={8760} unit="hours before" disabled={!writable} onSave={(n) => void save("cancellation_window_hours", n)} />
-          <Count id="bk-move" label={t("Guests can move it until")} hint={t("0 means until it starts.")} value={num(doc.reschedule_window_hours, 24)} min={0} max={8760} unit="hours before" disabled={!writable} onSave={(n) => void save("reschedule_window_hours", n)} />
+          <Count id="bk-cancel" label={t("Guests can cancel until")} hint={t("0 means until it starts.")} value={num(doc.cancellation_window_hours, 24)} min={0} max={8760} unit={t("hours before")} disabled={!writable} onSave={(n) => void save("cancellation_window_hours", n)} />
+          <Count id="bk-move" label={t("Guests can move it until")} hint={t("0 means until it starts.")} value={num(doc.reschedule_window_hours, 24)} min={0} max={8760} unit={t("hours before")} disabled={!writable} onSave={(n) => void save("reschedule_window_hours", n)} />
           <Reminders doc={doc} save={save} writable={writable} />
         </div>
       </section>

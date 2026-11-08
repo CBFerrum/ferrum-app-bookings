@@ -48,7 +48,7 @@ export interface BoardProps {
   onLane: (lane: Lane) => void;
 }
 
-const statusNote = (b: Block) => (b.status === "Pending" ? "Pending" : b.status === "Completed" ? "Done" : b.status === "No Show" ? "No show" : "");
+const statusNote = (b: Block) => (b.status === "Pending" ? "Pending" : b.status === "Completed" ? "Done" : b.status === "No Show" ? tr("No show") : "");
 
 export function Board(p: BoardProps) {
   const { lanes, win } = p;

@@ -307,7 +307,7 @@ export function dropHint(moving: Block, start: number, others: Block[], work: Sp
 }
 
 export const dropText = (d: Drop): string =>
-  d.kind === "overlap" ? tr("Overlaps {with}", { with: d.with }) : d.kind === "hours" ? "Outside working hours" : d.kind === "off" ? "During time off" : "";
+  d.kind === "overlap" ? tr("Overlaps {with}", { with: d.with }) : d.kind === "hours" ? tr("Outside working hours") : d.kind === "off" ? tr("During time off") : "";
 
 /** The start a block lands on when it is held `grab` minutes below its top and let go at `y` minutes
  *  from the top of the window, on the quarter hour. */

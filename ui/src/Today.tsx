@@ -133,7 +133,7 @@ export function Today() {
     setBusy(`${b.id}${action}`);
     try {
       await act(b.id, action);
-      toast(action === "confirm" ? t("Confirmed {value}. They are told.", { value: b.guest_name ?? "the booking" }) : action === "complete" ? t("Marked as came") : t("Marked as a no show"));
+      toast(action === "confirm" ? t("Confirmed {value}. They are told.", { value: b.guest_name ?? t("the booking") }) : action === "complete" ? t("Marked as came") : t("Marked as a no show"));
       refresh();
     } catch (e) {
       toast(errorMessage(e), "error");
