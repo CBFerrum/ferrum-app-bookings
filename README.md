@@ -289,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.5.0** | A booking the staff member's outside calendar became busy over is marked, said to them and to the guest, and moved or kept. |
 | **0.4.18** | Its reports' names in Arabic and Hindi. |
 | **0.4.17** | Its names in Arabic and Hindi; the last English sentences translated. |
 | **0.4.16** | Sentences built in code are words too, in Arabic and Hindi. |

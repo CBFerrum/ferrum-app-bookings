@@ -209,6 +209,10 @@
     - {name: notice_version, type: int, default: 0, read_only: true, hidden: true, no_copy: true}
     - {name: notified_version, type: int, default: 0, read_only: true, hidden: true, no_copy: true}
     - {name: last_change, type: select, options: [Booked, Confirmed, Rescheduled, Cancelled, Promoted], read_only: true, hidden: true, no_copy: true}
+    - {name: outside_clash, type: check, read_only: true, no_copy: true, in_filter: true, label: Clashes With the Staff Calendar,
+       description: "The staff member's outside calendar became busy at this time after it was booked: reschedule it, or keep it"}
+    - {name: outside_clash_since, type: datetime, read_only: true, no_copy: true, label: Clash Found}
+    - {name: outside_clash_kept, type: datetime, read_only: true, no_copy: true, label: Kept Despite a Clash, description: "Not flagged again at this time"}
   indexes: [[staff, start_time], [service, start_time], [status, start_time]]
   rules:
     - {name: guest_or_customer, check: "doc.customer != null || (doc.guest_name != null && doc.guest_name != '')", message: "Choose a customer or enter the guest's name"}
@@ -222,6 +226,8 @@
       condition: "doc.status == 'Pending' || doc.status == 'Confirmed' || doc.status == 'Waitlisted'"
       params:
         - {name: reason, type: text, label: Reason, description: The guest sees it}
+    - {name: keep_despite_clash, label: Keep Despite the Clash, permission: write, condition: "doc.outside_clash",
+       confirm: "Keep this booking at its time, though the staff member's outside calendar is busy then?"}
     - {name: complete, label: Mark Completed, permission: write, condition: "doc.status == 'Confirmed'"}
     - {name: mark_no_show, label: Mark No Show, permission: write, condition: "doc.status == 'Confirmed' || doc.status == 'Pending'"}
     - {name: make_sales_invoice, label: Create Sales Invoice, permission: write, condition: "doc.status == 'Confirmed' || doc.status == 'Completed' || doc.status == 'No Show'"}
@@ -246,5 +252,5 @@
     - {label: Intake Answers, collapsible: true, fields: [answers]}
     - {label: Location, collapsible: true, fields: [location_type, location]}
     - {label: Billing, collapsible: true, fields: [company, item, rate, amount, sales_invoice]}
-    - {label: History, collapsible: true, fields: [cancellation_reason, scheduled_at, confirmed_at, cancelled_at, completed_at]}
-  list: {columns: [number, start_time, service_name, staff_name, guest_name, seats, status], sort: start_time desc}
+    - {label: History, collapsible: true, fields: [cancellation_reason, scheduled_at, confirmed_at, cancelled_at, completed_at, outside_clash, outside_clash_since, outside_clash_kept]}
+  list: {columns: [number, start_time, service_name, staff_name, guest_name, seats, status, outside_clash], sort: start_time desc}

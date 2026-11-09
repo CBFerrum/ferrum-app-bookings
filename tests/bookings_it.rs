@@ -1151,6 +1151,54 @@ async fn scenario() {
     assert!(t.k.insert(&manager, "Booking", obj(session_with(&leaving, on(6, 11)))).await.is_err(), "no more bookings");
     assert_eq!(t.get("Booking", uid(&kept)).await["status"], json!("Confirmed"), "what a guest was promised stays, for a person to move");
 
+    // ───────────── her calendar elsewhere becomes busy at a booked time (FEO-032) ─────────────
+    // Lou's booking is marked, Asha is told, and Lou's page says it may need another time. Moved, nothing
+    // is left to resolve; busy at the new time too, it is marked again; kept, it is not marked again.
+    t.update(&manager, "BookingSettings", settings_id, json!({"public_page": true})).await;
+    let week_on = d + Duration::days(7);
+    let open = times_for(&t.get_pub(&slots_path(massage_id, week_on, week_on, "Asia/Kolkata")).await, &sid(&asha));
+    let (first, last) = (open.first().cloned().expect("Asha is free that day"), open.last().cloned().unwrap());
+    let lou = t.book(massage_body("Lou Gray", at(week_on, &first), Some(&sid(&asha)))).await.unwrap();
+    let lou_token = lou["token"].as_str().unwrap().to_string();
+    let lou_id = uid(&t.find_one("Booking", json!({"guest_email": "lou@example.test"})).await);
+    let busy_at = |hhmm: &str| {
+        let busy = event("elsewhere", at(week_on, hhmm), at(week_on, hhmm) + Duration::hours(1), "");
+        format!("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//elsewhere//EN\r\n{busy}END:VCALENDAR\r\n")
+    };
+    *calendar.lock().unwrap() = (200, busy_at(&first));
+    t.update(&manager, "BookingStaff", asha_id, json!({"outside_calendar": url.clone()})).await;
+    let later = Utc::now();
+    t.maintain(later + Duration::hours(1)).await;
+    assert_eq!(t.get("Booking", lou_id).await["outside_clash"], json!(true), "marked");
+    let told = "select count(*) from notification where tenant_id = $1 and user_id = $2 and title like 'Clashes with your calendar%'";
+    assert_eq!(t.scalar(told, Some(asha_user.user)).await, 1, "Asha is told");
+    let view = t.get_pub(&format!("/manage/{lou_token}")).await;
+    assert_eq!((view["booking"]["clash"].clone(), view["booking"]["can_reschedule"].clone()), (json!(true), json!(true)), "{view}");
+    // Free again elsewhere, the mark goes; busy again, it comes back.
+    *calendar.lock().unwrap() = (200, "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//elsewhere//EN\r\nEND:VCALENDAR\r\n".to_string());
+    t.maintain(later + Duration::minutes(80)).await;
+    assert_eq!(t.get("Booking", lou_id).await["outside_clash"], json!(false), "the calendar is free again");
+    *calendar.lock().unwrap() = (200, busy_at(&first));
+    t.maintain(later + Duration::minutes(100)).await;
+    assert_eq!(t.get("Booking", lou_id).await["outside_clash"], json!(true));
+    assert_eq!(t.scalar(told, Some(asha_user.user)).await, 2);
+    t.post_pub(&format!("/manage/{lou_token}/reschedule"), json!({"start_time": rfc(at(week_on, &last))})).await.unwrap();
+    assert_eq!(t.get("Booking", lou_id).await["outside_clash"], json!(false), "moved to a free time");
+    assert_eq!(t.get_pub(&format!("/manage/{lou_token}")).await["booking"]["clash"], json!(false));
+    *calendar.lock().unwrap() = (200, busy_at(&last));
+    t.maintain(later + Duration::hours(2)).await;
+    assert_eq!(t.get("Booking", lou_id).await["outside_clash"], json!(true), "the new time clashes");
+    assert_eq!(t.scalar(told, Some(asha_user.user)).await, 3);
+    t.act(&manager, "Booking", lou_id, "keep_despite_clash", json!({})).await;
+    let kept = t.get("Booking", lou_id).await;
+    assert!(kept["outside_clash"] == json!(false) && kept["outside_clash_kept"].is_string(), "{kept:?}");
+    t.maintain(later + Duration::hours(3)).await;
+    assert_eq!(t.get("Booking", lou_id).await["outside_clash"], json!(false), "kept stays kept");
+    assert_eq!(t.scalar(told, Some(asha_user.user)).await, 3, "and Asha is not told again");
+    assert!(t.k.run_action(&manager, "Booking", lou_id, "keep_despite_clash", json!({})).await.is_err(), "nothing to keep");
+    t.update(&manager, "BookingStaff", asha_id, json!({"outside_calendar": null})).await;
+    t.update(&manager, "BookingSettings", settings_id, json!({"public_page": false})).await;
+
     // Writes are throttled per address and workspace, counted in the database for every replica.
     let cancel = |ip: &'static str| site_call(&t.k, &t.site, t.tenant, "POST", "/manage/no-such-link/cancel", Some(json!({})), ip);
     for _ in 0..30 {
