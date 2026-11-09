@@ -282,6 +282,7 @@ pub(crate) async fn read_due(k: &Kernel, tenant: Uuid, schema: Arc<Schema>, now:
                 .bind(&ends)
                 .execute(&mut *tx)
                 .await?;
+                clashes(k, &ctx, &mut tx, staff, now).await?;
                 v.insert("outside_calendar_read".into(), json!(crate::ts(now)));
                 let problem = (b.unread > 0).then(|| format!("{} event{} could not be read", b.unread, if b.unread == 1 { "" } else { "s" }));
                 v.insert("outside_calendar_error".into(), json!(problem));
@@ -295,6 +296,37 @@ pub(crate) async fn read_due(k: &Kernel, tenant: Uuid, schema: Arc<Schema>, now:
         tx.commit().await?;
     }
     Ok(read)
+}
+
+/// Marks the staff member's coming bookings that their outside calendar is now busy over, and
+/// clears those it no longer is (FEO-032). A booking kept despite a clash is not marked again at its
+/// time; moved, it is checked again. The staff member is told of each one newly marked, and the
+/// guest's page says it may need another time.
+async fn clashes(k: &Kernel, ctx: &Ctx, tx: &mut ferrum_kernel::Tx, staff: Uuid, now: Instant) -> Result<()> {
+    let coming: Vec<(Uuid, bool, Option<Instant>, Option<Instant>, bool)> = sqlx::query_as(
+        "select b.id, coalesce(b.outside_clash, false), b.outside_clash_kept, b.scheduled_at, exists (select 1 from bookings_outside_busy o \
+         where o.tenant_id = b.tenant_id and o.staff = b.staff and o.from_time < b.end_time and o.to_time > b.start_time) \
+         from e_booking b where b.tenant_id = $1 and b.staff = $2 and b.status in ('Pending', 'Confirmed') and b.start_time > $3",
+    )
+    .bind(ctx.tenant)
+    .bind(staff)
+    .bind(now)
+    .fetch_all(&mut **tx)
+    .await?;
+    for (booking, marked, kept, scheduled, busy) in coming {
+        let kept_here = kept.is_some_and(|k| scheduled.is_none_or(|s| k >= s));
+        let v = match (busy, marked) {
+            (true, false) if !kept_here => json!({"outside_clash": true, "outside_clash_since": crate::ts(now)}),
+            (false, true) => json!({"outside_clash": false, "outside_clash_since": null}),
+            _ => continue,
+        };
+        k.set_values_tx(ctx, tx, "Booking", booking, v.as_object().cloned().unwrap_or_default()).await?;
+        if busy {
+            let b = k.get_tx(ctx, tx, "Booking", booking, false).await?;
+            crate::notify::tell_staff(tx, ctx.tenant, &b, crate::notify::StaffNote::Clash).await?;
+        }
+    }
+    Ok(())
 }
 
 /// The calendar's text. Errors never repeat the address: it is a secret that opens the calendar.
