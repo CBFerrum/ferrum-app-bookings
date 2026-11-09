@@ -355,6 +355,12 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
           </dl>
         </div>
 
+        {active && b.clash && (
+          <p className="gb-windows" role="status">
+            {t("Your host is no longer free at this time.")}{" "}
+            {b.can_reschedule ? t("You can choose another time.") : t("The business will be in touch about another time.")}
+          </p>
+        )}
         {(active || b.status === "Waitlisted") && (
           <div className="gb-actions">
             {active && <AddToCalendar tenant={tenant} token={token} b={b} hour12={hour12} />}

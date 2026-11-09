@@ -203,6 +203,15 @@ async fn schedule_new(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
 }
 
 /// Writes `patch` to the booking with engine rights; `notify` bumps the notice version.
+/// The booking stands at its time though the staff member's outside calendar is busy then (FEO-032):
+/// it is not marked again there, and is checked again once moved.
+async fn keep_despite_clash(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc) -> Result<Doc> {
+    if !booking.get("outside_clash").and_then(Value::as_bool).unwrap_or(false) {
+        return Err(Error::invalid("this booking does not clash with the staff member's calendar"));
+    }
+    update(k, ctx, tx, booking, obj(json!({"outside_clash": false, "outside_clash_kept": ts(chrono::Utc::now())})), false).await
+}
+
 async fn update(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, mut patch: Doc, notify: bool) -> Result<Doc> {
     if notify {
         patch.insert("notice_version".into(), json!(int(booking, "notice_version") + 1));
@@ -290,6 +299,9 @@ pub async fn reschedule(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, m: &M
         "amount": money(d(booking, "rate") * rust_decimal::Decimal::from(seats)),
         "scheduled_at": ts(now),
         "last_change": "Rescheduled",
+        // A time the staff member is free at, outside calendar and all.
+        "outside_clash": false,
+        "outside_clash_since": null,
     })));
     let out = update(k, ctx, tx, booking, patch, true).await?;
     if svc.group()
@@ -520,6 +532,7 @@ impl DocHook for BookingHook {
             "reschedule" => reschedule(hc.kernel, &engine, hc.tx, doc, &parse_move(params)?, false).await?,
             "cancel_booking" => cancel(hc.kernel, &engine, hc.tx, doc, params.get("reason").and_then(Value::as_str), false).await?,
             "complete" => finish(hc.kernel, &engine, hc.tx, doc, "Completed").await?,
+            "keep_despite_clash" => keep_despite_clash(hc.kernel, &engine, hc.tx, doc).await?,
             "mark_no_show" => finish(hc.kernel, &engine, hc.tx, doc, "No Show").await?,
             "make_sales_invoice" => return Ok(Some(invoice(hc, doc).await?)),
             "guest_link" => return Ok(Some(guest_link(hc, doc).await?)),
