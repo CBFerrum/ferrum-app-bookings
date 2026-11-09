@@ -40,6 +40,8 @@ pub enum StaffNote {
     Rescheduled,
     Cancelled,
     SeatFilled,
+    /// Their outside calendar became busy at a booking's time after it was booked (FEO-032).
+    Clash,
 }
 
 /// The messages for a change notice, from the booking's current state and whether anything was
@@ -227,7 +229,7 @@ async fn email_guest(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, kind: Guest, s
 }
 
 /// Tells the staff member in-app — unless they made the change themselves.
-async fn tell_staff(tx: &mut Tx, tenant: Uuid, b: &Doc, note: StaffNote) -> Result<bool> {
+pub(crate) async fn tell_staff(tx: &mut Tx, tenant: Uuid, b: &Doc, note: StaffNote) -> Result<bool> {
     let Some(email) = s(b, "staff_email") else { return Ok(false) };
     let user: Option<Uuid> = sqlx::query_scalar("select id from app_user where tenant_id = $1 and lower(email::text) = lower($2) and is_active")
         .bind(tenant)
@@ -257,12 +259,16 @@ async fn tell_staff(tx: &mut Tx, tenant: Uuid, b: &Doc, note: StaffNote) -> Resu
         StaffNote::Rescheduled => format!("Booking moved: {service} with {guest}"),
         StaffNote::Cancelled => format!("Booking cancelled: {service} with {guest}"),
         StaffNote::SeatFilled => format!("Waitlist seat filled: {service} with {guest}"),
+        StaffNote::Clash => format!("Clashes with your calendar: {service} with {guest}"),
     };
     let mut body = format!("{at} · {}", s(b, "number").unwrap_or_default());
     if note == StaffNote::Cancelled
         && let Some(reason) = s(b, "cancellation_reason")
     {
         body.push_str(&format!(" · {reason}"));
+    }
+    if note == StaffNote::Clash {
+        body.push_str(" · your outside calendar is busy then: reschedule it, or keep it");
     }
     ferrum_kernel::notify::send(tx, tenant, user, &title, Some(&body), Some("Booking"), id(b, "id")).await?;
     Ok(true)

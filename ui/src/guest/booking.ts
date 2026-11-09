@@ -78,6 +78,8 @@ export interface GuestBooking {
   can_cancel: boolean;
   cancel_until?: string | null;
   can_reschedule: boolean;
+  /** The staff member's outside calendar became busy at this time, and nobody has kept it. */
+  clash?: boolean;
   reschedule_until?: string | null;
 }
 

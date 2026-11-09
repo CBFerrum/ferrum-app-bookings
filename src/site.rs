@@ -427,6 +427,8 @@ async fn guest_view(ctx: &Ctx, tx: &mut Tx, b: &Doc, st: &Settings, root: &str, 
         "can_cancel": status == "Waitlisted" || (active && now <= cancel_until),
         "cancel_until": active.then(|| ts(cancel_until)),
         "can_reschedule": active && now <= move_until,
+        // The staff member's outside calendar became busy then, and nobody has kept it (FEO-032).
+        "clash": active && b.get("outside_clash").and_then(Value::as_bool).unwrap_or(false),
         "reschedule_until": active.then(|| ts(move_until)),
         "links": {"manage": st.manage_link(root, tok), "ics": st.absolute(&format!("{root}/manage/{tok}/booking.ics"))},
         // With Booking Deposits: the deposit asked for, and where to pay it while it is due.

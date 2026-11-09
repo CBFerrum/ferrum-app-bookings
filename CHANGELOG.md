@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0
+
+A booking whose staff member's outside calendar becomes busy at its time after it was booked is marked **Clashes With the Staff Calendar** (FEO-032):
+- The staff member is told in-app.
+- The guest's page says their host is no longer free then, and offers another time where the booking can still be moved.
+- Moved to a free time, the mark goes; the calendar free again, it goes too.
+- Keep Despite the Clash leaves the booking at its time, and it is not marked again there; moved, it is checked again.
+
+What stays as it was:
+- A guest repeats a booking from the page only for a free service.
+- A series a person repeats is the business's bookings at the guest's request: invoiced, without a deposit per date.
+- A no-show keeps its deposit, and only a cancellation settles one.
+
+Rebuilt with Ferrum-Frontend 9f5a466, with the new fields and words in Arabic and Hindi.
+
 ## 0.4.18
 
 The reports it defines in code (their titles and parameters) have names in Arabic and Hindi too, with its models' and manifest's (250 each in ui/src/locales/names). Translated by the model, to be reviewed by native speakers.
