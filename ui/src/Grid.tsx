@@ -201,7 +201,7 @@ export function Board(p: BoardProps) {
   return (
     <div className="bk-board">
       <div className="bk-scroll" ref={scroller} tabIndex={-1}>
-        <div className="bk-grid" style={{ gridTemplateColumns: `3.5rem repeat(${lanes.length}, minmax(9.5rem, 1fr))` }} data-dragging={drag?.source}>
+        <div className="bk-grid" style={{ gridTemplateColumns: `4.5rem repeat(${lanes.length}, minmax(9.5rem, 1fr))` }} data-dragging={drag?.source}>
           <div className="bk-corner" />
           {lanes.map((l) => (
             <button key={l.id} type="button" className="bk-lane-head" data-today={(p.now >= l.start && p.now < l.end) || undefined} onClick={() => p.onLane(l)}>

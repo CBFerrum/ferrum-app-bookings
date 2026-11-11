@@ -9,11 +9,12 @@ import { Mail, MapPin, Phone, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { api, docPath, errorMessage, formatMoment, t, isolate } from "@ferrum/client";
-import { Alert, Badge, Button, confirmDialog, Dialog, ErrorState, Field, Menu, MenuItem, Spinner, TabPanel, Tabs, toast } from "@ferrum/kit";
+import { Alert, Badge, Button, confirmDialog, Dialog, Field, Menu, MenuItem, Spinner, TabPanel, Tabs, toast } from "@ferrum/kit";
 import { type Bk, nextSteps, type Step, tone } from "./board";
 import { act } from "./data";
 import { priceText } from "./guest/booking";
 import { Reschedule } from "./Reschedule";
+import { Failed, Loading } from "./states";
 import { clockText, dayOf, dayText } from "./zone";
 
 type Full = Bk & { answers?: { question: string; answer: string }[]; guest_time_zone?: string | null };
@@ -264,11 +265,9 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
         </button>
       </header>
       {q.error ? (
-        <ErrorState error={q.error} onRetry={() => void q.refetch()} title={t("We could not open this booking")} />
+        <Failed error={q.error} onRetry={() => void q.refetch()} title={t("We could not open this booking")} />
       ) : !b ? (
-        <div className="bk-center">
-          <Spinner label={t("Loading the booking")} />
-        </div>
+        <Loading title={t("Loading the booking")} />
       ) : (
         <>
           <Tabs
