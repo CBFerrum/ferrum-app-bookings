@@ -5,7 +5,8 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { EmptyState, ErrorState, Icon } from "@ferrum/kit";
+import { Icon } from "@ferrum/kit";
+import { Failed, Nothing } from "../states";
 import { addDays, addMonths, clockText, dayText, firstWeekday, monthEnd, monthOf, monthWeeks } from "../zone";
 import { firstDay, openDays, type Slot, type Slots } from "./booking";
 import { t, isolate } from "@ferrum/client";
@@ -220,7 +221,7 @@ export function Picker(p: PickerProps) {
   const here = p.day && monthOf(p.day) === month ? p.day : null;
   const slots = here ? open.get(here) : undefined;
 
-  if (q.error) return <ErrorState error={q.error} onRetry={() => void q.refetch()} title={t("We could not load the times")} />;
+  if (q.error) return <Failed error={q.error} onRetry={() => void q.refetch()} title={t("We could not load the times")} />;
   return (
     <div className="gb-picker">
       <MonthGrid
@@ -251,13 +252,9 @@ export function Picker(p: PickerProps) {
         ) : here && slots ? (
           <Times day={here} slots={slots} zone={p.zone} hour12={p.hour12} at={p.at} showSeats={p.showSeats} onPick={p.onPick} />
         ) : nothingAhead ? (
-          <EmptyState title={t("No times free right now")} icon="calendar">
-            <p className="muted">{t("There is nothing open in the coming months. Try again soon, or get in touch with us.")}</p>
-          </EmptyState>
+          <Nothing title={t("No times free right now")}>{t("There is nothing open in the coming months. Try again soon, or get in touch with us.")}</Nothing>
         ) : here ? (
-          <EmptyState title={t("Nothing free that day")} icon="calendar">
-            <p className="muted">{t("Choose another day. Days with times are in bold.")}</p>
-          </EmptyState>
+          <Nothing title={t("Nothing free that day")}>{t("Choose another day. Days with times are in bold.")}</Nothing>
         ) : (
           <p className="muted gb-looking">{open.size ? t("Pick a day to see its times.") : t("Looking for the first free day…")}</p>
         )}

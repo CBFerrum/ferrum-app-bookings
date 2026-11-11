@@ -9,7 +9,7 @@ import { CalendarOff, ChevronLeft, ChevronRight, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { errorMessage, t as tr, isolate } from "@ferrum/client";
-import { Alert, Badge, Button, EmptyState, ErrorState, PageLoading, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
+import { Alert, Badge, Button, StatePanel, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, useEntityMeta, useMe } from "@ferrum/records";
 import { Board } from "./Grid";
 import { type Bk, blocks as makeBlocks, type Block, dropHint, type Lane, makeLane, tone, viewWindow } from "./board";
@@ -17,6 +17,7 @@ import { act, LIMIT, loadMeta, loadRange, loadWaiting, type Range } from "./data
 import { NewBooking, type Start } from "./NewBooking";
 import { Pop } from "./Pop";
 import { BookingSheet, refreshBookings, SessionSheet } from "./Sheet";
+import { Failed, Loading, Nothing } from "./states";
 import { Tabs } from "./Tabs";
 import { TimeOff } from "./TimeOff";
 import { addDays, browserZone, clockText, dayBounds, dayOf, dayText, firstWeekday, isDate, prefers12Hour, weekStart } from "./zone";
@@ -251,23 +252,33 @@ export function Schedule() {
   const pendingCount = (waiting.data ?? []).filter((b) => b.status === "Pending").length;
 
   let body;
-  if (meta.error) body = <ErrorState error={meta.error} onRetry={() => void meta.refetch()} title={tr("We could not load the schedule")} />;
-  else if (!meta.data) body = <PageLoading label={tr("Loading the schedule…")} />;
+  if (meta.error) body = <Failed error={meta.error} onRetry={() => void meta.refetch()} title={tr("We could not load the schedule")} />;
+  else if (!meta.data) body = <Loading title={tr("Loading the schedule…")} />;
   else if (!meta.data.staff.length) {
     body = (
-      <EmptyState title={tr("No one to book yet")} icon="calendar">
-        <p className="muted">{tr("Add the people guests book, with the hours they work, and they appear here.")}</p>
-        <Link className="btn btn-primary btn-md" to="/e/BookingStaff/new">
-          {tr("Add a staff member")}
-        </Link>
-      </EmptyState>
+      <Nothing
+        title={tr("No one to book yet")}
+        action={
+          <Link className="btn btn-primary btn-md" to="/e/BookingStaff/new">
+            {tr("Add a staff member")}
+          </Link>
+        }
+      >
+        {tr("Add the people guests book, with the hours they work, and they appear here.")}
+      </Nothing>
     );
-  } else if (range.error && !range.data) body = <ErrorState error={range.error} onRetry={() => void range.refetch()} title={tr("We could not load the bookings")} />;
+  } else if (range.error && !range.data) body = <Failed error={range.error} onRetry={() => void range.refetch()} title={tr("We could not load the bookings")} />;
   else if (!lanes.length) {
     body = (
-      <EmptyState title={by === "room" ? tr("No rooms yet") : tr("No one is selected")} icon="calendar">
-        <p className="muted">{by === "room" ? tr("Rooms and equipment that services need are set up in Resources.") : tr("Choose who to show in People.")}</p>
-      </EmptyState>
+      by === "staff" && chosen.length ? (
+        <StatePanel kind="no-matches" title={tr("No one is selected")} onClear={() => set({ staff: null })} clearLabel={tr("Show everyone")}>
+          {tr("Choose who to show in People.")}
+        </StatePanel>
+      ) : (
+        <Nothing title={by === "room" ? tr("No rooms yet") : tr("No one is selected")}>
+          {by === "room" ? tr("Rooms and equipment that services need are set up in Resources.") : tr("Choose who to show in People.")}
+        </Nothing>
+      )
     );
   } else {
     body = (

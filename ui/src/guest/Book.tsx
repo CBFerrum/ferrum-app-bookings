@@ -6,11 +6,12 @@
 // A booking ends on its manage page, where the guest can add it to a calendar, move it or cancel it.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, ChevronLeft, Clock, Globe, MapPin, Users } from "lucide-react";
+import { Banknote, ChevronLeft, CircleCheck, Clock, Globe, MapPin, Users } from "lucide-react";
 import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 import { ApiError, bootstrap, t, isolate } from "@ferrum/client";
-import { Alert, Button, EmptyState, Field, useShellTitle } from "@ferrum/kit";
+import { Alert, Button, Field, StatePanel, useShellTitle } from "@ferrum/kit";
+import { Nothing } from "../states";
 import { dayOf, isDate, whenText, zoneList, zoneText } from "../zone";
 import { type Catalog, check, bookBody, durationText, type Form, hasErrors, isTaken, noErrors, priceText, type Question, type Service, serverErrors, whereText } from "./booking";
 import { ClockSwitch, Closed, Frame, Loading, useDisplay } from "./Frame";
@@ -161,9 +162,7 @@ function Booker({ tenant }: { tenant: string }) {
   if (!catalog.services.length) {
     return (
       <Frame>
-        <EmptyState title={t("Nothing to book yet")} icon="calendar">
-          <p className="muted">{t("There are no appointments open for booking at the moment. Please check back soon.")}</p>
-        </EmptyState>
+        <Nothing title={t("Nothing to book yet")}>{t("There are no appointments open for booking at the moment. Please check back soon.")}</Nothing>
       </Frame>
     );
   }
@@ -348,9 +347,9 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
 
   if (received) {
     return (
-      <EmptyState title={t("Thank you")} icon="check">
-        <p className="muted">{t("We have your request.")}</p>
-      </EmptyState>
+      <StatePanel kind="empty" title={t("Thank you")} icon={CircleCheck}>
+        {t("We have your request.")}
+      </StatePanel>
     );
   }
   const err = (k: "name" | "email" | "phone" | "notes") => errors[k];

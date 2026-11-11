@@ -8,11 +8,12 @@ import { Plus } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { errorMessage, t, isolate } from "@ferrum/client";
-import { Badge, Button, EmptyState, ErrorState, PageLoading, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
+import { Badge, Button, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, useEntityMeta, useMe } from "@ferrum/records";
 import { type Bk, blocks as makeBlocks, type Block, inOrder, nextSteps, tone } from "./board";
 import { act, loadMeta, loadRange, loadWaiting } from "./data";
 import { BookingSheet, refreshBookings } from "./Sheet";
+import { Failed, Loading, Nothing } from "./states";
 import { Tabs } from "./Tabs";
 import { browserZone, clockText, dayBounds, dayOf, dayText, prefers12Hour } from "./zone";
 
@@ -190,14 +191,13 @@ export function Today() {
       <div className="bk-layout" data-sheet={openId ? "open" : undefined}>
         <div className="bk-main">
           {meta.error || day.error ? (
-            <ErrorState error={meta.error ?? day.error} onRetry={() => { void meta.refetch(); void day.refetch(); }} title={t("We could not load today")} />
+            <Failed error={meta.error ?? day.error} onRetry={() => { void meta.refetch(); void day.refetch(); }} title={t("We could not load today")} />
           ) : loading ? (
-            <PageLoading label={t("Loading today…")} />
+            <Loading title={t("Loading today…")} />
           ) : nothing ? (
-            <EmptyState title={mine ? t("Nothing booked for you today") : t("Nothing booked today")} icon="calendar">
-              <p className="muted">{t("When guests book, or you book for them, it shows here in the order it happens.")}</p>
-              <Link to="/">{t("Open the schedule")}</Link>
-            </EmptyState>
+            <Nothing title={mine ? t("Nothing booked for you today") : t("Nothing booked today")} action={<Link to="/">{t("Open the schedule")}</Link>}>
+              {t("When guests book, or you book for them, it shows here in the order it happens.")}
+            </Nothing>
           ) : (
             <div className="bk-lists">
               {asks.length > 0 && (

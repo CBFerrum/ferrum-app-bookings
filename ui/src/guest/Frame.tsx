@@ -4,7 +4,9 @@
 import { type ReactNode, useCallback, useState } from "react";
 import { Link } from "react-router";
 import { ApiError, bootstrap, t, isolate } from "@ferrum/client";
-import { EmptyState, ErrorState, Spinner } from "@ferrum/kit";
+import { CalendarDays } from "lucide-react";
+import { StatePanel } from "@ferrum/kit";
+import { Failed } from "../states";
 import { browserZone, isZone, prefers12Hour } from "../zone";
 
 export function Frame({ children, wide }: { children: ReactNode; wide?: boolean }) {
@@ -25,12 +27,7 @@ export function Frame({ children, wide }: { children: ReactNode; wide?: boolean 
 }
 
 export function Loading({ label }: { label: string }) {
-  return (
-    <div className="gb-loading" role="status">
-      <Spinner />
-      <span className="muted">{isolate(label)}</span>
-    </div>
-  );
+  return <StatePanel kind="loading" title={isolate(label)} />;
 }
 
 /** A page that does not work: the address is wrong, the page is closed, or the link has run out
@@ -38,21 +35,27 @@ export function Loading({ label }: { label: string }) {
 export function Closed({ error, what, home, onRetry }: { error: unknown; what: "page" | "link"; home?: string; onRetry?: () => void }) {
   if (error instanceof ApiError && error.status === 404) {
     return what === "page" ? (
-      <EmptyState title={t("This booking page is not open")} icon="calendar">
-        <p className="muted">{t("It may be switched off for now, or the address is not quite right. Please get in touch with the business directly.")}</p>
-      </EmptyState>
+      <StatePanel kind="empty" title={t("This booking page is not open")} icon={CalendarDays}>
+        {t("It may be switched off for now, or the address is not quite right. Please get in touch with the business directly.")}
+      </StatePanel>
     ) : (
-      <EmptyState title={t("This link does not work")} icon="calendar">
-        <p className="muted">{t("Booking links stop working a month after the appointment, and only open the booking they were made for. Check the link in your confirmation email, or get in touch with the business.")}</p>
-        {home && (
-          <Link to={home} className="btn btn-primary btn-md">
-            {t("Book an appointment")}
-          </Link>
-        )}
-      </EmptyState>
+      <StatePanel
+        kind="empty"
+        title={t("This link does not work")}
+        icon={CalendarDays}
+        action={
+          home && (
+            <Link to={home} className="btn btn-primary btn-md">
+              {t("Book an appointment")}
+            </Link>
+          )
+        }
+      >
+        {t("Booking links stop working a month after the appointment, and only open the booking they were made for. Check the link in your confirmation email, or get in touch with the business.")}
+      </StatePanel>
     );
   }
-  return <ErrorState error={error} onRetry={onRetry} title={t("We could not load this page")} />;
+  return <Failed error={error} onRetry={onRetry} title={t("We could not load this page")} />;
 }
 
 /** A setting the guest chose, kept in this browser (and quietly forgotten where storage is off). */
