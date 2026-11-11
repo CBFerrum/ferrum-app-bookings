@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+The interface follows the upgraded design system, rebuilt with Ferrum-Frontend 0a47157. Text uses the kit's type roles (nothing under 12px) and controls its height tokens; loading shows skeletons shaped like what is coming; empty, no matches, denied, offline and failed are told apart; status colours come from stored state ids. The interface check now runs the UI lint against an empty baseline. The schedule's hour labels no longer wrap.
+
 ## 0.5.0
 
 A booking whose staff member's outside calendar becomes busy at its time after it was booked is marked **Clashes With the Staff Calendar** (FEO-032):

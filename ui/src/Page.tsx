@@ -8,9 +8,10 @@ import { Check, Copy, ExternalLink } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
 import { api, bootstrap, errorMessage, routeBase, t, isolate } from "@ferrum/client";
-import { Badge, Button, EmptyState, ErrorState, PageLoading, toast, useLiveEntity, useShellTitle, placed } from "@ferrum/kit";
+import { Badge, Button, toast, useLiveEntity, useShellTitle, placed } from "@ferrum/kit";
 import { type Doc, type EntityMeta, useEntityMeta, useRecord } from "@ferrum/records";
 import { rows } from "./data";
+import { Failed, Loading, Nothing } from "./states";
 import { Tabs } from "./Tabs";
 
 type Save = (name: string, value: unknown) => Promise<void>;
@@ -171,8 +172,8 @@ function Settings({ meta, id }: { meta: EntityMeta; id: string }) {
   useLiveEntity("BookingSettings", useCallback(() => void qc.invalidateQueries({ queryKey: ["peek", "BookingSettings", id] }), [qc, id]));
   const services = useQuery({ queryKey: ["bk", "service-names"], queryFn: () => rows<{ id: string; service_name: string; active?: boolean }>("BookingService", { fields: "service_name,active", sort: "service_name asc", limit: 200 }) });
   const doc = record.data;
-  if (record.error) return <ErrorState error={record.error} onRetry={() => void record.refetch()} />;
-  if (!doc) return <PageLoading />;
+  if (record.error) return <Failed error={record.error} onRetry={() => void record.refetch()} />;
+  if (!doc) return <Loading />;
   const writable = meta.permissions.write !== "none";
   const num = (v: unknown, fallback: number) => (typeof v === "number" ? v : fallback);
   const open = doc.public_page === true;
@@ -272,18 +273,22 @@ export function BookingPage() {
         </div>
       </header>
       {meta.error || found.error ? (
-        <ErrorState error={meta.error ?? found.error} onRetry={() => { void meta.refetch(); void found.refetch(); }} />
+        <Failed error={meta.error ?? found.error} onRetry={() => { void meta.refetch(); void found.refetch(); }} />
       ) : !meta.data || !found.data ? (
-        <PageLoading />
+        <Loading />
       ) : !id ? (
-        <EmptyState title={t("The booking page is not set up yet")} icon="calendar">
-          <p className="muted">{t("Start with the defaults: guests cannot book online until you open the page.")}</p>
-          {meta.data.permissions.create !== "none" && (
-            <Button variant="primary" loading={starting} onClick={() => void start()}>
-              {t("Set up the booking page")}
-            </Button>
-          )}
-        </EmptyState>
+        <Nothing
+          title={t("The booking page is not set up yet")}
+          action={
+            meta.data.permissions.create !== "none" && (
+              <Button variant="primary" loading={starting} onClick={() => void start()}>
+                {t("Set up the booking page")}
+              </Button>
+            )
+          }
+        >
+          {t("Start with the defaults: guests cannot book online until you open the page.")}
+        </Nothing>
       ) : (
         <Settings meta={meta.data} id={id} />
       )}
