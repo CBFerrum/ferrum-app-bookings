@@ -1,8 +1,12 @@
 # Changelog
 
-## 0.6.1
+## 0.6.2
 
 The interface knows what 0.6.0 added. A booking whose time a working calendar closed shows a warning mark, **Outside opening hours**, with what to do (move it, or confirm with the guest): on the schedule's block, on Today, on a pending booking waiting for an answer and at the top of its sheet. **Expired** is muted like Cancelled, holds no block on the schedule, and a guest opening it is told it expired and why. The new fields' and options' names (working calendars, per-service rules, the unpaid-deposit hold, Expired, Restored, Refunded) are in Arabic and Hindi too. Rebuilt with Ferrum-Frontend 0a47157.
+
+## 0.6.1
+
+Rebuilt with Ferrum-Frontend 45dad7f, the design system as tuned after the landed build was reviewed. The left menu's icons are chosen so that none repeats on more than three rows and each fits its row; their drawings load beside the first page instead of inside it, so the page starts lighter; a row that scrolls sideways fades at the edge where there is more, in every browser and with reduced motion; a printed record leaves out empty fields and keeps its totals with the table; menus and popovers sit inside the page's landmarks for assistive technology; a selection bar folds what does not fit into More on a narrow screen. Nothing else changes.
 
 ## 0.6.0
 
