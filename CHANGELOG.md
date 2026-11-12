@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+Rebuilt with Ferrum-Frontend 45dad7f, the design system as tuned after the landed build was reviewed. The left menu's icons are chosen so that none repeats on more than three rows and each fits its row; their drawings load beside the first page instead of inside it, so the page starts lighter; a row that scrolls sideways fades at the edge where there is more, in every browser and with reduced motion; a printed record leaves out empty fields and keeps its totals with the table; menus and popovers sit inside the page's landmarks for assistive technology; a selection bar folds what does not fit into More on a narrow screen. Nothing else changes.
+
 ## 0.6.0
 
 - **Working calendars.** A staff member, a resource and Booking Settings may name a working calendar from Admin, Calendars. A staff member is then bookable in that calendar's open time (inside the business calendar's, when one is set), so a holiday entered once closes every service; a resource only in its calendar's. Booking Settings keeps **Closed and Extra Open Dates** per calendar (empty: the whole business), for a one-off closure or an extra open Saturday. Staff without a calendar keep their weekly hours as before. A booking whose time a calendar later closed stays and is marked **Outside Opening Hours**.
