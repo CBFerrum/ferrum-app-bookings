@@ -1701,3 +1701,70 @@ async fn unpaid_deposits() {
         assert_eq!(dec_of(&f["bpay_kept"]), "0", "Fay paid but lost the time: refunded");
     }
 }
+
+#[test]
+fn guests_become_clients_end_to_end() {
+    run(guests_become_clients());
+}
+
+/// A guest who books is a customer at once: found by email (any case), else made; booking twice,
+/// or two bookings at the same moment, make one; erasing the guest erases the customer too.
+async fn guests_become_clients() {
+    let t = boot("visit", &[]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    t.insert(&a, "BookingSettings", json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60})).await;
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let staff =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Noor", "email": "noor@visit.test", "time_zone": "Asia/Kolkata", "working_hours": every})).await;
+    let svc = uid(&t.insert(&a, "BookingService", json!({"service_name": "Visit", "duration_minutes": 60, "staff": [{"staff": sid(&staff)}]})).await);
+    let book = |hhmm: &'static str, email: &'static str| {
+        let t = &t;
+        async move {
+            let v = t
+                .book(json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, hhmm)), "name": "Ravi Kumar", "email": email, "phone": "+91 98200 12345"}))
+                .await
+                .expect("booked");
+            t.find_one("Booking", json!({"number": v["booking"]["number"]})).await
+        }
+    };
+    let customers = |email: &'static str| {
+        let t = &t;
+        async move { t.scalar(&format!("select count(*) from e_customer where tenant_id = $1 and lower(email) = '{email}'"), None).await }
+    };
+    let first = book("09:00", "ravi@example.test").await;
+    assert_eq!(customers("ravi@example.test").await, 1, "a customer at once");
+    let again = book("10:00", "Ravi@Example.test").await;
+    assert_eq!((customers("ravi@example.test").await, first["customer"].clone()), (1, again["customer"].clone()), "the same person booking twice");
+    let cust = t.get("Customer", first["customer"].as_str().unwrap().parse().unwrap()).await;
+    assert_eq!((cust["customer_name"].clone(), cust["customer_type"].clone()), (json!("Ravi Kumar"), json!("Individual")));
+    // An existing customer is linked, not copied.
+    let known = uid(&t.insert(&a, "Customer", json!({"customer_name": "Sara Ali", "customer_type": "Individual", "email": "sara@example.test"})).await);
+    assert_eq!(book("11:00", "sara@example.test").await["customer"], json!(known.to_string()));
+    // Two bookings for one new address at the same moment make one customer.
+    let (x, y) = tokio::join!(book("12:00", "pat@example.test"), book("13:00", "pat@example.test"));
+    assert_eq!((customers("pat@example.test").await, x["customer"].clone()), (1, y["customer"].clone()));
+    // Without an email (staff booking a caller), the phone's digits find the customer.
+    let call = t
+        .insert(
+            &a,
+            "Booking",
+            json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, "14:00")), "guest_name": "R. Kumar", "guest_phone": "098200-12345"}),
+        )
+        .await;
+    assert_ne!(call["customer"], first["customer"], "different digits (a leading 0): not assumed the same person");
+    let call = t
+        .insert(
+            &a,
+            "Booking",
+            json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, "15:00")), "guest_name": "R. Kumar", "guest_phone": "+91-98200-12345"}),
+        )
+        .await;
+    assert_eq!(call["customer"], first["customer"], "the same digits");
+    // Erasing the guest reaches the customer made for them, as it reaches the booking's guest fields.
+    t.k.erase_personal_data(&a, "ravi@example.test", "the guest asked").await.expect("erased");
+    let (b, c) = (t.get("Booking", uid(&first)).await, t.get("Customer", uid(&cust)).await);
+    assert!(b["guest_email"].is_null() && c["email"].is_null(), "booking {} customer {}", b["guest_email"], c["email"]);
+    assert_ne!(c["customer_name"], json!("Ravi Kumar"));
+}
