@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.2
+
+- **A closed day cannot stay bookable through the old field.** 0.7.1 moved Booking Settings' Closed and Extra Open Dates into the calendars once per workspace, so a date written there afterwards (by an administrator on the old screen, an import, an API client, or between a server upgrade and the workspace's app update) was never read. The upkeep now moves every row it has not moved yet, on every run (a row naming a calendar that does not exist yet waits and is tried again), never over an exception the calendar already has for that date. A moved row is remembered, so an exception an administrator removes later is not put back. The rows stay readable. A date written there takes effect within a minute, at the next upkeep, not at the moment of saving.
+
 ## 0.7.1
 
 - **Dated exceptions of a platform calendar are honoured.** Availability, the **Outside Opening Hours** mark and the Staff Utilization report now take open time from the platform calendar's own functions, so its hours, weekends, holidays and dated exceptions are one source: a Saturday opened by an exception is offered, a Wednesday closed from 09:00 is not, a closed afternoon or an opened holiday works, also on a day the clocks change. A missing or unusable calendar still counts as closed, and staff without a calendar keep their weekly hours.
