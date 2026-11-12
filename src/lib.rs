@@ -27,6 +27,7 @@ mod setup;
 mod site;
 mod slots;
 mod token;
+mod video;
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use chrono_tz::Tz;
