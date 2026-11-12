@@ -289,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.7.0** | A video meeting for each booking of a Video service without a link of its own, with the guest's own join link in the booking, confirmation, reminders and calendar entry (needs Comms 0.14.0 and a meeting server). |
 | **0.6.0** | Working calendars with holidays and dated openings; rules per service; unpaid deposits release their time; guests become customers when they book. |
 | **0.5.1** | The redesigned interface: the upgraded design system, shaped loading, told-apart states. |
 | **0.5.0** | A booking the staff member's outside calendar became busy over is marked, said to them and to the guest, and moved or kept. |

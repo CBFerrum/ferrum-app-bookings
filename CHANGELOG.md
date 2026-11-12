@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0
+
+- **A video meeting for each booking** (BK-48). A Video service that states no link of its own gives each booking its own meeting in the Mail, Chat and Calendar app (needs Comms 0.14.0 and a meeting server) once the booking is confirmed, hosted by the booked staff member. The guest's own join link, which needs no account and admits only to that meeting, becomes the booking's Where: the booking page, the confirmation, the reminders and the calendar entry all carry it. Rescheduling a booking moves its meeting (the link stays the same); cancelling or expiring it ends the meeting and the link stops working. Without Comms, without a meeting server, without the workspace's public address in Comms settings, or when the service states its own link, bookings are exactly as before; a meeting that cannot be made never stops a booking. A class's guests each get their own meeting for now.
+
 ## 0.6.0
 
 - **Working calendars.** A staff member, a resource and Booking Settings may name a working calendar from Admin, Calendars. A staff member is then bookable in that calendar's open time (inside the business calendar's, when one is set), so a holiday entered once closes every service; a resource only in its calendar's. Booking Settings keeps **Closed and Extra Open Dates** per calendar (empty: the whole business), for a one-off closure or an extra open Saturday. Staff without a calendar keep their weekly hours as before. A booking whose time a calendar later closed stays and is marked **Outside Opening Hours**.

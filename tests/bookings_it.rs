@@ -1383,11 +1383,20 @@ async fn boot(slug: &str, extra: &[&str]) -> T {
         packages.extend(ferrum_app_commerce::packages().expect("Commerce's packages").into_iter().filter(|p| p.name() != "commerce_subscriptions"));
     }
     packages.extend(ferrum_app_bookings::packages().expect("app packages").into_iter().filter(|p| commerce || p.name() != "bookings_payments"));
-    packages.push(mail_stand_in());
+    // "comms_app" is the real Mail, Chat and Calendar app (for the meetings it makes); otherwise the stand-in.
+    let real_comms = extra.contains(&"comms_app");
+    if real_comms {
+        packages.extend(ferrum_app_comms::packages().expect("Comms' packages"));
+    } else {
+        packages.push(mail_stand_in());
+    }
     let catalog = Catalog::from_packages(packages).expect("catalog");
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
     ferrum_app_erp::register(&mut hooks);
+    if real_comms {
+        ferrum_app_comms::register(&mut hooks);
+    }
     if commerce {
         ferrum_app_commerce::register(&mut hooks);
     }
@@ -1397,7 +1406,7 @@ async fn boot(slug: &str, extra: &[&str]) -> T {
     ferrum_domain::maintenance(&k).await.expect("partitions");
     ferrum_app_erp::maintenance(&k).await.expect("partitions");
     let mut installed = vec!["bookings".to_string()];
-    installed.extend(extra.iter().map(|p| p.to_string()));
+    installed.extend(extra.iter().map(|p| if *p == "comms_app" { "comms" } else { p }.to_string()));
     let tenant = k
         .create_tenant(NewTenant {
             slug: slug.into(),
@@ -1767,4 +1776,157 @@ async fn guests_become_clients() {
     let (b, c) = (t.get("Booking", uid(&first)).await, t.get("Customer", uid(&cust)).await);
     assert!(b["guest_email"].is_null() && c["email"].is_null(), "booking {} customer {}", b["guest_email"], c["email"]);
     assert_ne!(c["customer_name"], json!("Ravi Kumar"));
+}
+
+#[test]
+fn video_meetings_end_to_end() {
+    run(video_meetings());
+}
+
+/// A Video service without a link of its own gives each booking its own meeting (made when the booking
+/// is confirmed, moved with it, ended when it is cancelled), and the guest's link is in the booking
+/// the guest sees, the confirmation's text and its calendar entry. Without the Mail app, without a
+/// meeting server, or with a link the service states itself, a booking is what it was.
+async fn video_meetings() {
+    use ferrum_app_comms::meetings;
+    // SAFETY: the tests of this file run one at a time (`run`).
+    let meeting_server = |on: bool| unsafe {
+        for (var, value) in [
+            ("FERRUM_MEET_URL", "wss://meet.clinic.test"),
+            ("FERRUM_MEET_KEY", "APIclinic"),
+            ("FERRUM_MEET_SECRET", "clinic-secret"),
+            ("FERRUM_MEET_API_URL", "http://127.0.0.1:1"),
+        ] {
+            if on {
+                std::env::set_var(var, value);
+            } else {
+                std::env::remove_var(var);
+            }
+        }
+    };
+    meeting_server(true);
+    let t = boot("clinic", &["comms_app"]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    t.insert(
+        &a,
+        "BookingSettings",
+        json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60, "public_url": "https://clinic.test"}),
+    )
+    .await;
+    let hours: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let noor_user = t.user("noor@clinic.test", &["Bookings User"]).await;
+    let noor =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Noor", "email": "noor@clinic.test", "time_zone": "Asia/Kolkata", "working_hours": hours})).await;
+    let service = |name: &str, kind: &str, link: Option<&str>| {
+        let (t, a, noor) = (&t, a.clone(), sid(&noor));
+        let body = json!({"service_name": name, "duration_minutes": 60, "location_type": kind, "location_details": link, "staff": [{"staff": noor}]});
+        async move { uid(&t.insert(&a, "BookingService", body).await) }
+    };
+    let consult = service("Video Consult", "Video", None).await;
+    let webinar = service("Webinar", "Video", Some("https://meet.clinic.test/webinar")).await;
+    let visit = service("Home Visit", "In Person", None).await;
+    let book = |svc: Uuid, hhmm: &'static str, who: &'static str| {
+        let t = &t;
+        async move {
+            let v = t.book(json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, hhmm)), "name": who, "email": format!("{}@example.test", who.to_lowercase())})).await.expect("booked");
+            (v.clone(), t.find_one("Booking", json!({"number": v["booking"]["number"]})).await)
+        }
+    };
+    let find = |b: &Doc| {
+        let (k, tenant, id) = (t.k.clone(), t.tenant, uid(b));
+        async move { meetings::find(&k, tenant, "Booking", id).await.unwrap() }
+    };
+    let guest_site = |token: String| {
+        let (k, tenant) = (t.k.clone(), t.tenant);
+        async move {
+            let site = k.hooks.site("comms").cloned().expect("comms site");
+            site_call(&k, &site, tenant, "POST", "/meet/guest", Some(json!({"token": token})), "10.7.0.1").await
+        }
+    };
+
+    // No public address yet: the booking stands as it always did, without a link.
+    let (early, first) = book(consult, "09:00", "Early").await;
+    assert_eq!((first["status"].clone(), first["location"].clone()), (json!("Confirmed"), Value::Null));
+    assert_eq!(early["booking"]["location"], Value::Null);
+    let comms_settings = uid(&t.find_one("CommsSettings", json!({})).await);
+    t.update(&a, "CommsSettings", comms_settings, json!({"public_url": "https://clinic.test"})).await;
+
+    // Confirmed at once: a meeting hosted by the staff member, the guest's link in the booking.
+    let (view, ana) = book(consult, "10:00", "Ana").await;
+    let meeting = find(&ana).await.expect("a meeting for the booking");
+    assert_eq!((meeting.host, meeting.title.as_str(), meeting.ended_at), (Some(noor_user.user), "Video Consult", None));
+    assert_eq!((meeting.starts_at, meeting.ends_at), (local(ist, day, "10:00"), local(ist, day, "11:00")));
+    let link = ana["location"].as_str().expect("the link is the booking's location").to_string();
+    assert!(link.starts_with(&format!("https://clinic.test/meet/guest/clinic/m.{}.", meeting.id.simple())), "{link}");
+    assert_eq!(view["booking"]["location"], json!(link), "the guest sees it once booked");
+    assert_eq!(t.get_pub(&format!("/manage/{}", view["token"].as_str().unwrap())).await["booking"]["location"], json!(link));
+    // The early booking's meeting waited for the address: its next save gives the link.
+    let other = find(&first).await.expect("its meeting was made");
+    assert!(first["location"].is_null() && other.id != meeting.id, "one meeting for each booking");
+    let healed = t.act(&a, "Booking", uid(&first), "reschedule", json!({"start_time": rfc(local(ist, day, "16:00"))})).await;
+    assert!(healed["location"].as_str().is_some_and(|l| l.contains(&format!("/m.{}.", other.id.simple()))), "{}", healed["location"]);
+    let pass = guest_site(link.rsplit('/').next().unwrap().to_string()).await.expect("the guest joins with no account");
+    assert!(String::from_utf8_lossy(&pass.body).contains("Video Consult"));
+    // The confirmation and its calendar entry carry it; the reminder is written from the same booking.
+    t.maintain(Utc::now()).await;
+    let mails = t.mails_to("ana@example.test").await;
+    assert_eq!(mails.len(), 1, "{mails:?}");
+    assert!(mails[0]["content"].as_str().unwrap().contains(&format!("Video: {link}")));
+    assert!(mails[0]["ics"].as_str().unwrap().replace("\r\n ", "").replace("\n ", "").contains(&link), "{}", mails[0]["ics"]);
+
+    // Moved: the meeting moves and the guest's link stays the same.
+    let moved = t.act(&a, "Booking", uid(&ana), "reschedule", json!({"start_time": rfc(local(ist, day, "14:00"))})).await;
+    let after = find(&ana).await.unwrap();
+    assert_eq!((after.id, after.starts_at, after.ends_at), (meeting.id, local(ist, day, "14:00"), local(ist, day, "15:00")));
+    assert_eq!(moved["location"], json!(link));
+    // Cancelled: the meeting is ended and the link stops working.
+    t.act(&a, "Booking", uid(&ana), "cancel_booking", json!({})).await;
+    assert!(find(&ana).await.unwrap().ended_at.is_some());
+    assert!(guest_site(link.rsplit('/').next().unwrap().to_string()).await.is_err(), "an ended meeting admits nobody");
+
+    // Waiting for approval: no meeting until it is confirmed.
+    let settings = uid(&t.find_one("BookingSettings", json!({})).await);
+    t.update(&a, "BookingSettings", settings, json!({"approval_required": true})).await;
+    let (_, bea) = book(consult, "12:00", "Bea").await;
+    assert_eq!((bea["status"].clone(), find(&bea).await), (json!("Pending"), None));
+    t.act(&noor_user, "Booking", uid(&bea), "confirm", json!({})).await;
+    let confirmed = t.get("Booking", uid(&bea)).await;
+    assert!(find(&bea).await.is_some() && confirmed["location"].as_str().is_some_and(|l| l.contains("/meet/guest/clinic/m.")));
+    t.update(&a, "BookingSettings", settings, json!({"approval_required": false})).await;
+
+    // A link the service states itself, and a service that is not video: as before.
+    let (_, own) = book(webinar, "13:00", "Cy").await;
+    assert_eq!((own["location"].clone(), find(&own).await), (json!("https://meet.clinic.test/webinar"), None));
+    let (_, home) = book(visit, "14:00", "Di").await;
+    assert_eq!((find(&home).await, home["location"].clone()), (None, Value::Null));
+
+    // No meeting server: exactly today's behaviour.
+    meeting_server(false);
+    let (_, eve) = book(consult, "15:00", "Eve").await;
+    assert_eq!((eve["status"].clone(), eve["location"].clone(), find(&eve).await), (json!("Confirmed"), Value::Null, None));
+    meeting_server(true);
+
+    // No Mail, Chat and Calendar app in the workspace: the same.
+    let bare = boot("bare", &[]).await;
+    let ba = bare.admin.clone();
+    bare.insert(&ba, "BookingSettings", json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60})).await;
+    let hours: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let staff =
+        bare.insert(&ba, "BookingStaff", json!({"display_name": "Noor", "email": "noor@bare.test", "time_zone": "Asia/Kolkata", "working_hours": hours})).await;
+    let svc = uid(&bare
+        .insert(
+            &ba,
+            "BookingService",
+            json!({"service_name": "Video Consult", "duration_minutes": 60, "location_type": "Video", "staff": [{"staff": sid(&staff)}]}),
+        )
+        .await);
+    let v = bare
+        .book(json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, "10:00")), "name": "Fay", "email": "fay@example.test"}))
+        .await
+        .expect("booked");
+    let fay = bare.find_one("Booking", json!({"number": v["booking"]["number"]})).await;
+    assert_eq!((fay["status"].clone(), fay["location"].clone()), (json!("Confirmed"), Value::Null));
+    meeting_server(false);
 }
