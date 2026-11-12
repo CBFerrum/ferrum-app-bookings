@@ -254,13 +254,8 @@ async fn scenario() {
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
     ferrum_app_erp::register(&mut hooks);
-    for source in ferrum_app_erp::reports() {
-        ferrum_domain::reports::add_source(source);
-    }
     ferrum_app_bookings::register(&mut hooks);
-    for source in ferrum_app_bookings::reports() {
-        ferrum_domain::reports::add_source(source);
-    }
+    set_report_sources();
     // Private addresses allowed: the outside calendar's stand-in is on this machine.
     let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), webhooks_allow_private: true, ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
@@ -1231,6 +1226,7 @@ async fn deposits() {
     ferrum_app_erp::register(&mut hooks);
     ferrum_app_commerce::register(&mut hooks);
     ferrum_app_bookings::register(&mut hooks);
+    set_report_sources();
     let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("partitions");
@@ -1372,6 +1368,13 @@ fn dec_of(v: &Value) -> String {
 
 /// A fresh database with one workspace (zone Asia/Kolkata) on Bookings and the packages in `extra`
 /// (`commerce` and `bookings_payments` for deposits, `comms` for the Mail stand-in).
+/// The reports the server registers at start (replacing any set before, so every test sees the same ones alone or in any order).
+fn set_report_sources() {
+    let mut sources: Vec<_> = ferrum_app_erp::reports().into_iter().map(|s| ("erp".to_string(), s)).collect();
+    sources.extend(ferrum_app_bookings::reports().into_iter().map(|s| ("bookings".to_string(), s)));
+    ferrum_domain::reports::set_sources(sources).expect("report sources");
+}
+
 async fn boot(slug: &str, extra: &[&str]) -> T {
     let url = std::env::var("FERRUM_BOOKINGS_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_bookings_test".into());
     let db = Db::connect(DbConfig { url, max_connections: 24, ..Default::default() }).await.expect("connect");
@@ -1401,6 +1404,7 @@ async fn boot(slug: &str, extra: &[&str]) -> T {
         ferrum_app_commerce::register(&mut hooks);
     }
     ferrum_app_bookings::register(&mut hooks);
+    set_report_sources();
     let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("partitions");
@@ -1661,12 +1665,55 @@ async fn old_calendar_dates_move() {
     assert_eq!(day(wednesday).await, ["10:00", "11:00"]);
     assert_eq!(day(thursday).await, ["09:00", "10:00"], "the calendar's own Thursday exception won");
     assert_eq!(day(saturday).await, ["10:00", "11:00"]);
-    // Once: an administrator who removes an exception later is not undone, and new old-style rows are not read.
-    t.k.put_logic_calendar(&a, "bookings_business", &json!({"zone": "Asia/Kolkata", "weekends": [], "holidays": [], "exceptions": {}})).await.unwrap();
-    t.update(&a, "BookingSettings", uid(&settings), json!({"calendar_dates": [row("", monday, "Closed", "", "")]})).await;
+    // Rows entered later (a screen still on the old field, an import) are moved at the next upkeep too, and still
+    // never over an exception the calendar has: the business calendar's own Monday wins over a row, the Friday arrives.
+    let friday = monday + Duration::days(4);
+    t.k.put_logic_calendar(
+        &a,
+        "bookings_business",
+        &json!({"zone": "Asia/Kolkata", "weekends": [], "holidays": [], "exceptions": {monday.to_string(): {"open": true}}}),
+    )
+    .await
+    .unwrap();
+    t.update(&a, "BookingSettings", uid(&settings), json!({"calendar_dates": [row("", monday, "Closed", "", ""), row("", friday, "Closed", "", "")]})).await;
     t.maintain(Utc::now()).await;
-    assert_eq!(exceptions("bookings_business").await, json!({}), "moved once");
-    assert_eq!(day(monday).await.len(), 3, "rows entered after the move are superseded");
+    assert_eq!(exceptions("bookings_business").await, json!({monday.to_string(): {"open": true}, friday.to_string(): {"open": false}}));
+    assert_eq!(day(monday).await.len(), 3, "an exception already on the calendar is never overwritten");
+    assert!(day(friday).await.is_empty(), "a row entered after the first move closes the day");
+    // A row that was moved is not moved again: an administrator who removes its exception is not undone.
+    t.k.put_logic_calendar(&a, "bookings_business", &json!({"zone": "Asia/Kolkata", "weekends": [], "holidays": [], "exceptions": {}})).await.unwrap();
+    t.maintain(Utc::now()).await;
+    assert_eq!(exceptions("bookings_business").await, json!({}), "moved rows are remembered");
+}
+
+#[test]
+fn dates_written_after_an_empty_first_upkeep_still_close_the_day() {
+    run(late_dates());
+}
+
+/// F3 of the second walk: the first upkeep ran while the old field was empty, a closure was written afterwards.
+async fn late_dates() {
+    let t = boot("latedates", &[]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let monday = next(Utc::now().with_timezone(&ist).date_naive() + Duration::days(3), chrono::Weekday::Mon);
+    let tuesday = monday + Duration::days(1);
+    let settings =
+        t.insert(&a, "BookingSettings", json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60})).await;
+    t.maintain(Utc::now()).await;
+    t.update(&a, "BookingSettings", uid(&settings), json!({"calendar_dates": [{"date": tuesday.to_string(), "change": "Closed"}]})).await;
+    let h = json!([["09:00", "12:00"]]);
+    t.k.put_logic_calendar(&a, "pune", &json!({"zone": "Asia/Kolkata", "weekends": ["sat", "sun"], "holidays": [], "hours": {"mon": h, "tue": h, "wed": h, "thu": h, "fri": h}, "exceptions": {}})).await.unwrap();
+    let staff = t.insert(&a, "BookingStaff", json!({"display_name": "Dr Rao", "email": "rao@late.test", "calendar": "pune"})).await;
+    let svc = uid(&t.insert(&a, "BookingService", json!({"service_name": "Checkup", "duration_minutes": 60, "staff": [{"staff": sid(&staff)}]})).await);
+    let who = sid(&staff);
+    let slots = |d: NaiveDate| {
+        let (t, who) = (&t, &who);
+        async move { times_for(&t.get_pub(&format!("/slots?service={svc}&from={d}&to={d}&time_zone=Asia/Kolkata")).await, who) }
+    };
+    assert_eq!(slots(tuesday).await.len(), 3, "before the upkeep sees the row the day is open");
+    t.maintain(Utc::now()).await;
+    assert!(slots(tuesday).await.is_empty(), "the closure written after the first upkeep is honoured");
 }
 
 #[test]
