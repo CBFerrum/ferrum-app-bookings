@@ -144,9 +144,9 @@ async fn service_of(tx: &mut Tx, tenant: Uuid, doc: &Doc) -> Result<ServiceInfo>
 /// A new booking: the engine places it (staff, resource, session) and the derived fields follow.
 async fn schedule_new(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
     let tenant = hc.ctx.tenant;
-    let st = settings::load(hc.tx, tenant).await?;
     let public = s(doc, "source") == Some("Public");
     let svc = service_of(hc.tx, tenant, doc).await?;
+    let st = settings::load(hc.tx, tenant).await?.for_service(&svc);
     if !svc.active {
         return Err(Error::field("service", format!("{} is not taking bookings", svc.name)));
     }
@@ -168,6 +168,12 @@ async fn schedule_new(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
                 doc.insert(to.into(), json!(v));
             }
         }
+    }
+    // The guest is a client from now on: their bookings, invoices and notes share one record.
+    if id(doc, "customer").is_none()
+        && let Some(c) = client_for(hc.kernel, hc.ctx, hc.tx, doc).await?
+    {
+        doc.insert("customer".into(), json!(c.to_string()));
     }
     let status = if p.waitlisted {
         "Waitlisted"
@@ -266,7 +272,8 @@ pub async fn reschedule(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, m: &M
         return Err(Error::invalid(format!("only pending or confirmed bookings can be rescheduled; this one is {}", status(booking))));
     }
     let tenant = ctx.tenant;
-    let st = settings::load(tx, tenant).await?;
+    let svc = service_of(tx, tenant, booking).await?;
+    let st = settings::load(tx, tenant).await?.for_service(&svc);
     let now = Utc::now();
     let current = time(booking, "start_time").ok_or_else(|| Error::internal("booking without a start"))?;
     if public && now > current - st.reschedule_window {
@@ -275,7 +282,6 @@ pub async fn reschedule(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, m: &M
             st.reschedule_window.num_hours()
         )));
     }
-    let svc = service_of(tx, tenant, booking).await?;
     let seats = m.seats.unwrap_or_else(|| seats_of(booking));
     check_seats(&svc, seats)?;
     let staff = match m.staff {
@@ -302,6 +308,7 @@ pub async fn reschedule(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, m: &M
         // A time the staff member is free at, outside calendar and all.
         "outside_clash": false,
         "outside_clash_since": null,
+        "closed_clash": false,
     })));
     let out = update(k, ctx, tx, booking, patch, true).await?;
     if svc.group()
@@ -318,7 +325,8 @@ pub async fn cancel(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, reason: O
     if !matches!(was.as_str(), "Pending" | "Confirmed" | "Waitlisted") {
         return Err(Error::invalid(format!("this booking is already {}", if was.is_empty() { "closed" } else { was.as_str() })));
     }
-    let st = settings::load(tx, ctx.tenant).await?;
+    let svc = service_of(tx, ctx.tenant, booking).await?;
+    let st = settings::load(tx, ctx.tenant).await?.for_service(&svc);
     if public && was != "Waitlisted" {
         let start = time(booking, "start_time").ok_or_else(|| Error::internal("booking without a start"))?;
         if Utc::now() > start - st.cancel_window {
@@ -334,13 +342,67 @@ pub async fn cancel(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, reason: O
     let out = update(k, ctx, tx, booking, patch, true).await?;
     if ACTIVE.contains(&was.as_str())
         && let Some(key) = s(booking, "session_key")
+        && svc.group()
     {
+        promote(k, ctx, tx, &svc, &st, key).await?;
+    }
+    Ok(out)
+}
+
+/// A Pending booking whose deposit was not paid in time: its time and seats are released (a freed
+/// class seat goes to the waitlist) and the guest is told. Paid after all, it may come back (`restore`).
+pub async fn expire(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc) -> Result<Doc> {
+    if status(booking) != "Pending" {
+        return Err(Error::invalid(format!("only pending bookings expire; this one is {}", status(booking))));
+    }
+    let patch = obj(json!({"status": "Expired", "cancelled_at": ts(Utc::now()), "last_change": "Expired"}));
+    let out = update(k, ctx, tx, booking, patch, true).await?;
+    if let Some(key) = s(booking, "session_key") {
         let svc = service_of(tx, ctx.tenant, booking).await?;
         if svc.group() {
+            let st = settings::load(tx, ctx.tenant).await?;
             promote(k, ctx, tx, &svc, &st, key).await?;
         }
     }
     Ok(out)
+}
+
+/// An Expired booking paid after all: back at its time with its staff member, confirmed, when that
+/// is still free and ahead (checked like any booking, under the same locks). `false`: it was taken,
+/// or has passed, and the booking stays Expired.
+pub async fn restore(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc) -> Result<bool> {
+    let now = Utc::now();
+    let start = time(booking, "start_time").ok_or_else(|| Error::internal("booking without a start"))?;
+    if status(booking) != "Expired" || start <= now {
+        return Ok(false);
+    }
+    let svc = service_of(tx, ctx.tenant, booking).await?;
+    let st = settings::load(tx, ctx.tenant).await?.for_service(&svc);
+    let bid = doc_id(booking)?;
+    let request = Request {
+        svc: &svc,
+        st: &st,
+        start,
+        seats: seats_of(booking),
+        staff: id(booking, "staff"),
+        exclude: Some(bid),
+        rules: Rules::default(),
+        waitlist: false,
+    };
+    let p = match plan(tx, ctx.tenant, &request).await {
+        Ok(p) => p,
+        Err(Error::Conflict(_) | Error::Validation(_) | Error::Invalid(_)) => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let mut patch = schedule_fields(&p, bid);
+    patch.extend(obj(json!({"status": "Confirmed", "confirmed_at": ts(now), "cancelled_at": null, "last_change": "Restored"})));
+    update(k, ctx, tx, booking, patch, true).await?;
+    Ok(true)
+}
+
+/// Tells the guest about `change` (a notice version of its own).
+pub async fn told(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, change: &str) -> Result<Doc> {
+    update(k, ctx, tx, booking, obj(json!({"last_change": change})), true).await
 }
 
 /// Completed or No Show, once the booking has started (no guest notice).
@@ -360,6 +422,7 @@ pub async fn finish(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, to: &str)
 /// booking whose seats fit (re-checked like a booking, under the locks) is confirmed — or Pending
 /// when public bookings need approval. Returns how many moved up.
 pub async fn promote(k: &Kernel, ctx: &Ctx, tx: &mut Tx, svc: &ServiceInfo, st: &Settings, session: &str) -> Result<usize> {
+    let st = &st.for_service(svc);
     let waiting: Vec<(Uuid, Option<Uuid>, Instant, Option<i64>, Option<String>, Option<i64>)> = sqlx::query_as(
         "select id, staff, start_time, seats, source, notice_version from e_booking where tenant_id = $1 and session_key = $2 and status = 'Waitlisted' \
          and start_time > now() order by created_at, id for update skip locked",
@@ -448,24 +511,39 @@ pub(crate) async fn invoice(hc: &mut HookCtx<'_>, booking: &Doc) -> Result<Value
     Ok(created("SalesInvoice", &inv))
 }
 
-/// The guest's customer: an enabled one with their email, or a new individual customer.
+/// The guest's customer for invoicing (made at booking since 0.6; older bookings get one here).
 async fn customer_for(hc: &mut HookCtx<'_>, booking: &Doc) -> Result<Uuid> {
-    let email = s(booking, "guest_email");
-    if let Some(e) = email {
-        let found: Option<Uuid> =
-            sqlx::query_scalar("select id from e_customer where tenant_id = $1 and lower(email) = lower($2) and not disabled order by created_at, id limit 1")
-                .bind(hc.ctx.tenant)
-                .bind(e)
-                .fetch_optional(&mut **hc.tx)
-                .await?;
-        if let Some(c) = found {
-            return Ok(c);
-        }
+    client_for(hc.kernel, hc.ctx, hc.tx, booking).await?.ok_or_else(|| Error::invalid("the booking has neither a customer nor a guest name"))
+}
+
+/// The guest's client record, the ERP Customer that invoices, CRM and Helpdesk share: an enabled
+/// one with the guest's email (or, without an email, the same phone digits), else a new individual
+/// customer. `None` without a guest name, or with neither an email nor a phone number.
+///
+/// ERP's customers have no unique email to lean on, so a transaction-scoped advisory lock on the
+/// workspace and address serializes the find-or-create: the same person booking twice, or two
+/// bookings for one address at the same moment, find the one record the first made.
+pub(crate) async fn client_for(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc) -> Result<Option<Uuid>> {
+    let email = s(doc, "guest_email").map(|e| e.trim().to_lowercase());
+    let digits = s(doc, "guest_phone").map(|p| p.chars().filter(char::is_ascii_digit).collect::<String>()).filter(|d| (6..=20).contains(&d.len()));
+    let (Some(name), Some(key)) = (s(doc, "guest_name"), email.as_ref().map(|e| format!("e:{e}")).or_else(|| digits.as_ref().map(|d| format!("p:{d}")))) else {
+        return Ok(None);
+    };
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1, 0))").bind(format!("bookings-client:{}:{key}", ctx.tenant)).execute(&mut **tx).await?;
+    let by = if email.is_some() { "lower(email) = $2" } else { "regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = $2" };
+    let found: Option<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select id from e_customer where tenant_id = $1 and {by} and not coalesce(disabled, false) order by created_at, id limit 1"
+    )))
+    .bind(ctx.tenant)
+    .bind(email.as_ref().or(digits.as_ref()))
+    .fetch_optional(&mut **tx)
+    .await?;
+    if found.is_some() {
+        return Ok(found);
     }
-    let name = s(booking, "guest_name").ok_or_else(|| Error::invalid("the booking has neither a customer nor a guest name"))?;
-    let input = obj(json!({"customer_name": name, "customer_type": "Individual", "email": email, "phone": s(booking, "guest_phone")}));
-    let c = create_for_user(hc, "Customer", input).await?;
-    doc_id(&c)
+    let input = obj(json!({"customer_name": name, "customer_type": "Individual", "email": email, "phone": s(doc, "guest_phone")}));
+    let c = k.insert_tx(&sys(ctx), tx, "Customer", input).await?;
+    Ok(Some(doc_id(&c)?))
 }
 
 /// `guest_link`: a fresh self-service link to hand to the guest (when no email goes out).

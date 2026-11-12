@@ -1,6 +1,6 @@
 id: bookings
 name: Bookings
-version: 0.5.1
+version: 0.6.0
 publisher: cbferrum
 summary: "Appointment scheduling: services, staff and resources, availability, a public booking page, reminders, reschedules and paid bookings"
 description: README.md
@@ -41,7 +41,7 @@ contributes:
     - id: bookings
       title: "Bookings"
       instructions: >-
-        A Booking is Pending until confirmed, Confirmed once set, Waitlisted when a group class is full, and
+        A Booking is Pending until confirmed, Confirmed once set, Waitlisted when a group class is full, Expired when its deposit was not paid in time, and
         Cancelled, No Show or Completed afterwards. Times are in the workspace's time zone. Whether staff are free
         comes from their working hours (BookingWorkingHour) less their time off (StaffTimeOff) and their other
         bookings; a service may also need a resource such as a room (BookingResource). A guest's answers to a

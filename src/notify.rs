@@ -9,6 +9,7 @@
 
 use crate::booking;
 use crate::calendar;
+use crate::engine::Span;
 use crate::ics::{self, Event};
 use crate::settings::{self, Settings};
 use crate::{Instant, int, obj, time, token, when};
@@ -18,6 +19,7 @@ use ferrum_domain::util::{id, s};
 use ferrum_kernel::{Ctx, Doc, Error, Kernel, Result, Tx, with_retry};
 use ferrum_meta::Schema;
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -30,6 +32,10 @@ pub enum Guest {
     Rescheduled,
     Cancelled,
     Reminder,
+    /// Its deposit was not paid in time: the time was released.
+    Expired,
+    /// Its deposit came after the time was released and taken: it goes back.
+    Refunded,
 }
 
 /// What the staff member is told in-app.
@@ -42,6 +48,8 @@ pub enum StaffNote {
     SeatFilled,
     /// Their outside calendar became busy at a booking's time after it was booked (FEO-032).
     Clash,
+    /// A booking's deposit was not paid in time: the time is free again.
+    Expired,
 }
 
 /// The messages for a change notice, from the booking's current state and whether anything was
@@ -49,6 +57,9 @@ pub enum StaffNote {
 /// made and moved within a minute is announced once, at its new time.
 pub fn change_messages(status: &str, last_change: &str, first: bool) -> (Option<Guest>, Option<StaffNote>) {
     match (status, first) {
+        ("Expired", _) if last_change == "Refunded" => (Some(Guest::Refunded), None),
+        ("Expired", true) => (Some(Guest::Expired), None),
+        ("Expired", false) => (Some(Guest::Expired), Some(StaffNote::Expired)),
         ("Cancelled", true) => (None, None),
         ("Cancelled", false) => (Some(Guest::Cancelled), Some(StaffNote::Cancelled)),
         ("Waitlisted", true) => (Some(Guest::Waitlisted), None),
@@ -56,6 +67,7 @@ pub fn change_messages(status: &str, last_change: &str, first: bool) -> (Option<
         ("Confirmed", true) => (Some(Guest::Confirmed), Some(StaffNote::New)),
         ("Pending" | "Confirmed", false) => match last_change {
             "Rescheduled" => (Some(Guest::Rescheduled), Some(StaffNote::Rescheduled)),
+            "Restored" => (Some(Guest::Confirmed), Some(StaffNote::New)),
             "Promoted" if status == "Pending" => (Some(Guest::Requested), Some(StaffNote::AwaitsConfirmation)),
             "Promoted" => (Some(Guest::Confirmed), Some(StaffNote::SeatFilled)),
             "Confirmed" => (Some(Guest::Confirmed), None),
@@ -140,7 +152,16 @@ pub fn compose(kind: Guest, b: &Doc, tz: Tz, manage: &str, ics_url: &str) -> (St
         Guest::Rescheduled => (format!("Booking moved: {service}, {at}"), "Your booking has a new time."),
         Guest::Cancelled => (format!("Booking cancelled: {service}, {at}"), "Your booking is cancelled."),
         Guest::Reminder => (format!("Reminder: {service}, {at}"), "This is a reminder of your booking."),
+        Guest::Expired => (
+            format!("Booking released: {service}, {at}"),
+            "The deposit for this booking was not paid in time, so its time was released. A deposit paid now confirms it if the time is still free, and is refunded if not.",
+        ),
+        Guest::Refunded => (
+            format!("Deposit refunded: {service}, {at}"),
+            "Your deposit arrived after the booking's time was released, and the time has since been booked. Your deposit is being refunded.",
+        ),
     };
+    let closed = matches!(kind, Guest::Cancelled | Guest::Expired | Guest::Refunded);
     let row = |label: &str, value: &str| format!("<tr><td style=\"padding:2px 12px 2px 0;color:#57606a\">{label}</td><td>{}</td></tr>", html_escape(value));
     let mut rows = vec![row("What", service), row("When", &at)];
     if let Some(end) = time(b, "end_time") {
@@ -149,7 +170,7 @@ pub fn compose(kind: Guest, b: &Doc, tz: Tz, manage: &str, ics_url: &str) -> (St
     if let Some(staff) = s(b, "staff_name") {
         rows.push(row("With", staff));
     }
-    if kind != Guest::Cancelled {
+    if !closed {
         let place = match (s(b, "location_type"), s(b, "location")) {
             (Some(kind), Some(l)) => format!("{kind}: {l}"),
             (Some(kind), None) => kind.to_string(),
@@ -169,7 +190,7 @@ pub fn compose(kind: Guest, b: &Doc, tz: Tz, manage: &str, ics_url: &str) -> (St
     {
         rows.push(row("Reason", reason));
     }
-    let links = if kind == Guest::Cancelled {
+    let links = if closed {
         String::new()
     } else {
         format!("<p><a href=\"{}\">View, reschedule or cancel</a> &middot; <a href=\"{}\">Add to calendar</a></p>", html_escape(manage), html_escape(ics_url))
@@ -211,7 +232,7 @@ async fn email_guest(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, kind: Guest, s
     let summary = format!("{} with {}", s(b, "service_name").unwrap_or("Booking"), s(b, "staff_name").unwrap_or("us"));
     let invite = match kind {
         Guest::Confirmed | Guest::Rescheduled => booking_event(b, summary, "CONFIRMED").map(|e| ics::calendar(Some("REQUEST"), None, &[e])),
-        Guest::Cancelled => booking_event(b, summary, "CANCELLED").map(|e| ics::calendar(Some("CANCEL"), None, &[e])),
+        Guest::Cancelled | Guest::Expired => booking_event(b, summary, "CANCELLED").map(|e| ics::calendar(Some("CANCEL"), None, &[e])),
         _ => None,
     };
     let mail = obj(json!({
@@ -260,6 +281,7 @@ pub(crate) async fn tell_staff(tx: &mut Tx, tenant: Uuid, b: &Doc, note: StaffNo
         StaffNote::Cancelled => format!("Booking cancelled: {service} with {guest}"),
         StaffNote::SeatFilled => format!("Waitlist seat filled: {service} with {guest}"),
         StaffNote::Clash => format!("Clashes with your calendar: {service} with {guest}"),
+        StaffNote::Expired => format!("Deposit not paid, time released: {service} with {guest}"),
     };
     let mut body = format!("{at} · {}", s(b, "number").unwrap_or_default());
     if note == StaffNote::Cancelled
@@ -350,6 +372,10 @@ pub struct Round {
     pub expired: usize,
     pub promoted: usize,
     pub purged: u64,
+    /// Bookings whose working calendar closed (or opened again) at their time.
+    pub closed: usize,
+    /// Unpaid deposits whose hold ran out, and what followed (see `payments::upkeep`).
+    pub deposits: usize,
 }
 
 /// One maintenance round for a tenant. Steps run independently; the first error is returned after
@@ -382,6 +408,14 @@ pub async fn run(k: &Kernel, tenant: Uuid, schema: Arc<Schema>, now: Instant) ->
         Ok(n) => round.purged = n,
         Err(e) => note("purge", e),
     }
+    match crate::payments::upkeep(k, &ctx, now).await {
+        Ok(n) => round.deposits = n,
+        Err(e) => note("deposits", e),
+    }
+    match closed_clashes(k, &ctx, now).await {
+        Ok(n) => round.closed = n,
+        Err(e) => note("opening hours", e),
+    }
     first_error.map_or(Ok(round), Err)
 }
 
@@ -403,12 +437,15 @@ async fn changes(k: &Kernel, ctx: &Ctx) -> Result<usize> {
 async fn reminders(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> {
     let mut tx = k.db.tenant_tx(ctx.tenant).await?;
     let st = settings::load(&mut tx, ctx.tenant).await?;
-    let Some(furthest) = st.reminders.first().copied() else {
+    // The furthest offset any service (or the workspace) reminds at bounds the bookings read.
+    let services: Option<i64> =
+        sqlx::query_scalar("select max(minutes_before) from e_booking_service__reminders where tenant_id = $1").bind(ctx.tenant).fetch_one(&mut *tx).await?;
+    let Some(furthest) = st.reminders.first().copied().max(services) else {
         tx.commit().await?;
         return Ok(0);
     };
-    let rows: Vec<(Uuid, Instant, Instant)> = sqlx::query_as(
-        "select id, start_time, coalesce(scheduled_at, created_at) from e_booking where tenant_id = $1 and status = 'Confirmed' \
+    let rows: Vec<(Uuid, Instant, Instant, Uuid)> = sqlx::query_as(
+        "select id, start_time, coalesce(scheduled_at, created_at), service from e_booking where tenant_id = $1 and status = 'Confirmed' \
          and start_time > $2 and start_time <= $2 + make_interval(mins => $3) order by start_time, id limit 1000",
     )
     .bind(ctx.tenant)
@@ -416,11 +453,17 @@ async fn reminders(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> {
     .bind(furthest as i32)
     .fetch_all(&mut *tx)
     .await?;
+    let mut offsets: HashMap<Uuid, Vec<i64>> = HashMap::new();
+    for (_, _, _, service) in &rows {
+        if !offsets.contains_key(service) {
+            let svc = calendar::service(&mut tx, ctx.tenant, *service).await?;
+            offsets.insert(*service, svc.map_or_else(|| st.reminders.clone(), |svc| st.for_service(&svc).reminders));
+        }
+    }
     tx.commit().await?;
     let mut sent = 0;
-    for (bid, start, scheduled) in rows {
-        let due: Vec<i64> = st
-            .reminders
+    for (bid, start, scheduled, service) in rows {
+        let due: Vec<i64> = offsets[&service]
             .iter()
             .copied()
             .filter(|m| {
@@ -494,6 +537,43 @@ async fn sweep_waitlists(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> {
     Ok(promoted)
 }
 
+/// Active bookings ahead whose working calendars (the staff member's, the business's) no longer open
+/// at their time are flagged `closed_clash`: kept, never moved or cancelled. A flagged one whose time
+/// opens again is cleared. Staff on weekly hours alone are not checked (as before calendars).
+async fn closed_clashes(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> {
+    let mut tx = k.db.tenant_tx(ctx.tenant).await?;
+    let st = settings::load(&mut tx, ctx.tenant).await?;
+    let rows: Vec<(Uuid, Uuid, Instant, Instant, bool)> = sqlx::query_as(
+        "select id, staff, start_time, end_time, coalesce(closed_clash, false) from e_booking where tenant_id = $1 \
+         and status in ('Pending', 'Confirmed') and start_time > $2 order by start_time, id limit 2000",
+    )
+    .bind(ctx.tenant)
+    .bind(now)
+    .fetch_all(&mut *tx)
+    .await?;
+    let Some(window) = rows.first().zip(rows.iter().map(|r| r.3).max()).map(|(a, end)| Span::new(a.2, end)) else {
+        tx.commit().await?;
+        return Ok(0);
+    };
+    let mut ids: Vec<Uuid> = rows.iter().map(|r| r.1).collect();
+    ids.sort();
+    ids.dedup();
+    let business = calendar::business_open(&mut tx, ctx.tenant, &st, window).await?;
+    let mut changed = 0;
+    for s in calendar::staff(&mut tx, ctx.tenant, &ids).await? {
+        let Some(open) = calendar::staff_open(&mut tx, ctx.tenant, &st, &s, &business, window).await? else { continue };
+        for (bid, _, start, end, flagged) in rows.iter().filter(|r| r.1 == s.id) {
+            let closed = !open.iter().any(|w| w.contains(&Span::new(*start, *end)));
+            if closed != *flagged {
+                k.set_values_tx(ctx, &mut tx, "Booking", *bid, obj(json!({"closed_clash": closed}))).await?;
+                changed += 1;
+            }
+        }
+    }
+    tx.commit().await?;
+    Ok(changed)
+}
+
 /// Guest links of bookings over for 30 days, and claims of bookings over for 60 days.
 async fn purge(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<u64> {
     let mut tx = k.db.tenant_tx(ctx.tenant).await?;
@@ -540,6 +620,10 @@ mod tests {
         assert_eq!(change_messages("Pending", "Promoted", false), (Some(G::Requested), Some(S::AwaitsConfirmation)));
         assert_eq!(change_messages("Cancelled", "Cancelled", false), (Some(G::Cancelled), Some(S::Cancelled)));
         assert_eq!(change_messages("Completed", "Booked", false), (None, None));
+        assert_eq!(change_messages("Expired", "Expired", false), (Some(G::Expired), Some(S::Expired)));
+        assert_eq!(change_messages("Expired", "Expired", true), (Some(G::Expired), None), "released before it was announced");
+        assert_eq!(change_messages("Expired", "Refunded", false), (Some(G::Refunded), None));
+        assert_eq!(change_messages("Confirmed", "Restored", false), (Some(G::Confirmed), Some(S::New)));
     }
 
     #[test]

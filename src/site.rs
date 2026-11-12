@@ -176,6 +176,7 @@ async fn open_slots(k: &Kernel, ctx: &Ctx, req: &SiteRequest) -> Result<Value> {
     let mut tx = k.db.tenant_tx(ctx.tenant).await?;
     let st = open_page(&mut tx, ctx.tenant).await?;
     let svc = bookable(&mut tx, ctx.tenant, query(req, "service")).await?;
+    let st = st.for_service(&svc);
     let waitlist = matches!(query(req, "waitlist"), Some("1" | "true"));
     let out = slots::find(&mut tx, ctx.tenant, &svc, &st, &q, st.public_rules(Utc::now()), None, waitlist).await?;
     tx.commit().await?;
@@ -405,6 +406,13 @@ async fn guest_view(ctx: &Ctx, tx: &mut Tx, b: &Doc, st: &Settings, root: &str, 
     } else {
         None
     };
+    let st = match id(b, "service") {
+        Some(sid) => match calendar::service(tx, ctx.tenant, sid).await? {
+            Some(svc) => st.for_service(&svc),
+            None => st.clone(),
+        },
+        None => st.clone(),
+    };
     let (cancel_until, move_until) = (start - st.cancel_window, start - st.reschedule_window);
     Ok(json!({
         "number": b.get("number"),
@@ -418,7 +426,7 @@ async fn guest_view(ctx: &Ctx, tx: &mut Tx, b: &Doc, st: &Settings, root: &str, 
         "until": end.with_timezone(&tz).format("%H:%M").to_string(),
         "seats": int(b, "seats"),
         "location_type": b.get("location_type"),
-        "location": if status == "Cancelled" { Value::Null } else { b.get("location").cloned().unwrap_or(Value::Null) },
+        "location": if matches!(status, "Cancelled" | "Expired") { Value::Null } else { b.get("location").cloned().unwrap_or(Value::Null) },
         "guest": {"name": b.get("guest_name"), "email": b.get("guest_email"), "phone": b.get("guest_phone")},
         "answers": rows(b, "answers").iter().map(|r| json!({"question": r.get("question"), "answer": r.get("answer")})).collect::<Vec<_>>(),
         "amount": money(d(b, "amount")),
@@ -455,6 +463,7 @@ async fn manage_slots(k: &Kernel, ctx: &Ctx, req: &SiteRequest, tok: &str) -> Re
     q.seats = int(&b, "seats").max(1);
     let sid = id(&b, "service").ok_or_else(|| Error::NotFound("booking".into()))?;
     let svc = calendar::service(&mut tx, ctx.tenant, sid).await?.ok_or_else(|| Error::NotFound("booking".into()))?;
+    let st = st.for_service(&svc);
     let out = slots::find(&mut tx, ctx.tenant, &svc, &st, &q, st.public_rules(Utc::now()), Some(doc_id(&b)?), false).await?;
     tx.commit().await?;
     Ok(out)
@@ -498,7 +507,7 @@ async fn download(k: &Kernel, ctx: &Ctx, tok: &str) -> Result<SiteResponse> {
     let (_, b) = by_token(k, ctx, &mut tx, tok, false).await?;
     tx.commit().await?;
     let status = match s(&b, "status") {
-        Some("Cancelled") => "CANCELLED",
+        Some("Cancelled" | "Expired") => "CANCELLED",
         Some("Confirmed" | "Completed") => "CONFIRMED",
         _ => "TENTATIVE",
     };
@@ -622,6 +631,7 @@ mod tests {
             resources: vec![],
             questions,
             guest_repeats: 0,
+            rules: Default::default(),
         }
     }
 

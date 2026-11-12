@@ -57,6 +57,7 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("BookingService", Arc::new(setup::ServiceHook))
         .register("BookingStaff", Arc::new(setup::StaffHook))
         .register("StaffTimeOff", Arc::new(setup::TimeOffHook))
+        .register("BookingResource", Arc::new(setup::ResourceHook))
         .register("BookingSettings", Arc::new(setup::SettingsHook))
         .add_site("bookings", Arc::new(site::BookingSite))
         .add_event_sink(Arc::new(departures::Departures));

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0
+
+- **Working calendars.** A staff member, a resource and Booking Settings may name a working calendar from Admin, Calendars. A staff member is then bookable in that calendar's open time (inside the business calendar's, when one is set), so a holiday entered once closes every service; a resource only in its calendar's. Booking Settings keeps **Closed and Extra Open Dates** per calendar (empty: the whole business), for a one-off closure or an extra open Saturday. Staff without a calendar keep their weekly hours as before. A booking whose time a calendar later closed stays and is marked **Outside Opening Hours**.
+- **Rules per service.** A service may set its own minimum notice, how far ahead, cancellation and reschedule windows, manual confirmation and reminders; empty ones follow Booking Settings.
+- **Unpaid deposits** (Booking Deposits 0.2.0). A booking waiting for its deposit holds its time for **Unpaid Deposit Holds Its Time** minutes (on the service or the settings), or else until its deposit request expires. Then it is **Expired**, its time released and the guest told. Paid late, it is restored when its time is still free, and refunded in full when it was taken.
+- **Guests are customers at once.** A booking links the guest's ERP Customer, found by email (or phone digits) or made, when it is booked rather than when it is invoiced.
+
 ## 0.5.1
 
 The interface follows the upgraded design system, rebuilt with Ferrum-Frontend 0a47157. Text uses the kit's type roles (nothing under 12px) and controls its height tokens; loading shows skeletons shaped like what is coming; empty, no matches, denied, offline and failed are told apart; status colours come from stored state ids. The interface check now runs the UI lint against an empty baseline. The schedule's hour labels no longer wrap.
