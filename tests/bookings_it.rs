@@ -1563,3 +1563,141 @@ async fn service_rules() {
     assert_eq!(keys, [format!("30@{}", soon.timestamp())], "the service's offset");
     t.post_pub(&format!("/manage/{}/cancel", mine["token"].as_str().unwrap()), json!({})).await.expect("cancelled online until the start");
 }
+
+#[test]
+fn unpaid_deposits_end_to_end() {
+    run(unpaid_deposits());
+}
+
+/// A peel of 1,000 takes a 30% deposit and holds its time 15 minutes for it (the settings leave the
+/// hold empty: a facial holds until its deposit request expires, after 30 minutes).
+async fn unpaid_deposits() {
+    let t = boot("peel", &["commerce", "bookings_payments", "comms"]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let at = |hhmm: &str| local(ist, day, hhmm);
+    let inr = t.find_one("Currency", json!({"code": "INR"})).await;
+    let cid = uid(&t.insert(&a, "Company", json!({"company_name": "Peel", "abbr": "PL", "default_currency": inr["id"]})).await);
+    let group = t.find_one("ItemGroup", json!({"group_name": "Services"})).await;
+    let nos = t.find_one("Uom", json!({"uom_name": "Nos"})).await;
+    let item = |code: &str| json!({"item_code": code, "item_name": code, "item_group": group["id"], "stock_uom": nos["id"], "is_stock_item": false});
+    let peel_item = uid(&t.insert(&a, "Item", item("PEEL")).await);
+    let ship = uid(&t.insert(&a, "Item", item("SHIP")).await);
+    let stores = t.find_one("Warehouse", json!({"warehouse_name": "Stores", "company": cid.to_string()})).await;
+    let selling = t.find_one("PriceList", json!({"price_list_name": "Standard Selling"})).await;
+    t.insert(
+        &a,
+        "StoreSettings",
+        json!({"store_name": "Peel", "company": cid.to_string(), "currency": inr["id"], "price_list": selling["id"], "fulfilment_warehouse": stores["id"],
+               "shipping_item": ship.to_string(), "payment_methods": [{"gateway": "fakepay", "label": "Card", "expiry_minutes": 30}], "store_url": "https://peel.test"}),
+    )
+    .await;
+    let fakepay = {
+        let role = "plugin:fakepay".to_string();
+        for entity in ["PaymentRequest", "PaymentException", "OrderRefund"] {
+            let p = ferrum_meta::PermissionDef { entity: entity.into(), read: true, write: true, ..Default::default() };
+            t.k.set_role_permission(&a, &role, &p).await.unwrap();
+        }
+        let u = t.k.create_user(&a, "fakepay@plugins.ferrum.invalid", "Plugin: fakepay", None, &[role], false).await.unwrap();
+        t.k.load_ctx(t.tenant, u, None, "plugin-fakepay".into()).await.unwrap()
+    };
+    t.insert(
+        &a,
+        "BookingSettings",
+        json!({"company": cid.to_string(), "public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 30,
+               "cancellation_window_hours": 0, "reschedule_window_hours": 0, "bpay_payment_method": "fakepay"}),
+    )
+    .await;
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let mira =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Mira", "email": "mira@peel.test", "time_zone": "Asia/Kolkata", "working_hours": every})).await;
+    let service = |name: &str, hold: Option<i64>| {
+        json!({"service_name": name, "duration_minutes": 60, "price": "1000", "item": peel_item.to_string(), "location_type": "In Person",
+               "staff": [{"staff": sid(&mira)}], "bpay_deposit_percent": "30", "bpay_hold_minutes": hold})
+    };
+    let peel = uid(&t.insert(&a, "BookingService", service("Peel", Some(15))).await);
+    let facial = uid(&t.insert(&a, "BookingService", service("Facial", None)).await);
+    let book = |svc: Uuid, hhmm: &'static str, email: &'static str| {
+        let t = &t;
+        async move {
+            let v = t.book(json!({"service": svc.to_string(), "start_time": rfc(at(hhmm)), "name": "Guest", "email": email})).await?;
+            Ok::<Uuid, Error>(uid(&t.find_one("Booking", json!({"number": v["booking"]["number"]})).await))
+        }
+    };
+    let pay = |b: Uuid| {
+        let (t, fakepay) = (&t, &fakepay);
+        async move {
+            let pr: Uuid = t.get("Booking", b).await["bpay_payment_request"].as_str().unwrap().parse().unwrap();
+            t.action(fakepay, "PaymentRequest", pr, "mark_paid", json!({"amount": "300", "currency": "INR", "gateway_reference": format!("pi_{b}")})).await
+        }
+    };
+    let status = |b: Uuid| {
+        let t = &t;
+        async move { t.get("Booking", b).await["status"].as_str().unwrap().to_string() }
+    };
+    let subjects = |email: &'static str| {
+        let t = &t;
+        async move { t.mails_to(email).await.iter().map(|m| m["subject"].as_str().unwrap().to_string()).collect::<Vec<_>>() }
+    };
+    let soon = Utc::now() + Duration::minutes(16);
+
+    // ───────────── held, then released after 15 minutes; paid late while free: restored ─────────────
+    let ann = book(peel, "10:00", "ann@example.test").await.unwrap();
+    assert_eq!(status(ann).await, "Pending");
+    let e = book(peel, "10:00", "bob@example.test").await.unwrap_err();
+    assert!(matches!(e, Error::Conflict(_)), "the unpaid deposit holds the time: {e:?}");
+    t.maintain(Utc::now() + Duration::minutes(14)).await;
+    assert_eq!(status(ann).await, "Pending", "inside its hold");
+    t.maintain(soon).await;
+    t.maintain(soon).await;
+    assert_eq!(status(ann).await, "Expired");
+    let mails = subjects("ann@example.test").await;
+    assert_eq!(mails.iter().filter(|s| s.starts_with("Booking released")).count(), 1, "told once: {mails:?}");
+    pay(ann).await.expect("still payable: its request lasts 30 minutes");
+    assert_eq!(status(ann).await, "Confirmed", "the time was still free");
+    t.maintain(soon).await;
+    assert!(subjects("ann@example.test").await.last().unwrap().starts_with("Booking confirmed"));
+
+    // ───────────── released and taken; paid late: refunded once ─────────────
+    let cat = book(peel, "12:00", "cat@example.test").await.unwrap();
+    t.maintain(soon).await;
+    assert_eq!(status(cat).await, "Expired");
+    let dan = book(peel, "12:00", "dan@example.test").await.expect("the released time");
+    pay(cat).await.expect("paid late");
+    assert_eq!((status(cat).await, status(dan).await), ("Expired".to_string(), "Pending".to_string()), "not restored over Dan");
+    t.maintain(soon).await;
+    t.maintain(soon).await;
+    let b = t.get("Booking", cat).await;
+    let refunds = t.list(&a, "OrderRefund", json!({"payment_request": b["bpay_payment_request"]})).await.unwrap();
+    assert_eq!(refunds.len(), 1, "refunded exactly once");
+    assert_eq!((dec_of(&refunds[0]["amount"]), dec_of(&b["bpay_kept"])), ("300".to_string(), "0".to_string()), "all of it");
+    assert!(subjects("cat@example.test").await.last().unwrap().starts_with("Deposit refunded"));
+
+    // ───────────── no hold set: the time is kept until the deposit request expires ─────────────
+    let eve = book(facial, "14:00", "eve@example.test").await.unwrap();
+    t.maintain(soon).await;
+    assert_eq!(status(eve).await, "Pending", "the request is still payable");
+    t.maintain(Utc::now() + Duration::minutes(31)).await;
+    assert_eq!(status(eve).await, "Expired");
+    let b = t.get("Booking", eve).await;
+    let request = t.get("PaymentRequest", b["bpay_payment_request"].as_str().unwrap().parse().unwrap()).await;
+    let invoice = t.get("SalesInvoice", b["sales_invoice"].as_str().unwrap().parse().unwrap()).await;
+    assert_eq!((request["status"].clone(), invoice["docstatus"].clone()), (json!("Cancelled"), json!(2)), "nothing more can be paid: both cancelled");
+
+    // ───────────── a race: the hold running out, another guest, and the late payment at once ─────────────
+    let fay = book(peel, "16:00", "fay@example.test").await.unwrap();
+    let (_, gus, paid) = tokio::join!(t.maintain(soon), book(peel, "16:00", "gus@example.test"), pay(fay));
+    t.maintain(soon).await;
+    let active = t
+        .scalar(
+            &format!("select count(*) from e_booking where tenant_id = $1 and start_time = '{}' and status in ('Pending', 'Confirmed')", rfc(at("16:00"))),
+            None,
+        )
+        .await;
+    assert_eq!(active, 1, "one of them holds the time: gus {gus:?}, paid {paid:?}");
+    let f = t.get("Booking", fay).await;
+    if f["status"] == json!("Expired") && paid.is_ok() {
+        assert_eq!(dec_of(&f["bpay_kept"]), "0", "Fay paid but lost the time: refunded");
+    }
+}

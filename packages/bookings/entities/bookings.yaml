@@ -201,7 +201,7 @@
     - {name: start_time, type: datetime, required: true, in_list: true, in_filter: true}
     - {name: end_time, type: datetime, read_only: true}
     - {name: seats, type: int, default: 1, min: 1, max: 1000, in_list: true}
-    - {name: status, type: select, options: [Pending, Confirmed, Waitlisted, Cancelled, No Show, Completed], default: Pending, read_only: true, in_list: true, in_filter: true}
+    - {name: status, type: select, options: [Pending, Confirmed, Waitlisted, Cancelled, No Show, Completed, Expired], default: Pending, read_only: true, in_list: true, in_filter: true}
     - {name: source, type: select, options: [Internal, Public], default: Internal, read_only: true, in_filter: true}
     - {name: series, type: data, read_only: true, no_copy: true, in_filter: true, description: "Shared by bookings repeated together"}
     - {name: join_waitlist, type: check, no_copy: true, description: "When the class is full, join its waitlist instead of failing"}
@@ -230,7 +230,7 @@
     - {name: session_key, type: data, read_only: true, hidden: true, no_copy: true}
     - {name: notice_version, type: int, default: 0, read_only: true, hidden: true, no_copy: true}
     - {name: notified_version, type: int, default: 0, read_only: true, hidden: true, no_copy: true}
-    - {name: last_change, type: select, options: [Booked, Confirmed, Rescheduled, Cancelled, Promoted], read_only: true, hidden: true, no_copy: true}
+    - {name: last_change, type: select, options: [Booked, Confirmed, Rescheduled, Cancelled, Promoted, Expired, Restored, Refunded], read_only: true, hidden: true, no_copy: true}
     - {name: outside_clash, type: check, read_only: true, no_copy: true, in_filter: true, label: Clashes With the Staff Calendar,
        description: "The staff member's outside calendar became busy at this time after it was booked: reschedule it, or keep it"}
     - {name: outside_clash_since, type: datetime, read_only: true, no_copy: true, label: Clash Found}
