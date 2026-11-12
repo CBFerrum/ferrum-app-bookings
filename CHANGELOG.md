@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.7.1
+
+- **Dated exceptions of a platform calendar are honoured.** Availability, the **Outside Opening Hours** mark and the Staff Utilization report now take open time from the platform calendar's own functions, so its hours, weekends, holidays and dated exceptions are one source: a Saturday opened by an exception is offered, a Wednesday closed from 09:00 is not, a closed afternoon or an opened holiday works, also on a day the clocks change. A missing or unusable calendar still counts as closed, and staff without a calendar keep their weekly hours.
+- **Closed and Extra Open Dates in Booking Settings are superseded.** The first upkeep after the upgrade moves each row into the exceptions of the calendar it names (the business calendar when it names none; when the workspace had none, a calendar `bookings_business`, open all day in the workspace's zone, is made and named), never over an exception the calendar already has for that date, one per date (the first row wins). The rows stay readable; rows entered afterwards are not read. One difference: an extra opening on a weekday now replaces that day's hours instead of adding to them.
+
 ## 0.7.0
 
 - **A video meeting for each booking** (BK-48). A Video service that states no link of its own gives each booking its own meeting in the Mail, Chat and Calendar app (needs Comms 0.15.0 and a meeting server) once the booking is confirmed, hosted by the booked staff member. The guest's own join link, which needs no account and admits only to that meeting, becomes the booking's Where: the booking page, the confirmation, the reminders and the calendar entry all carry it. Rescheduling a booking moves its meeting (the link stays the same); cancelling or expiring it ends the meeting and the link stops working. Without Comms, without a meeting server, without the workspace's public address in Comms settings, or when the service states its own link, bookings are exactly as before; a meeting that cannot be made never stops a booking. A class's guests each get their own meeting for now.
