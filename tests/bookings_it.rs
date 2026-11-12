@@ -1477,14 +1477,14 @@ async fn working_calendars() {
     assert!(day(monday).await.is_empty(), "the calendar's holiday removes that day's slots");
     assert_eq!(day(tuesday).await, ["09:00", "10:00", "11:00"], "no working hours of their own: the calendar's");
     assert!(day(saturday).await.is_empty(), "weekend");
-    t.update(
-        &a,
-        "BookingSettings",
-        settings,
-        json!({"calendar_dates": [{"calendar": "pune", "date": saturday.to_string(), "change": "Open", "start_time": "10:00", "end_time": "12:00"}]}),
-    )
-    .await;
-    assert_eq!(day(saturday).await, ["10:00", "11:00"], "a one-off open Saturday adds them");
+    let pune = |exceptions: Value| {
+        let h = json!([["09:00", "12:00"]]);
+        json!({"zone": "Asia/Kolkata", "weekends": ["sat", "sun"], "holidays": [monday.to_string()],
+               "hours": {"mon": h, "tue": h, "wed": h, "thu": h, "fri": h}, "exceptions": exceptions})
+    };
+    let saturday_open = json!({saturday.to_string(): {"open": true, "hours": [["10:00", "12:00"]]}});
+    t.k.put_logic_calendar(&a, "pune", &pune(saturday_open)).await.unwrap();
+    assert_eq!(day(saturday).await, ["10:00", "11:00"], "a one-off open Saturday, as an exception of the calendar");
 
     // Booked on Tuesday; then the business closes that Tuesday: the booking stays, flagged.
     let b =
@@ -1492,21 +1492,181 @@ async fn working_calendars() {
     let bid = uid(&t.find_one("Booking", json!({"number": b["booking"]["number"]})).await);
     t.maintain(Utc::now()).await;
     assert_eq!(t.get("Booking", bid).await["closed_clash"], json!(false));
-    t.update(
-        &a,
-        "BookingSettings",
-        settings,
-        json!({"calendar_dates": [{"calendar": "pune", "date": saturday.to_string(), "change": "Open", "start_time": "10:00", "end_time": "12:00"},
-                                  {"date": tuesday.to_string(), "change": "Closed"}]}),
-    )
-    .await;
-    assert!(day(tuesday).await.is_empty(), "a business-wide closure");
+    let both = json!({saturday.to_string(): {"open": true, "hours": [["10:00", "12:00"]]}, tuesday.to_string(): {"open": false}});
+    t.k.put_logic_calendar(&a, "pune", &pune(both)).await.unwrap();
+    assert!(day(tuesday).await.is_empty(), "a closure the calendar holds");
     t.maintain(Utc::now()).await;
     let kept = t.get("Booking", bid).await;
     assert_eq!((kept["status"].clone(), kept["closed_clash"].clone()), (json!("Confirmed"), json!(true)), "kept and flagged, not deleted");
     // A business calendar that does not exist is refused; one that does closes its holidays for everyone.
     let e = t.k.update(&a, "BookingSettings", settings, obj(json!({"calendar": "nowhere"})), None).await.unwrap_err();
     assert!(messages(&e).contains("working calendar"), "{}", messages(&e));
+}
+
+#[test]
+fn calendar_exceptions_end_to_end() {
+    run(calendar_exceptions());
+}
+
+/// Staff on a platform calendar (weekdays 09:00-12:00 and 14:00-17:00) follow its dated exceptions:
+/// an opened Saturday, a Wednesday closed from 09:00, a Thursday afternoon closed, a Friday holiday
+/// opened for two hours; and a booking on a day closed after it was made is flagged.
+async fn calendar_exceptions() {
+    let t = boot("exceptions", &[]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let monday = next(Utc::now().with_timezone(&ist).date_naive() + Duration::days(3), chrono::Weekday::Mon);
+    let [tuesday, wednesday, thursday, friday, saturday] = [1, 2, 3, 4, 5].map(|n| monday + Duration::days(n));
+    let day_hours = json!([["09:00", "12:00"], ["14:00", "17:00"]]);
+    let calendar = |exceptions: Value| {
+        json!({"zone": "Asia/Kolkata", "weekends": ["sat", "sun"], "holidays": [friday.to_string()],
+               "hours": {"mon": day_hours, "tue": day_hours, "wed": day_hours, "thu": day_hours, "fri": day_hours}, "exceptions": exceptions})
+    };
+    t.k.put_logic_calendar(
+        &a,
+        "clinic",
+        &calendar(json!({
+            saturday.to_string(): {"open": true, "hours": [["10:00", "12:00"]]},
+            wednesday.to_string(): {"open": false, "hours": [["09:00", "24:00"]]},
+            thursday.to_string(): {"open": false, "hours": [["14:00", "24:00"]]},
+            friday.to_string(): {"open": true, "hours": [["10:00", "12:00"]]},
+        })),
+    )
+    .await
+    .unwrap();
+    t.insert(&a, "BookingSettings", json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60})).await;
+    let staff = t.insert(&a, "BookingStaff", json!({"display_name": "Dr Rao", "email": "rao@exceptions.test", "calendar": "clinic"})).await;
+    let svc = uid(&t.insert(&a, "BookingService", json!({"service_name": "Checkup", "duration_minutes": 60, "staff": [{"staff": sid(&staff)}]})).await);
+    let who = sid(&staff);
+    let day = |d: NaiveDate| {
+        let (t, who) = (&t, &who);
+        async move { times_for(&t.get_pub(&format!("/slots?service={svc}&from={d}&to={d}&time_zone=Asia/Kolkata")).await, who) }
+    };
+    assert_eq!(day(monday).await, ["09:00", "10:00", "11:00", "14:00", "15:00", "16:00"], "a plain weekday");
+    assert_eq!(day(saturday).await, ["10:00", "11:00"], "a weekend day opened by an exception");
+    assert!(day(wednesday).await.is_empty(), "closed from 09:00 on");
+    assert_eq!(day(thursday).await, ["09:00", "10:00", "11:00"], "only the afternoon closed");
+    assert_eq!(day(friday).await, ["10:00", "11:00"], "a holiday opened by an exception");
+    // The utilisation report counts the calendar's open time too.
+    let available = |d: NaiveDate| {
+        let (t, a) = (&t, &a);
+        async move {
+            t.report(a, "bookings_staff_utilization", &[("from_date", d.to_string()), ("to_date", d.to_string())]).await["rows"][0]["available_minutes"].clone()
+        }
+    };
+    assert_eq!(
+        (available(monday).await, available(wednesday).await, available(thursday).await, available(friday).await, available(saturday).await),
+        (json!(360), json!(0), json!(180), json!(120), json!(120)),
+        "open minutes by the calendar, exceptions and holidays included"
+    );
+
+    // Booked on Tuesday; then an exception closes that Tuesday: the booking stays, flagged; reopened, cleared.
+    let b =
+        t.book(json!({"service": svc.to_string(), "start_time": rfc(local(ist, tuesday, "10:00")), "name": "Guest", "email": "g@example.test"})).await.unwrap();
+    let bid = uid(&t.find_one("Booking", json!({"number": b["booking"]["number"]})).await);
+    t.maintain(Utc::now()).await;
+    assert_eq!(t.get("Booking", bid).await["closed_clash"], json!(false));
+    let closed = |tue: Value| {
+        calendar(json!({
+            saturday.to_string(): {"open": true, "hours": [["10:00", "12:00"]]},
+            wednesday.to_string(): {"open": false, "hours": [["09:00", "24:00"]]},
+            thursday.to_string(): {"open": false, "hours": [["14:00", "24:00"]]},
+            friday.to_string(): {"open": true, "hours": [["10:00", "12:00"]]},
+            tuesday.to_string(): tue,
+        }))
+    };
+    t.k.put_logic_calendar(&a, "clinic", &closed(json!({"open": false}))).await.unwrap();
+    t.maintain(Utc::now()).await;
+    assert_eq!(t.get("Booking", bid).await["closed_clash"], json!(true), "an exception closes the booked time");
+    t.k.put_logic_calendar(&a, "clinic", &closed(json!({"open": false, "hours": [["14:00", "24:00"]]}))).await.unwrap();
+    t.maintain(Utc::now()).await;
+    assert_eq!(t.get("Booking", bid).await["closed_clash"], json!(false), "only the afternoon closed: the morning booking is fine again");
+}
+
+#[test]
+fn old_calendar_dates_move_into_calendars() {
+    run(old_calendar_dates_move());
+}
+
+/// A workspace as 0.6.x left it: Booking Settings holds dated rows and names no business calendar, and the
+/// calendar "pune" it does use has an exception of its own. The first upkeep moves the rows into the
+/// calendars' exceptions (making the business calendar), never over an exception already there, once.
+async fn old_calendar_dates_move() {
+    let t = boot("moved", &[]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let monday = next(Utc::now().with_timezone(&ist).date_naive() + Duration::days(3), chrono::Weekday::Mon);
+    let [tuesday, wednesday, thursday, _, saturday] = [1, 2, 3, 4, 5].map(|n| monday + Duration::days(n));
+    let h = json!([["09:00", "12:00"]]);
+    let pune = |exceptions: Value| {
+        json!({"zone": "Asia/Kolkata", "weekends": ["sat", "sun"], "holidays": [],
+               "hours": {"mon": h, "tue": h, "wed": h, "thu": h, "fri": h}, "exceptions": exceptions})
+    };
+    let own = json!({thursday.to_string(): {"open": false, "hours": [["11:00", "24:00"]]}});
+    t.k.put_logic_calendar(&a, "pune", &pune(own.clone())).await.unwrap();
+    let row = |cal: &str, d: NaiveDate, change: &str, from: &str, to: &str| json!({"calendar": cal, "date": d.to_string(), "change": change, "start_time": from, "end_time": to});
+    t.insert(
+        &a,
+        "BookingSettings",
+        json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60, "calendar_dates": [
+            row("", tuesday, "Closed", "", ""),
+            row("", wednesday, "Closed", "09:00", "10:00"),
+            row("", wednesday, "Closed", "11:00", "12:00"),
+            row("", saturday, "Open", "10:00", "12:00"),
+            row("pune", saturday, "Open", "10:00", "12:00"),
+            row("pune", thursday, "Closed", "09:00", "10:00"),
+        ]}),
+    )
+    .await;
+    let staff = t.insert(&a, "BookingStaff", json!({"display_name": "Dr Rao", "email": "rao@moved.test", "calendar": "pune"})).await;
+    let svc = uid(&t.insert(&a, "BookingService", json!({"service_name": "Checkup", "duration_minutes": 60, "staff": [{"staff": sid(&staff)}]})).await);
+    let who = sid(&staff);
+    let day = |d: NaiveDate| {
+        let (t, who) = (&t, &who);
+        async move { times_for(&t.get_pub(&format!("/slots?service={svc}&from={d}&to={d}&time_zone=Asia/Kolkata")).await, who) }
+    };
+    let exceptions = |name: &'static str| {
+        let t = &t;
+        async move {
+            let mut tx = t.k.db.tenant_tx(t.tenant).await.unwrap();
+            let v: Value = sqlx::query_scalar("select exceptions from logic_calendar where tenant_id = $1 and name = $2")
+                .bind(t.tenant)
+                .bind(name)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+            v
+        }
+    };
+    t.maintain(Utc::now()).await;
+    assert_eq!(
+        exceptions("pune").await,
+        {
+            let mut want = own.clone();
+            want[saturday.to_string()] = json!({"open": true, "hours": [["10:00", "12:00"]]});
+            want
+        },
+        "its own exception for Thursday is kept; the Saturday opening arrives"
+    );
+    assert_eq!(
+        exceptions("bookings_business").await,
+        json!({tuesday.to_string(): {"open": false}, wednesday.to_string(): {"open": false, "hours": [["09:00", "10:00"]]}}),
+        "business-wide closures: the first row of a date; an opening of an all-hours calendar changes nothing"
+    );
+    let settings = t.find_one("BookingSettings", json!({})).await;
+    assert_eq!(settings["calendar"], json!("bookings_business"));
+    let kept = t.scalar("select count(*) from e_booking_settings__calendar_dates where tenant_id = $1 and parent_id = $2", Some(uid(&settings))).await;
+    assert_eq!(kept, 6, "the old rows stay readable");
+    assert!(day(tuesday).await.is_empty(), "the business is closed");
+    assert_eq!(day(wednesday).await, ["10:00", "11:00"]);
+    assert_eq!(day(thursday).await, ["09:00", "10:00"], "the calendar's own Thursday exception won");
+    assert_eq!(day(saturday).await, ["10:00", "11:00"]);
+    // Once: an administrator who removes an exception later is not undone, and new old-style rows are not read.
+    t.k.put_logic_calendar(&a, "bookings_business", &json!({"zone": "Asia/Kolkata", "weekends": [], "holidays": [], "exceptions": {}})).await.unwrap();
+    t.update(&a, "BookingSettings", uid(&settings), json!({"calendar_dates": [row("", monday, "Closed", "", "")]})).await;
+    t.maintain(Utc::now()).await;
+    assert_eq!(exceptions("bookings_business").await, json!({}), "moved once");
+    assert_eq!(day(monday).await.len(), 3, "rows entered after the move are superseded");
 }
 
 #[test]

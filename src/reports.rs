@@ -199,12 +199,24 @@ async fn utilization(ctx: &Ctx, p: &Params<'_>, tx: &mut Tx) -> Result<Value> {
         e.0 += Span::new(start, end).clip(&window).minutes();
         e.1 += 1;
     }
+    // Staff on a working calendar (theirs, the business's) are available when it is open, as booking sees it.
+    let st = crate::settings::load(tx, ctx.tenant).await?;
+    let business = calendar::business_open(tx, ctx.tenant, &st, window).await?;
+    let mut open = HashMap::new();
+    for s in &staff {
+        if let Some(o) = calendar::staff_open(tx, ctx.tenant, s, &business, window).await? {
+            open.insert(s.id, o);
+        }
+    }
     let (mut all_available, mut all_booked, mut all_sessions) = (0i64, 0i64, 0i64);
     let rows: Vec<Value> = staff
         .iter()
         .map(|s| {
             let away: Vec<Span> = off.iter().filter(|o| o.0 == s.id).map(|o| Span::new(o.1, o.2)).collect();
-            let available = engine::available_minutes(s.tz, &s.hours, &away, window);
+            let available = match open.get(&s.id) {
+                Some(o) => engine::open_minutes(o, &away, window),
+                None => engine::available_minutes(s.tz, &s.hours, &away, window),
+            };
             let (minutes, count) = booked.get(&s.id).copied().unwrap_or_default();
             all_available += available;
             all_booked += minutes;

@@ -162,31 +162,15 @@ pub fn intersect(a: Vec<Span>, b: Vec<Span>) -> Vec<Span> {
     merge(merge(a).iter().flat_map(|x| b.iter().filter(|y| y.overlaps(x)).map(|y| x.clip(y))).collect())
 }
 
-/// A dated change to a working calendar, local to its zone: closed (or extra open) from `from` to
-/// `to` minutes after the date's midnight (0 to 1440 is the whole day).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Dated {
-    pub date: NaiveDate,
-    pub from: u32,
-    pub to: u32,
-    pub open: bool,
-}
-
-/// A working calendar's open time near `window`: its weekday windows (`hours`) less its holidays,
-/// less the dated closures, plus the dated openings (an opening wins over a holiday).
-pub fn calendar_spans(tz: Tz, hours: &[Hours], holidays: &[NaiveDate], dated: &[Dated], window: Span) -> Vec<Span> {
-    let span = |d: &Dated| Span::new(local_instant(tz, d.date, d.from, false), local_instant(tz, d.date, d.to, true));
-    let mut closed: Vec<Span> = holidays.iter().map(|d| local_day(tz, *d)).collect();
-    closed.extend(dated.iter().filter(|d| !d.open).map(span));
-    let mut open = subtract(working_spans(tz, hours, window), closed);
-    open.extend(dated.iter().filter(|d| d.open).map(span));
-    merge(open)
-}
-
 /// Minutes of working time inside `period`, less time off.
 pub fn available_minutes(tz: Tz, hours: &[Hours], time_off: &[Span], period: Span) -> i64 {
     let work: Vec<Span> = working_spans(tz, hours, period).iter().map(|s| s.clip(&period)).collect();
     subtract(work, time_off.to_vec()).iter().map(Span::minutes).sum()
+}
+
+/// Minutes of `open` time inside `period`, less time off.
+pub fn open_minutes(open: &[Span], time_off: &[Span], period: Span) -> i64 {
+    subtract(open.iter().map(|s| s.clip(&period)).collect(), time_off.to_vec()).iter().map(Span::minutes).sum()
 }
 
 #[derive(Debug, Clone)]
@@ -537,6 +521,7 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn t(s: &str) -> Instant {
         DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
@@ -882,51 +867,73 @@ mod tests {
         assert_eq!(available_minutes(ny, &hours, &[], half), 4 * 60 + 6 * 8 * 60);
     }
 
-    /// Monday to Friday 09:00-17:00, as a working calendar's weekday windows.
-    fn weekdays(from: &str, to: &str) -> Vec<Hours> {
-        every_day(from, to).into_iter().filter(|h| !matches!(h.weekday, Weekday::Sat | Weekday::Sun)).collect()
+    /// A platform calendar (the kernel's own type) as JSON says it.
+    fn platform(v: serde_json::Value) -> ferrum_kernel::Calendar {
+        let mut v = v;
+        v["name"] = "c".into();
+        v["revision"] = 1.into();
+        serde_json::from_value(v).unwrap()
+    }
+
+    /// Staff following `cal`, offered slots near `window`.
+    fn following(cal: &ferrum_kernel::Calendar, tz: Tz, window: Span) -> World {
+        let mut s = staff(1, tz, vec![]);
+        s.open = Some(crate::calendar::open_spans(cal, window));
+        world(service(60, 0, 0, 1, 60), vec![s])
     }
 
     #[test]
-    fn working_calendars_close_holidays_and_open_dated_days() {
+    fn platform_calendars_open_and_close_by_exceptions_holidays_and_hours() {
         let utc: Tz = "UTC".parse().unwrap();
-        let hours = weekdays("09:00", "12:00");
-        // 2026-06-01 is a Monday, 2026-06-06 a Saturday.
-        let week = local_days(utc, d(2026, 6, 1), d(2026, 6, 7));
-        let cal = |holidays: &[NaiveDate], dated: &[Dated]| {
-            let mut s = staff(1, utc, vec![]);
-            s.open = Some(calendar_spans(utc, &hours, holidays, dated, week));
-            world(service(60, 0, 0, 1, 60), vec![s])
-        };
-        let monday = local_day(utc, d(2026, 6, 1));
-        let saturday = local_day(utc, d(2026, 6, 6));
-        assert_eq!(starts(&cal(&[], &[]).slots(monday, 1)), ["2026-06-01T09:00Z", "2026-06-01T10:00Z", "2026-06-01T11:00Z"]);
-        assert!(cal(&[d(2026, 6, 1)], &[]).slots(monday, 1).is_empty(), "a holiday removes that day's slots");
-        assert!(cal(&[], &[]).slots(saturday, 1).is_empty(), "weekends are closed");
-        let open_saturday = [Dated { date: d(2026, 6, 6), from: 600, to: 720, open: true }];
-        assert_eq!(starts(&cal(&[], &open_saturday).slots(saturday, 1)), ["2026-06-06T10:00Z", "2026-06-06T11:00Z"], "a one-off open Saturday");
-        let closed_morning = [Dated { date: d(2026, 6, 1), from: 540, to: 600, open: false }];
-        assert_eq!(starts(&cal(&[], &closed_morning).slots(monday, 1)), ["2026-06-01T10:00Z", "2026-06-01T11:00Z"], "a dated closure for part of a day");
+        let day = json!([["09:00", "12:00"], ["14:00", "17:00"]]);
+        // 2026-06-01 is a Monday; the 5th (Friday) is a holiday, the 6th a Saturday.
+        let cal = platform(json!({"zone": "UTC", "weekends": ["sat", "sun"], "holidays": ["2026-06-05"],
+            "hours": {"mon": day, "tue": day, "wed": day, "thu": day, "fri": day},
+            "exceptions": {"2026-06-06": {"open": true, "hours": [["10:00", "12:00"]]},
+                           "2026-06-03": {"open": false, "hours": [["09:00", "24:00"]]},
+                           "2026-06-04": {"open": false, "hours": [["14:00", "24:00"]]},
+                           "2026-06-05": {"open": true, "hours": [["10:00", "12:00"]]}}}));
+        let w = following(&cal, utc, local_days(utc, d(2026, 6, 1), d(2026, 6, 7)));
+        let on = |n: u32| starts(&w.slots(local_day(utc, d(2026, 6, n)), 1));
+        assert_eq!(on(1).len(), 6, "a plain weekday");
+        assert_eq!(on(6), ["2026-06-06T10:00Z", "2026-06-06T11:00Z"], "a weekend day opened by an exception");
+        assert!(on(3).is_empty(), "closed from 09:00 on");
+        assert_eq!(on(4), ["2026-06-04T09:00Z", "2026-06-04T10:00Z", "2026-06-04T11:00Z"], "an afternoon closed");
+        assert_eq!(on(5), ["2026-06-05T10:00Z", "2026-06-05T11:00Z"], "a holiday opened");
         // Weekly hours meeting a business calendar: only the time both are open.
-        let both = intersect(working_spans(utc, &every_day("08:00", "10:00"), week), calendar_spans(utc, &hours, &[d(2026, 6, 2)], &[], week));
+        let week = local_days(utc, d(2026, 6, 1), d(2026, 6, 7));
+        let holiday = platform(
+            json!({"zone": "UTC", "weekends": ["sat", "sun"], "holidays": ["2026-06-02"], "hours": {"mon": [["09:00", "12:00"]], "tue": [["09:00", "12:00"]]}}),
+        );
+        let both = intersect(working_spans(utc, &every_day("08:00", "10:00"), week), crate::calendar::open_spans(&holiday, week));
         let mut s = staff(1, utc, every_day("08:00", "10:00"));
         s.open = Some(both);
         let w = world(service(60, 0, 0, 1, 60), vec![s]);
         assert_eq!(starts(&w.slots(local_days(utc, d(2026, 6, 1), d(2026, 6, 2)), 1)), ["2026-06-01T09:00Z"]);
+        // A calendar the platform finds unusable opens nothing.
+        let bad = platform(json!({"zone": "Nowhere/Land", "weekends": [], "holidays": []}));
+        assert!(bad.problem().is_some());
     }
 
     #[test]
-    fn working_calendars_keep_local_times_across_dst() {
-        // New York, Monday to Friday 09:00-12:00; clocks went forward on Sunday 8 March 2026.
+    fn platform_calendars_keep_local_times_across_dst() {
+        // New York, Monday to Friday 09:00-12:00; clocks went forward on Sunday 8 March 2026, which an
+        // exception opens from 01:00 to 04:00 (two real hours: 02:00-03:00 never happens).
         let ny: Tz = "America/New_York".parse().unwrap();
-        let week = local_days(ny, d(2026, 3, 6), d(2026, 3, 9));
-        let mut s = staff(1, ny, vec![]);
-        s.open = Some(calendar_spans(ny, &weekdays("09:00", "12:00"), &[], &[Dated { date: d(2026, 3, 8), from: 60, to: 240, open: true }], week));
-        let w = world(service(60, 0, 0, 1, 60), vec![s]);
+        let h = json!([["09:00", "12:00"]]);
+        let cal = platform(json!({"zone": "America/New_York", "weekends": ["sat", "sun"], "holidays": [],
+            "hours": {"mon": h, "tue": h, "wed": h, "thu": h, "fri": h},
+            "exceptions": {"2026-03-08": {"open": true, "hours": [["01:00", "04:00"]]}}}));
+        let w = following(&cal, ny, local_days(ny, d(2026, 3, 6), d(2026, 3, 9)));
         assert_eq!(starts(&w.slots(local_day(ny, d(2026, 3, 6)), 1))[0], "2026-03-06T14:00Z", "09:00 EST");
         assert_eq!(starts(&w.slots(local_day(ny, d(2026, 3, 9)), 1))[0], "2026-03-09T13:00Z", "09:00 EDT");
-        // The extra-open Sunday 01:00-04:00 has only two real hours: 02:00-03:00 never happens.
         assert_eq!(starts(&w.slots(local_day(ny, d(2026, 3, 8)), 1)), ["2026-03-08T06:00Z", "2026-03-08T07:00Z"]);
+        // The same day closed in the small hours: only what is left of its own windows.
+        let closed = platform(json!({"zone": "America/New_York", "weekends": [], "holidays": [],
+            "hours": {"sun": [["00:00", "06:00"]]},
+            "exceptions": {"2026-03-08": {"open": false, "hours": [["01:00", "03:00"]]}}}));
+        let w = following(&closed, ny, local_days(ny, d(2026, 3, 8), d(2026, 3, 8)));
+        assert_eq!(starts(&w.slots(local_day(ny, d(2026, 3, 8)), 1)), ["2026-03-08T05:00Z", "2026-03-08T07:00Z", "2026-03-08T08:00Z", "2026-03-08T09:00Z"]);
     }
 
     #[test]

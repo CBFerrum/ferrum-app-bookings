@@ -273,50 +273,77 @@ pub async fn staff(tx: &mut Tx, tenant: Uuid, ids: &[Uuid]) -> Result<Vec<StaffI
     Ok(ids.iter().filter_map(|i| found.remove(i)).collect())
 }
 
-/// A working calendar's open time near `window` (Admin → Calendars), with the dated changes entered
-/// in Booking Settings for it (with `business`, also those for the business as a whole). A calendar
-/// that is missing or unusable is closed: it never opens time nobody set.
-pub async fn calendar_open(tx: &mut Tx, tenant: Uuid, st: &Settings, name: &str, business: bool, window: Span) -> Result<Vec<Span>> {
-    let Some(cal) = ferrum_kernel::load_calendar(tx, tenant, name).await? else { return Ok(vec![]) };
-    let Some(tz) = zone(&cal.zone).filter(|_| cal.problem().is_none()) else { return Ok(vec![]) };
-    let mut hours = Vec::new();
-    for (i, day) in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].iter().enumerate() {
-        let Ok(weekday) = chrono::Weekday::try_from(i as u8) else { continue };
-        if cal.weekends.iter().any(|w| w == day) {
-            continue;
+/// The open stretches of the platform calendar `cal` inside `window`, from its own functions
+/// (`next_open`, `working_between`), so its hours, weekends, holidays and dated exceptions are one source.
+/// A stretch ends where the open time counted from its start stops being continuous.
+// ponytail: the end of a stretch is found by bisection over `working_between`; about twenty calls per
+// stretch, fine for the weeks a slot query covers. Upgrade: ask the platform to expose its open windows.
+pub fn open_spans(cal: &ferrum_kernel::Calendar, window: Span) -> Vec<Span> {
+    let mut out = Vec::new();
+    let mut at = window.start;
+    while at < window.end {
+        let Ok(start) = cal.next_open(at) else { break };
+        if start >= window.end {
+            break;
         }
-        match &cal.hours {
-            // Without hours of the day every hour of a business day is open.
-            None => hours.push(Hours { weekday, from: 0, to: 1440 }),
-            Some(h) => hours.extend(
-                h.get(*day).into_iter().flatten().filter_map(|(a, b)| Some(Hours { weekday, from: engine::parse_hhmm(a)?, to: engine::parse_hhmm(b)? })),
-            ),
+        let continuous = |secs: i64| cal.working_between(start, start + Duration::seconds(secs), &[]) == Ok(Duration::seconds(secs));
+        // Gallop in doubling days to a first break, then bisect: a stretch is usually well under a day.
+        let (mut lo, left, mut probe) = (0, (window.end - start).num_seconds(), 86_400);
+        let mut hi = loop {
+            let p = probe.min(left);
+            if continuous(p) {
+                lo = p;
+                if p == left {
+                    break p;
+                }
+                probe *= 2;
+            } else {
+                break p - 1;
+            }
+        };
+        while lo < hi {
+            let mid = (lo + hi + 1) / 2;
+            if continuous(mid) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
         }
+        if lo == 0 {
+            break;
+        }
+        let end = start + Duration::seconds(lo);
+        out.push(Span::new(start, end));
+        at = end;
     }
-    let holidays: Vec<_> = cal.holidays.iter().copied().collect();
-    Ok(engine::calendar_spans(tz, &hours, &holidays, &st.dated_for(name, business), window))
+    out
 }
 
-/// The business's open time near `window`: its calendar's, or every hour less its dated closures;
-/// `None` when it set neither (nothing is closed for everyone).
+/// A working calendar's open time near `window` (Admin → Calendars), exceptions included. A calendar that
+/// is missing or unusable is closed: it never opens time nobody set.
+pub async fn calendar_open(tx: &mut Tx, tenant: Uuid, name: &str, window: Span) -> Result<Vec<Span>> {
+    let Some(cal) = ferrum_kernel::load_calendar(tx, tenant, name).await? else { return Ok(vec![]) };
+    if cal.problem().is_some() {
+        return Ok(vec![]);
+    }
+    Ok(open_spans(&cal, window))
+}
+
+/// The business's open time near `window`: its calendar's; `None` when it named none (nothing is closed
+/// for everyone).
 pub async fn business_open(tx: &mut Tx, tenant: Uuid, st: &Settings, window: Span) -> Result<Option<Vec<Span>>> {
-    if let Some(name) = &st.calendar {
-        return Ok(Some(calendar_open(tx, tenant, st, name, true, window).await?));
+    match &st.calendar {
+        Some(name) => Ok(Some(calendar_open(tx, tenant, name, window).await?)),
+        None => Ok(None),
     }
-    let dated = st.dated_for("", true);
-    if dated.is_empty() {
-        return Ok(None);
-    }
-    let all_day: Vec<Hours> = engine::WEEKDAYS.iter().filter_map(|d| Some(Hours { weekday: engine::weekday(d)?, from: 0, to: 1440 })).collect();
-    Ok(Some(engine::calendar_spans(st.zone, &all_day, &[], &dated, window)))
 }
 
 /// A staff member's working time near `window` when calendars decide it (theirs, the business's):
 /// their calendar's open time, or their weekly hours, inside the business's open time. `None`: their
 /// weekly hours alone, exactly as without calendars.
-pub async fn staff_open(tx: &mut Tx, tenant: Uuid, st: &Settings, s: &StaffInfo, business: &Option<Vec<Span>>, window: Span) -> Result<Option<Vec<Span>>> {
+pub async fn staff_open(tx: &mut Tx, tenant: Uuid, s: &StaffInfo, business: &Option<Vec<Span>>, window: Span) -> Result<Option<Vec<Span>>> {
     let own = match &s.calendar {
-        Some(name) => Some(calendar_open(tx, tenant, st, name, false, window).await?),
+        Some(name) => Some(calendar_open(tx, tenant, name, window).await?),
         None => None,
     };
     Ok(match (own, business) {
@@ -410,14 +437,14 @@ pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffI
             hours: s.hours.clone(),
             time_off: off.iter().filter(|o| o.0 == s.id).map(|o| Span::new(o.1, o.2)).collect(),
             busy: elsewhere.iter().filter(|o| o.0 == s.id).map(|o| Span::new(o.1, o.2)).collect(),
-            open: staff_open(tx, tenant, st, s, &business, range).await?,
+            open: staff_open(tx, tenant, s, &business, range).await?,
         });
     }
     // In the service's order of preference.
     let mut usable = Vec::new();
     for (id, capacity, cal) in svc.resources.iter().filter_map(|r| resources.iter().find(|x| x.0 == *r)) {
         let open = match cal.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
-            Some(name) => Some(calendar_open(tx, tenant, st, name, false, range).await?),
+            Some(name) => Some(calendar_open(tx, tenant, name, range).await?),
             None => None,
         };
         usable.push(engine::Resource { id: *id, capacity: capacity.unwrap_or(1).max(1), open });
