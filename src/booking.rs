@@ -169,6 +169,12 @@ async fn schedule_new(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
             }
         }
     }
+    // The guest is a client from now on: their bookings, invoices and notes share one record.
+    if id(doc, "customer").is_none()
+        && let Some(c) = client_for(hc.kernel, hc.ctx, hc.tx, doc).await?
+    {
+        doc.insert("customer".into(), json!(c.to_string()));
+    }
     let status = if p.waitlisted {
         "Waitlisted"
     } else if public && st.approval_required {
@@ -505,24 +511,39 @@ pub(crate) async fn invoice(hc: &mut HookCtx<'_>, booking: &Doc) -> Result<Value
     Ok(created("SalesInvoice", &inv))
 }
 
-/// The guest's customer: an enabled one with their email, or a new individual customer.
+/// The guest's customer for invoicing (made at booking since 0.6; older bookings get one here).
 async fn customer_for(hc: &mut HookCtx<'_>, booking: &Doc) -> Result<Uuid> {
-    let email = s(booking, "guest_email");
-    if let Some(e) = email {
-        let found: Option<Uuid> =
-            sqlx::query_scalar("select id from e_customer where tenant_id = $1 and lower(email) = lower($2) and not disabled order by created_at, id limit 1")
-                .bind(hc.ctx.tenant)
-                .bind(e)
-                .fetch_optional(&mut **hc.tx)
-                .await?;
-        if let Some(c) = found {
-            return Ok(c);
-        }
+    client_for(hc.kernel, hc.ctx, hc.tx, booking).await?.ok_or_else(|| Error::invalid("the booking has neither a customer nor a guest name"))
+}
+
+/// The guest's client record, the ERP Customer that invoices, CRM and Helpdesk share: an enabled
+/// one with the guest's email (or, without an email, the same phone digits), else a new individual
+/// customer. `None` without a guest name, or with neither an email nor a phone number.
+///
+/// ERP's customers have no unique email to lean on, so a transaction-scoped advisory lock on the
+/// workspace and address serializes the find-or-create: the same person booking twice, or two
+/// bookings for one address at the same moment, find the one record the first made.
+pub(crate) async fn client_for(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc) -> Result<Option<Uuid>> {
+    let email = s(doc, "guest_email").map(|e| e.trim().to_lowercase());
+    let digits = s(doc, "guest_phone").map(|p| p.chars().filter(char::is_ascii_digit).collect::<String>()).filter(|d| (6..=20).contains(&d.len()));
+    let (Some(name), Some(key)) = (s(doc, "guest_name"), email.as_ref().map(|e| format!("e:{e}")).or_else(|| digits.as_ref().map(|d| format!("p:{d}")))) else {
+        return Ok(None);
+    };
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1, 0))").bind(format!("bookings-client:{}:{key}", ctx.tenant)).execute(&mut **tx).await?;
+    let by = if email.is_some() { "lower(email) = $2" } else { "regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = $2" };
+    let found: Option<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select id from e_customer where tenant_id = $1 and {by} and not coalesce(disabled, false) order by created_at, id limit 1"
+    )))
+    .bind(ctx.tenant)
+    .bind(email.as_ref().or(digits.as_ref()))
+    .fetch_optional(&mut **tx)
+    .await?;
+    if found.is_some() {
+        return Ok(found);
     }
-    let name = s(booking, "guest_name").ok_or_else(|| Error::invalid("the booking has neither a customer nor a guest name"))?;
-    let input = obj(json!({"customer_name": name, "customer_type": "Individual", "email": email, "phone": s(booking, "guest_phone")}));
-    let c = create_for_user(hc, "Customer", input).await?;
-    doc_id(&c)
+    let input = obj(json!({"customer_name": name, "customer_type": "Individual", "email": email, "phone": s(doc, "guest_phone")}));
+    let c = k.insert_tx(&sys(ctx), tx, "Customer", input).await?;
+    Ok(Some(doc_id(&c)?))
 }
 
 /// `guest_link`: a fresh self-service link to hand to the guest (when no email goes out).
