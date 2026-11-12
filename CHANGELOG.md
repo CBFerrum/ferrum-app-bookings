@@ -2,7 +2,14 @@
 
 ## 0.7.0
 
-- **A video meeting for each booking** (BK-48). A Video service that states no link of its own gives each booking its own meeting in the Mail, Chat and Calendar app (needs Comms 0.14.0 and a meeting server) once the booking is confirmed, hosted by the booked staff member. The guest's own join link, which needs no account and admits only to that meeting, becomes the booking's Where: the booking page, the confirmation, the reminders and the calendar entry all carry it. Rescheduling a booking moves its meeting (the link stays the same); cancelling or expiring it ends the meeting and the link stops working. Without Comms, without a meeting server, without the workspace's public address in Comms settings, or when the service states its own link, bookings are exactly as before; a meeting that cannot be made never stops a booking. A class's guests each get their own meeting for now.
+- **A video meeting for each booking** (BK-48). A Video service that states no link of its own gives each booking its own meeting in the Mail, Chat and Calendar app (needs Comms 0.15.0 and a meeting server) once the booking is confirmed, hosted by the booked staff member. The guest's own join link, which needs no account and admits only to that meeting, becomes the booking's Where: the booking page, the confirmation, the reminders and the calendar entry all carry it. Rescheduling a booking moves its meeting (the link stays the same); cancelling or expiring it ends the meeting and the link stops working. Without Comms, without a meeting server, without the workspace's public address in Comms settings, or when the service states its own link, bookings are exactly as before; a meeting that cannot be made never stops a booking. A class's guests each get their own meeting for now.
+## 0.6.2
+
+The interface knows what 0.6.0 added. A booking whose time a working calendar closed shows a warning mark, **Outside opening hours**, with what to do (move it, or confirm with the guest): on the schedule's block, on Today, on a pending booking waiting for an answer and at the top of its sheet. **Expired** is muted like Cancelled, holds no block on the schedule, and a guest opening it is told it expired and why. The new fields' and options' names (working calendars, per-service rules, the unpaid-deposit hold, Expired, Restored, Refunded) are in Arabic and Hindi too. Rebuilt with Ferrum-Frontend 0a47157.
+
+## 0.6.1
+
+Rebuilt with Ferrum-Frontend 45dad7f, the design system as tuned after the landed build was reviewed. The left menu's icons are chosen so that none repeats on more than three rows and each fits its row; their drawings load beside the first page instead of inside it, so the page starts lighter; a row that scrolls sideways fades at the edge where there is more, in every browser and with reduced motion; a printed record leaves out empty fields and keeps its totals with the table; menus and popovers sit inside the page's landmarks for assistive technology; a selection bar folds what does not fit into More on a narrow screen. Nothing else changes.
 
 ## 0.6.0
 

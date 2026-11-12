@@ -1,10 +1,10 @@
 // Why a screen has nothing to show, in the kit's one vocabulary: a refused read is "denied" (never shown as
 // empty), no connection is "offline", anything else "failed"; every one offers the retry the caller has.
 
-import { CalendarDays } from "lucide-react";
+import { CalendarDays, TriangleAlert } from "lucide-react";
 import type { ReactNode } from "react";
-import { ApiError } from "@ferrum/client";
-import { StatePanel } from "@ferrum/kit";
+import { ApiError, t } from "@ferrum/client";
+import { Badge, StatePanel } from "@ferrum/kit";
 
 export function Failed({ error, onRetry, title }: { error: unknown; onRetry?: () => void; title?: string }) {
   const status = error instanceof ApiError ? error.status : undefined;
@@ -22,3 +22,14 @@ export const Nothing = ({ title, children, action }: { title: string; children?:
     {children}
   </StatePanel>
 );
+
+/** What staff read on a booking whose time a working calendar closed after it was booked: it stays, and they move it or confirm it. */
+export const closedNote = () => t("A working calendar closed this time after it was booked. Move it, or confirm with the guest that it stands.");
+
+export function ClashMark() {
+  return (
+    <Badge tone="amber" title={closedNote()}>
+      <TriangleAlert size={12} aria-hidden="true" /> {t("Outside opening hours")}
+    </Badge>
+  );
+}
