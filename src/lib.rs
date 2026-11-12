@@ -26,6 +26,7 @@ mod settings;
 mod setup;
 mod site;
 mod slots;
+mod superseded;
 mod token;
 mod video;
 

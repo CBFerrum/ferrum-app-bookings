@@ -24,10 +24,6 @@ pub struct Settings {
     pub manage_page_url: Option<String>,
     /// The business's working calendar (Admin → Calendars): nobody is booked outside its open time.
     pub calendar: Option<String>,
-    /// Dated changes to working calendars: the calendar's name (empty: the business as a whole) and the change.
-    pub dated: Vec<(String, crate::engine::Dated)>,
-    /// The workspace's zone: where business-wide dated changes are read without a business calendar.
-    pub zone: chrono_tz::Tz,
 }
 
 type Row = (Uuid, Option<Uuid>, bool, bool, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<String>, Option<String>);
@@ -55,33 +51,11 @@ pub async fn load(tx: &mut Tx, tenant: Uuid) -> Result<Settings> {
     };
     reminders.sort_unstable_by(|a, b| b.cmp(a));
     reminders.dedup();
-    let (calendar, dated_rows): (Option<String>, Vec<(Option<String>, Option<chrono::NaiveDate>, Option<String>, Option<String>, Option<String>)>) = if id
-        .is_nil()
-    {
-        (None, vec![])
+    let calendar: Option<String> = if id.is_nil() {
+        None
     } else {
-        let calendar: Option<String> =
-            sqlx::query_scalar("select calendar from e_booking_settings where tenant_id = $1 and id = $2").bind(tenant).bind(id).fetch_one(&mut **tx).await?;
-        let rows = sqlx::query_as(
-            "select calendar, date, start_time, end_time, change from e_booking_settings__calendar_dates where tenant_id = $1 and parent_id = $2 order by idx",
-        )
-        .bind(tenant)
-        .bind(id)
-        .fetch_all(&mut **tx)
-        .await?;
-        (calendar, rows)
+        sqlx::query_scalar("select calendar from e_booking_settings where tenant_id = $1 and id = $2").bind(tenant).bind(id).fetch_one(&mut **tx).await?
     };
-    let dated = dated_rows
-        .into_iter()
-        .filter_map(|(cal, date, from, to, change)| {
-            let hhmm = |v: Option<String>, whole: u32| v.filter(|v| !v.trim().is_empty()).map_or(Some(whole), |v| crate::engine::parse_hhmm(&v));
-            let (from, to) = (hhmm(from, 0)?, hhmm(to, 1440)?);
-            let d = crate::engine::Dated { date: date?, from, to, open: change.as_deref() == Some("Open") };
-            Some((cal.map(|c| c.trim().to_string()).unwrap_or_default(), d))
-        })
-        .collect();
-    let zone: Option<String> =
-        sqlx::query_scalar("select settings->>'timezone' from tenant where id = $1").bind(tenant).fetch_optional(&mut **tx).await?.flatten();
     let url = |v: Option<String>| v.map(|u| u.trim().trim_end_matches('/').to_string()).filter(|u| !u.is_empty());
     Ok(Settings {
         company,
@@ -96,8 +70,6 @@ pub async fn load(tx: &mut Tx, tenant: Uuid) -> Result<Settings> {
         public_url: url(public_url),
         manage_page_url: url(manage),
         calendar: calendar.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()),
-        dated,
-        zone: zone.as_deref().and_then(crate::calendar::zone).unwrap_or(chrono_tz::Tz::UTC),
     })
 }
 
@@ -129,11 +101,6 @@ impl Settings {
             st.reminders.dedup();
         }
         st
-    }
-
-    /// The dated changes to the calendar `name`; with `business`, also those for the business as a whole.
-    pub fn dated_for(&self, name: &str, business: bool) -> Vec<crate::engine::Dated> {
-        self.dated.iter().filter(|(c, _)| c == name || (business && c.is_empty())).map(|(_, d)| *d).collect()
     }
 
     /// Starts a guest may book from `now`.
@@ -227,8 +194,6 @@ mod tests {
             public_url: url.map(str::to_string),
             manage_page_url: page.map(str::to_string),
             calendar: None,
-            dated: vec![],
-            zone: chrono_tz::Tz::UTC,
         }
     }
 

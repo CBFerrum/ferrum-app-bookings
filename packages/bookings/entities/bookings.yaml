@@ -32,7 +32,7 @@
     - {name: public_url, type: url, label: Server Address, description: "Address this server is reached at from the internet (e.g. https://erp.example.com), for links in emails and calendar feed URLs"}
     - {name: manage_page_url, type: url, label: Self-Service Page, description: "Your booking page's address; guest links become <address>?token=<token>. Empty: links point at this app's endpoints"}
     - {name: calendar, type: data, max_length: 64, label: Business Calendar, description: "A working calendar (Admin, Calendars): nobody is booked outside its open time, so its holidays close every service. Empty: staff hours alone decide"}
-    - {name: calendar_dates, type: table, of: BookingCalendarDate, label: Closed and Extra Open Dates, description: "One-off closures and openings of a working calendar, entered once for everyone who follows it"}
+    - {name: calendar_dates, type: table, of: BookingCalendarDate, label: Closed and Extra Open Dates, description: "Superseded: these dates now live in the working calendars (Admin, Calendars, Exceptions). Bookings moved existing ones there once and no longer reads this list; it stays here for reference"}
     - {name: signing_secret, type: secret, label: Link Signing Secret, description: "HMAC key signing staff calendar feed links; created on first use. Replacing it retires every feed link handed out"}
   form:
     - {label: Booking Page, fields: [public_page, approval_required, company, min_notice_minutes, max_advance_days, slot_interval_minutes]}
