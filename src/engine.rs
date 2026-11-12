@@ -155,6 +155,34 @@ pub fn working_spans(tz: Tz, hours: &[Hours], window: Span) -> Vec<Span> {
     merge(spans)
 }
 
+/// `a` and `b` both: the stretches inside both lists.
+pub fn intersect(a: Vec<Span>, b: Vec<Span>) -> Vec<Span> {
+    let b = merge(b);
+    // ponytail: every pair is compared; a few weeks of working windows are hundreds, not millions.
+    merge(merge(a).iter().flat_map(|x| b.iter().filter(|y| y.overlaps(x)).map(|y| x.clip(y))).collect())
+}
+
+/// A dated change to a working calendar, local to its zone: closed (or extra open) from `from` to
+/// `to` minutes after the date's midnight (0 to 1440 is the whole day).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Dated {
+    pub date: NaiveDate,
+    pub from: u32,
+    pub to: u32,
+    pub open: bool,
+}
+
+/// A working calendar's open time near `window`: its weekday windows (`hours`) less its holidays,
+/// less the dated closures, plus the dated openings (an opening wins over a holiday).
+pub fn calendar_spans(tz: Tz, hours: &[Hours], holidays: &[NaiveDate], dated: &[Dated], window: Span) -> Vec<Span> {
+    let span = |d: &Dated| Span::new(local_instant(tz, d.date, d.from, false), local_instant(tz, d.date, d.to, true));
+    let mut closed: Vec<Span> = holidays.iter().map(|d| local_day(tz, *d)).collect();
+    closed.extend(dated.iter().filter(|d| !d.open).map(span));
+    let mut open = subtract(working_spans(tz, hours, window), closed);
+    open.extend(dated.iter().filter(|d| d.open).map(span));
+    merge(open)
+}
+
 /// Minutes of working time inside `period`, less time off.
 pub fn available_minutes(tz: Tz, hours: &[Hours], time_off: &[Span], period: Span) -> i64 {
     let work: Vec<Span> = working_spans(tz, hours, period).iter().map(|s| s.clip(&period)).collect();
@@ -169,12 +197,23 @@ pub struct Staff {
     pub time_off: Vec<Span>,
     /// When their own calendar elsewhere says they are busy.
     pub busy: Vec<Span>,
+    /// Open time from working calendars (theirs, the business's), replacing `hours` when set.
+    pub open: Option<Vec<Span>>,
+}
+
+impl Staff {
+    /// Working time near `window`: the calendars' open time, or the weekly hours.
+    pub fn spans(&self, window: Span) -> Vec<Span> {
+        self.open.clone().unwrap_or_else(|| working_spans(self.tz, &self.hours, window))
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Resource {
     pub id: Uuid,
     pub capacity: i64,
+    /// Open time from its working calendar; `None`: whenever staff work.
+    pub open: Option<Vec<Span>>,
 }
 
 /// An active booking that holds time (and maybe a resource).
@@ -342,7 +381,7 @@ impl World {
         } else if self.resources.is_empty() {
             None
         } else {
-            Some(self.free_resource(block).ok_or(Why::NoResource)?)
+            Some(self.free_resource(appt, block).ok_or(Why::NoResource)?)
         };
         let day = local_day(staff.tz, start.with_timezone(&staff.tz).date_naive());
         let mut day_load: HashMap<&str, i64> = HashMap::new();
@@ -389,10 +428,11 @@ impl World {
         peak
     }
 
-    /// The least loaded eligible resource with a unit free throughout `block`.
-    fn free_resource(&self, block: Span) -> Option<Uuid> {
+    /// The least loaded eligible resource open for `appt` with a unit free throughout `block`.
+    fn free_resource(&self, appt: Span, block: Span) -> Option<Uuid> {
         self.resources
             .iter()
+            .filter(|r| r.open.as_ref().is_none_or(|o| o.iter().any(|w| w.contains(&appt))))
             .map(|r| (self.resource_load(r.id, block), r))
             .filter(|(load, r)| *load < r.capacity)
             .min_by_key(|(load, r)| (*load, r.id))
@@ -404,7 +444,7 @@ impl World {
         let around = Span::new(start - Duration::days(1), start + self.service.duration + Duration::days(1));
         let (mut ok, mut no) = (Vec::new(), Vec::new());
         for s in &self.staff {
-            let spans = working_spans(s.tz, &s.hours, around);
+            let spans = s.spans(around);
             match self.check(s, &spans, &self.mine(s.id), start, seats) {
                 Ok(c) => ok.push(c),
                 Err(w) => no.push((s.id, w)),
@@ -419,7 +459,7 @@ impl World {
         let step = if svc.interval < Duration::minutes(1) { Duration::minutes(1) } else { svc.interval };
         let mut out: BTreeMap<Instant, Vec<Candidate>> = BTreeMap::new();
         for s in &self.staff {
-            let spans = working_spans(s.tz, &s.hours, window);
+            let spans = s.spans(window);
             let mine = self.mine(s.id);
             let mut starts = Vec::new();
             for w in &spans {
@@ -458,7 +498,7 @@ impl World {
         }
         let mut out = Vec::new();
         for s in &self.staff {
-            let spans = working_spans(s.tz, &s.hours, window);
+            let spans = s.spans(window);
             let mine = self.mine(s.id);
             let mut starts: Vec<Instant> = mine
                 .iter()
@@ -515,7 +555,7 @@ mod tests {
     }
 
     fn staff(n: u128, tz: Tz, hours: Vec<Hours>) -> Staff {
-        Staff { id: uid(n), tz, hours, time_off: vec![], busy: vec![] }
+        Staff { id: uid(n), tz, hours, time_off: vec![], busy: vec![], open: None }
     }
 
     fn service(minutes: i64, before: i64, after: i64, capacity: i64, interval: i64) -> Service {
@@ -771,16 +811,16 @@ mod tests {
     fn resources_limit_parallel_bookings() {
         let utc: Tz = "UTC".parse().unwrap();
         let mut w = world(service(60, 0, 0, 1, 60), vec![staff(1, utc, every_day("09:00", "12:00")), staff(2, utc, every_day("09:00", "12:00"))]);
-        w.resources = vec![Resource { id: uid(50), capacity: 1 }];
+        w.resources = vec![Resource { id: uid(50), capacity: 1, open: None }];
         book(&mut w, 1, "2026-06-01T10:00:00Z", 1, Some(50));
         assert_eq!(w.candidates_at(t("2026-06-01T10:00:00Z"), 1).1, vec![(uid(1), Why::Busy), (uid(2), Why::NoResource)], "one room, already used");
         let free = w.candidates_at(t("2026-06-01T11:00:00Z"), 1).0;
         assert_eq!(free.iter().map(|c| c.resource).collect::<Vec<_>>(), vec![Some(uid(50)), Some(uid(50))]);
         // A second room (or a room for two) lets staff 2 work in parallel; the least used room is chosen.
-        w.resources.push(Resource { id: uid(51), capacity: 1 });
+        w.resources.push(Resource { id: uid(51), capacity: 1, open: None });
         let (ok, _) = w.candidates_at(t("2026-06-01T10:00:00Z"), 1);
         assert_eq!((ok.len(), ok[0].staff, ok[0].resource), (1, uid(2), Some(uid(51))));
-        w.resources = vec![Resource { id: uid(52), capacity: 2 }];
+        w.resources = vec![Resource { id: uid(52), capacity: 2, open: None }];
         w.booked[0].resource = Some(uid(52));
         assert_eq!(w.resource_load(uid(52), Span::new(t("2026-06-01T09:00:00Z"), t("2026-06-01T12:00:00Z"))), 1);
         assert_eq!(w.candidates_at(t("2026-06-01T10:00:00Z"), 1).0[0].resource, Some(uid(52)));
@@ -789,7 +829,7 @@ mod tests {
         assert_eq!(w.resource_load(uid(52), Span::new(t("2026-06-01T09:00:00Z"), t("2026-06-01T11:00:00Z"))), 1);
         // Joining a class uses the session's resource without taking another unit.
         let mut w = world(service(60, 0, 0, 5, 60), vec![staff(1, utc, every_day("09:00", "12:00"))]);
-        w.resources = vec![Resource { id: uid(60), capacity: 1 }];
+        w.resources = vec![Resource { id: uid(60), capacity: 1, open: None }];
         book(&mut w, 1, "2026-06-01T10:00:00Z", 1, Some(60));
         let (ok, _) = w.candidates_at(t("2026-06-01T10:00:00Z"), 2);
         assert_eq!((ok[0].join, ok[0].resource, ok[0].seats_left), (true, Some(uid(60)), 4));
@@ -840,5 +880,62 @@ mod tests {
         assert_eq!(available_minutes(ny, &hours, &off, week), 7 * 8 * 60 - (5 * 60 + 60));
         let half = Span::new(local_instant(ny, d(2026, 10, 26), 13 * 60, false), week.end);
         assert_eq!(available_minutes(ny, &hours, &[], half), 4 * 60 + 6 * 8 * 60);
+    }
+
+    /// Monday to Friday 09:00-17:00, as a working calendar's weekday windows.
+    fn weekdays(from: &str, to: &str) -> Vec<Hours> {
+        every_day(from, to).into_iter().filter(|h| !matches!(h.weekday, Weekday::Sat | Weekday::Sun)).collect()
+    }
+
+    #[test]
+    fn working_calendars_close_holidays_and_open_dated_days() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let hours = weekdays("09:00", "12:00");
+        // 2026-06-01 is a Monday, 2026-06-06 a Saturday.
+        let week = local_days(utc, d(2026, 6, 1), d(2026, 6, 7));
+        let cal = |holidays: &[NaiveDate], dated: &[Dated]| {
+            let mut s = staff(1, utc, vec![]);
+            s.open = Some(calendar_spans(utc, &hours, holidays, dated, week));
+            world(service(60, 0, 0, 1, 60), vec![s])
+        };
+        let monday = local_day(utc, d(2026, 6, 1));
+        let saturday = local_day(utc, d(2026, 6, 6));
+        assert_eq!(starts(&cal(&[], &[]).slots(monday, 1)), ["2026-06-01T09:00Z", "2026-06-01T10:00Z", "2026-06-01T11:00Z"]);
+        assert!(cal(&[d(2026, 6, 1)], &[]).slots(monday, 1).is_empty(), "a holiday removes that day's slots");
+        assert!(cal(&[], &[]).slots(saturday, 1).is_empty(), "weekends are closed");
+        let open_saturday = [Dated { date: d(2026, 6, 6), from: 600, to: 720, open: true }];
+        assert_eq!(starts(&cal(&[], &open_saturday).slots(saturday, 1)), ["2026-06-06T10:00Z", "2026-06-06T11:00Z"], "a one-off open Saturday");
+        let closed_morning = [Dated { date: d(2026, 6, 1), from: 540, to: 600, open: false }];
+        assert_eq!(starts(&cal(&[], &closed_morning).slots(monday, 1)), ["2026-06-01T10:00Z", "2026-06-01T11:00Z"], "a dated closure for part of a day");
+        // Weekly hours meeting a business calendar: only the time both are open.
+        let both = intersect(working_spans(utc, &every_day("08:00", "10:00"), week), calendar_spans(utc, &hours, &[d(2026, 6, 2)], &[], week));
+        let mut s = staff(1, utc, every_day("08:00", "10:00"));
+        s.open = Some(both);
+        let w = world(service(60, 0, 0, 1, 60), vec![s]);
+        assert_eq!(starts(&w.slots(local_days(utc, d(2026, 6, 1), d(2026, 6, 2)), 1)), ["2026-06-01T09:00Z"]);
+    }
+
+    #[test]
+    fn working_calendars_keep_local_times_across_dst() {
+        // New York, Monday to Friday 09:00-12:00; clocks went forward on Sunday 8 March 2026.
+        let ny: Tz = "America/New_York".parse().unwrap();
+        let week = local_days(ny, d(2026, 3, 6), d(2026, 3, 9));
+        let mut s = staff(1, ny, vec![]);
+        s.open = Some(calendar_spans(ny, &weekdays("09:00", "12:00"), &[], &[Dated { date: d(2026, 3, 8), from: 60, to: 240, open: true }], week));
+        let w = world(service(60, 0, 0, 1, 60), vec![s]);
+        assert_eq!(starts(&w.slots(local_day(ny, d(2026, 3, 6)), 1))[0], "2026-03-06T14:00Z", "09:00 EST");
+        assert_eq!(starts(&w.slots(local_day(ny, d(2026, 3, 9)), 1))[0], "2026-03-09T13:00Z", "09:00 EDT");
+        // The extra-open Sunday 01:00-04:00 has only two real hours: 02:00-03:00 never happens.
+        assert_eq!(starts(&w.slots(local_day(ny, d(2026, 3, 8)), 1)), ["2026-03-08T06:00Z", "2026-03-08T07:00Z"]);
+    }
+
+    #[test]
+    fn resources_follow_their_own_calendar() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let mut w = world(service(60, 0, 0, 1, 60), vec![staff(1, utc, every_day("09:00", "12:00"))]);
+        let morning = Span::new(t("2026-06-01T09:00:00Z"), t("2026-06-01T10:00:00Z"));
+        w.resources = vec![Resource { id: uid(50), capacity: 1, open: Some(vec![morning]) }];
+        assert_eq!(starts(&w.slots(local_day(utc, d(2026, 6, 1)), 1)), ["2026-06-01T09:00Z"]);
+        assert_eq!(why(&w, "2026-06-01T10:00:00Z"), [Why::NoResource]);
     }
 }

@@ -22,6 +22,12 @@ pub struct Settings {
     pub reminders: Vec<i64>,
     pub public_url: Option<String>,
     pub manage_page_url: Option<String>,
+    /// The business's working calendar (Admin → Calendars): nobody is booked outside its open time.
+    pub calendar: Option<String>,
+    /// Dated changes to working calendars: the calendar's name (empty: the business as a whole) and the change.
+    pub dated: Vec<(String, crate::engine::Dated)>,
+    /// The workspace's zone: where business-wide dated changes are read without a business calendar.
+    pub zone: chrono_tz::Tz,
 }
 
 type Row = (Uuid, Option<Uuid>, bool, bool, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<String>, Option<String>);
@@ -49,6 +55,33 @@ pub async fn load(tx: &mut Tx, tenant: Uuid) -> Result<Settings> {
     };
     reminders.sort_unstable_by(|a, b| b.cmp(a));
     reminders.dedup();
+    let (calendar, dated_rows): (Option<String>, Vec<(Option<String>, Option<chrono::NaiveDate>, Option<String>, Option<String>, Option<String>)>) = if id
+        .is_nil()
+    {
+        (None, vec![])
+    } else {
+        let calendar: Option<String> =
+            sqlx::query_scalar("select calendar from e_booking_settings where tenant_id = $1 and id = $2").bind(tenant).bind(id).fetch_one(&mut **tx).await?;
+        let rows = sqlx::query_as(
+            "select calendar, date, start_time, end_time, change from e_booking_settings__calendar_dates where tenant_id = $1 and parent_id = $2 order by idx",
+        )
+        .bind(tenant)
+        .bind(id)
+        .fetch_all(&mut **tx)
+        .await?;
+        (calendar, rows)
+    };
+    let dated = dated_rows
+        .into_iter()
+        .filter_map(|(cal, date, from, to, change)| {
+            let hhmm = |v: Option<String>, whole: u32| v.filter(|v| !v.trim().is_empty()).map_or(Some(whole), |v| crate::engine::parse_hhmm(&v));
+            let (from, to) = (hhmm(from, 0)?, hhmm(to, 1440)?);
+            let d = crate::engine::Dated { date: date?, from, to, open: change.as_deref() == Some("Open") };
+            Some((cal.map(|c| c.trim().to_string()).unwrap_or_default(), d))
+        })
+        .collect();
+    let zone: Option<String> =
+        sqlx::query_scalar("select settings->>'timezone' from tenant where id = $1").bind(tenant).fetch_optional(&mut **tx).await?.flatten();
     let url = |v: Option<String>| v.map(|u| u.trim().trim_end_matches('/').to_string()).filter(|u| !u.is_empty());
     Ok(Settings {
         company,
@@ -62,10 +95,47 @@ pub async fn load(tx: &mut Tx, tenant: Uuid) -> Result<Settings> {
         reminders,
         public_url: url(public_url),
         manage_page_url: url(manage),
+        calendar: calendar.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()),
+        dated,
+        zone: zone.as_deref().and_then(crate::calendar::zone).unwrap_or(chrono_tz::Tz::UTC),
     })
 }
 
 impl Settings {
+    /// The rules that hold for `svc`: each of its own (notice, booking ahead, cancel and reschedule
+    /// windows, approval, reminders), or this workspace's where it left one empty. Every caller
+    /// deciding by these rules goes through here.
+    pub fn for_service(&self, svc: &crate::calendar::ServiceInfo) -> Settings {
+        let r = &svc.rules;
+        let mut st = self.clone();
+        if let Some(m) = r.min_notice_minutes {
+            st.min_notice = Duration::minutes(m.max(0));
+        }
+        if let Some(d) = r.max_advance_days {
+            st.max_advance = Duration::days(d.max(1));
+        }
+        if let Some(h) = r.cancellation_window_hours {
+            st.cancel_window = Duration::hours(h.max(0));
+        }
+        if let Some(h) = r.reschedule_window_hours {
+            st.reschedule_window = Duration::hours(h.max(0));
+        }
+        if let Some(a) = r.approval_required {
+            st.approval_required = a;
+        }
+        if !r.reminders.is_empty() {
+            st.reminders = r.reminders.clone();
+            st.reminders.sort_unstable_by(|a, b| b.cmp(a));
+            st.reminders.dedup();
+        }
+        st
+    }
+
+    /// The dated changes to the calendar `name`; with `business`, also those for the business as a whole.
+    pub fn dated_for(&self, name: &str, business: bool) -> Vec<crate::engine::Dated> {
+        self.dated.iter().filter(|(c, _)| c == name || (business && c.is_empty())).map(|(_, d)| *d).collect()
+    }
+
     /// Starts a guest may book from `now`.
     pub fn public_rules(&self, now: Instant) -> crate::engine::Rules {
         crate::engine::Rules { earliest: Some(now + self.min_notice), latest: Some(now + self.max_advance), on_grid: true }
@@ -156,7 +226,61 @@ mod tests {
             reminders: vec![],
             public_url: url.map(str::to_string),
             manage_page_url: page.map(str::to_string),
+            calendar: None,
+            dated: vec![],
+            zone: chrono_tz::Tz::UTC,
         }
+    }
+
+    #[test]
+    fn a_service_rule_wins_and_an_empty_one_falls_back() {
+        use crate::calendar::{ServiceInfo, ServiceRules};
+        let ws = Settings { reminders: vec![1440, 60], ..settings(None, None) };
+        let svc = |rules: ServiceRules| ServiceInfo {
+            id: Uuid::nil(),
+            name: "S".into(),
+            active: true,
+            description: None,
+            duration: 60,
+            before: 0,
+            after: 0,
+            interval: None,
+            capacity: 1,
+            price: Default::default(),
+            item: None,
+            location_type: "In Person".into(),
+            location: None,
+            staff: vec![],
+            resources: vec![],
+            questions: vec![],
+            guest_repeats: 0,
+            rules,
+        };
+        let same = ws.for_service(&svc(ServiceRules::default()));
+        assert_eq!(
+            (same.min_notice, same.max_advance, same.cancel_window, same.reschedule_window, same.approval_required, same.reminders.clone()),
+            (ws.min_notice, ws.max_advance, ws.cancel_window, ws.reschedule_window, ws.approval_required, ws.reminders.clone()),
+            "empty: every rule is the workspace's"
+        );
+        let own = ws.for_service(&svc(ServiceRules {
+            min_notice_minutes: Some(0),
+            max_advance_days: Some(365),
+            cancellation_window_hours: Some(48),
+            reschedule_window_hours: Some(2),
+            approval_required: Some(true),
+            reminders: vec![30, 2880, 30],
+        }));
+        assert_eq!(own.min_notice, Duration::zero(), "notice");
+        assert_eq!(own.max_advance, Duration::days(365), "how far ahead");
+        assert_eq!(own.cancel_window, Duration::hours(48), "cancellation window");
+        assert_eq!(own.reschedule_window, Duration::hours(2), "reschedule window");
+        assert!(own.approval_required, "approval");
+        assert_eq!(own.reminders, [2880, 30], "reminders, largest first, once each");
+        let now = chrono::Utc::now();
+        assert_eq!(own.public_rules(now).earliest, Some(now), "the guest rules follow");
+        // A service may also turn approval off where the workspace has it on.
+        let strict = Settings { approval_required: true, ..ws.clone() };
+        assert!(!strict.for_service(&svc(ServiceRules { approval_required: Some(false), ..Default::default() })).approval_required);
     }
 
     #[test]

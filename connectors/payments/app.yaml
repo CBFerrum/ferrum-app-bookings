@@ -2,7 +2,7 @@
 # service's terms when a booking is cancelled. Offered where both are installed.
 id: bookings-payments
 name: Booking Deposits
-version: 0.1.0
+version: 0.2.0
 publisher: cbferrum
 summary: Take a deposit when a guest books a paid service, and refund it by the service's terms when the booking is cancelled
 categories: [sales]

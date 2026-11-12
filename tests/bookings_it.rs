@@ -1369,3 +1369,402 @@ fn dec_of(v: &Value) -> String {
     };
     text.parse::<rust_decimal::Decimal>().map(|d| d.normalize().to_string()).unwrap_or(text)
 }
+
+/// A fresh database with one workspace (zone Asia/Kolkata) on Bookings and the packages in `extra`
+/// (`commerce` and `bookings_payments` for deposits, `comms` for the Mail stand-in).
+async fn boot(slug: &str, extra: &[&str]) -> T {
+    let url = std::env::var("FERRUM_BOOKINGS_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_bookings_test".into());
+    let db = Db::connect(DbConfig { url, max_connections: 24, ..Default::default() }).await.expect("connect");
+    sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    let commerce = extra.contains(&"commerce");
+    let mut packages = ferrum_domain::packages().expect("platform packages");
+    packages.extend(ferrum_app_erp::packages().expect("ERP's packages"));
+    if commerce {
+        packages.extend(ferrum_app_commerce::packages().expect("Commerce's packages").into_iter().filter(|p| p.name() != "commerce_subscriptions"));
+    }
+    packages.extend(ferrum_app_bookings::packages().expect("app packages").into_iter().filter(|p| commerce || p.name() != "bookings_payments"));
+    packages.push(mail_stand_in());
+    let catalog = Catalog::from_packages(packages).expect("catalog");
+    let mut hooks = HookRegistry::default();
+    ferrum_domain::register(&mut hooks);
+    ferrum_app_erp::register(&mut hooks);
+    if commerce {
+        ferrum_app_commerce::register(&mut hooks);
+    }
+    ferrum_app_bookings::register(&mut hooks);
+    let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), ..Default::default() };
+    let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
+    ferrum_domain::maintenance(&k).await.expect("partitions");
+    ferrum_app_erp::maintenance(&k).await.expect("partitions");
+    let mut installed = vec!["bookings".to_string()];
+    installed.extend(extra.iter().map(|p| p.to_string()));
+    let tenant = k
+        .create_tenant(NewTenant {
+            slug: slug.into(),
+            name: slug.into(),
+            admin_email: format!("admin@{slug}.test"),
+            admin_password: "Correct-Horse-9".into(),
+            admin_name: None,
+            packages: installed,
+            settings: Some(json!({"fiscal_year_start_month": 4, "timezone": "Asia/Kolkata"})),
+        })
+        .await
+        .expect("tenant");
+    let session = k.login(slug, &format!("admin@{slug}.test"), "Correct-Horse-9").await.expect("login");
+    let admin = k.load_ctx(tenant, session.user, Some(session.token_version), "it".into()).await.expect("ctx");
+    let site = k.hooks.site("bookings").cloned().expect("bookings site");
+    T { k: k.clone(), tenant, admin, site, calls: AtomicU32::new(0) }
+}
+
+fn run(f: impl std::future::Future<Output = ()> + Send + 'static) {
+    let _db = DB.lock().unwrap_or_else(|e| e.into_inner());
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(16 << 20).build().unwrap();
+    rt.block_on(async { tokio::spawn(f).await.unwrap() });
+}
+
+/// The first `weekday` on or after `from`.
+fn next(from: NaiveDate, weekday: chrono::Weekday) -> NaiveDate {
+    use chrono::Datelike;
+    from.iter_days().find(|d| d.weekday() == weekday).unwrap()
+}
+
+#[test]
+fn working_calendars_end_to_end() {
+    run(working_calendars());
+}
+
+/// A clinic's staff follow the workspace's "pune" calendar (weekdays 09:00-12:00): its holiday
+/// closes a Monday for every service, a dated row opens a Saturday morning once, and a booking on a
+/// day closed after it was made is kept and flagged.
+async fn working_calendars() {
+    let t = boot("clinic", &[]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let monday = next(Utc::now().with_timezone(&ist).date_naive() + Duration::days(3), chrono::Weekday::Mon);
+    let (tuesday, saturday) = (monday + Duration::days(1), monday + Duration::days(5));
+    {
+        let mut tx = t.k.db.tenant_tx(t.tenant).await.unwrap();
+        let hours = json!({"mon": [["09:00", "12:00"]], "tue": [["09:00", "12:00"]], "wed": [["09:00", "12:00"]], "thu": [["09:00", "12:00"]], "fri": [["09:00", "12:00"]]});
+        sqlx::query("insert into logic_calendar (tenant_id, name, zone, weekends, holidays, hours) values ($1, 'pune', 'Asia/Kolkata', '{sat,sun}', $2, $3)")
+            .bind(t.tenant)
+            .bind(vec![monday])
+            .bind(hours)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+    let settings =
+        uid(&t.insert(&a, "BookingSettings", json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60})).await);
+    let e = t.k.insert(&a, "BookingStaff", obj(json!({"display_name": "X", "email": "x@clinic.test", "calendar": "nowhere"}))).await.unwrap_err();
+    assert!(messages(&e).contains("working calendar"), "{}", messages(&e));
+    let staff = t.insert(&a, "BookingStaff", json!({"display_name": "Dr Rao", "email": "rao@clinic.test", "calendar": "pune"})).await;
+    let svc = uid(&t.insert(&a, "BookingService", json!({"service_name": "Checkup", "duration_minutes": 60, "staff": [{"staff": sid(&staff)}]})).await);
+    let who = sid(&staff);
+    let day = |d: NaiveDate| {
+        let (t, who) = (&t, &who);
+        async move { times_for(&t.get_pub(&format!("/slots?service={svc}&from={d}&to={d}&time_zone=Asia/Kolkata")).await, who) }
+    };
+    assert!(day(monday).await.is_empty(), "the calendar's holiday removes that day's slots");
+    assert_eq!(day(tuesday).await, ["09:00", "10:00", "11:00"], "no working hours of their own: the calendar's");
+    assert!(day(saturday).await.is_empty(), "weekend");
+    t.update(
+        &a,
+        "BookingSettings",
+        settings,
+        json!({"calendar_dates": [{"calendar": "pune", "date": saturday.to_string(), "change": "Open", "start_time": "10:00", "end_time": "12:00"}]}),
+    )
+    .await;
+    assert_eq!(day(saturday).await, ["10:00", "11:00"], "a one-off open Saturday adds them");
+
+    // Booked on Tuesday; then the business closes that Tuesday: the booking stays, flagged.
+    let b =
+        t.book(json!({"service": svc.to_string(), "start_time": rfc(local(ist, tuesday, "10:00")), "name": "Guest", "email": "g@example.test"})).await.unwrap();
+    let bid = uid(&t.find_one("Booking", json!({"number": b["booking"]["number"]})).await);
+    t.maintain(Utc::now()).await;
+    assert_eq!(t.get("Booking", bid).await["closed_clash"], json!(false));
+    t.update(
+        &a,
+        "BookingSettings",
+        settings,
+        json!({"calendar_dates": [{"calendar": "pune", "date": saturday.to_string(), "change": "Open", "start_time": "10:00", "end_time": "12:00"},
+                                  {"date": tuesday.to_string(), "change": "Closed"}]}),
+    )
+    .await;
+    assert!(day(tuesday).await.is_empty(), "a business-wide closure");
+    t.maintain(Utc::now()).await;
+    let kept = t.get("Booking", bid).await;
+    assert_eq!((kept["status"].clone(), kept["closed_clash"].clone()), (json!("Confirmed"), json!(true)), "kept and flagged, not deleted");
+    // A business calendar that does not exist is refused; one that does closes its holidays for everyone.
+    let e = t.k.update(&a, "BookingSettings", settings, obj(json!({"calendar": "nowhere"})), None).await.unwrap_err();
+    assert!(messages(&e).contains("working calendar"), "{}", messages(&e));
+}
+
+#[test]
+fn service_rules_end_to_end() {
+    run(service_rules());
+}
+
+/// The workspace asks 2 hours' notice, a day's cancellation window, no approval and a reminder a
+/// day ahead; "Walk-in Consult" sets its own: no notice, approval, cancel until the start, a reminder
+/// 30 minutes ahead. "Standard" sets nothing and follows the workspace.
+async fn service_rules() {
+    let t = boot("rules", &[]).await;
+    let a = t.admin.clone();
+    t.insert(
+        &a,
+        "BookingSettings",
+        json!({"public_page": true, "min_notice_minutes": 120, "max_advance_days": 60, "slot_interval_minutes": 60,
+               "cancellation_window_hours": 24, "reschedule_window_hours": 24, "reminders": [{"minutes_before": 1440}]}),
+    )
+    .await;
+    let all_day: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "00:00", "end_time": "24:00"})).collect();
+    let s1 =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Lee", "email": "lee@rules.test", "time_zone": "Asia/Kolkata", "working_hours": all_day})).await;
+    let s2 =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Kay", "email": "kay@rules.test", "time_zone": "Asia/Kolkata", "working_hours": all_day})).await;
+    let walk_in = uid(&t
+        .insert(
+            &a,
+            "BookingService",
+            json!({"service_name": "Walk-in Consult", "duration_minutes": 30, "staff": [{"staff": sid(&s1)}], "min_notice_minutes": 0,
+                   "approval_required": "Yes", "cancellation_window_hours": 0, "reminders": [{"minutes_before": 30}]}),
+        )
+        .await);
+    let standard = uid(&t.insert(&a, "BookingService", json!({"service_name": "Standard", "duration_minutes": 30, "staff": [{"staff": sid(&s2)}]})).await);
+    // The next whole hour at least an hour away: inside the workspace's notice, outside the walk-in's.
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let soon = {
+        let l = (Utc::now() + Duration::minutes(59)).with_timezone(&ist);
+        local(ist, l.date_naive(), &format!("{:02}:00", chrono::Timelike::hour(&l))) + Duration::hours(1)
+    };
+    let book = |svc: Uuid, at: DateTime<Utc>| {
+        let t = &t;
+        async move { t.book(json!({"service": svc.to_string(), "start_time": rfc(at), "name": "Guest", "email": "g@example.test"})).await }
+    };
+    // Notice: the service's 0 wins; the other service's empty one falls back to the workspace's 2 hours.
+    let e = book(standard, soon).await.unwrap_err();
+    assert!(messages(&e).contains("minimum notice"), "{}", messages(&e));
+    let mine = book(walk_in, soon).await.expect("no notice for walk-ins");
+    // Approval: the service's Yes wins over the workspace's off; the other is confirmed at once.
+    assert_eq!(mine["booking"]["status"], json!("Pending"));
+    let theirs = book(standard, soon + Duration::hours(2)).await.unwrap();
+    assert_eq!(theirs["booking"]["status"], json!("Confirmed"));
+    // Cancellation window: until the start for the walk-in; a day for the other, so not online now.
+    assert_eq!((mine["booking"]["can_cancel"].clone(), theirs["booking"]["can_cancel"].clone()), (json!(true), json!(false)));
+    let e = t.post_pub(&format!("/manage/{}/cancel", theirs["token"].as_str().unwrap()), json!({})).await.unwrap_err();
+    assert!(messages(&e).contains("24 hours"), "{}", messages(&e));
+    // Reminders: 30 minutes before the walk-in (confirmed now); none for the other inside its day-ahead
+    // reminder (booked after it was due).
+    let id = uid(&t.find_one("Booking", json!({"number": mine["booking"]["number"]})).await);
+    t.act(&a, "Booking", id, "confirm", json!({})).await;
+    t.maintain(soon - Duration::minutes(29)).await;
+    let keys = t.texts("select key from bookings_notice where tenant_id = $1 and booking_id = $2 and kind = 'reminder'", Some(id)).await;
+    assert_eq!(keys, [format!("30@{}", soon.timestamp())], "the service's offset");
+    t.post_pub(&format!("/manage/{}/cancel", mine["token"].as_str().unwrap()), json!({})).await.expect("cancelled online until the start");
+}
+
+#[test]
+fn unpaid_deposits_end_to_end() {
+    run(unpaid_deposits());
+}
+
+/// A peel of 1,000 takes a 30% deposit and holds its time 15 minutes for it (the settings leave the
+/// hold empty: a facial holds until its deposit request expires, after 30 minutes).
+async fn unpaid_deposits() {
+    let t = boot("peel", &["commerce", "bookings_payments", "comms"]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let at = |hhmm: &str| local(ist, day, hhmm);
+    let inr = t.find_one("Currency", json!({"code": "INR"})).await;
+    let cid = uid(&t.insert(&a, "Company", json!({"company_name": "Peel", "abbr": "PL", "default_currency": inr["id"]})).await);
+    let group = t.find_one("ItemGroup", json!({"group_name": "Services"})).await;
+    let nos = t.find_one("Uom", json!({"uom_name": "Nos"})).await;
+    let item = |code: &str| json!({"item_code": code, "item_name": code, "item_group": group["id"], "stock_uom": nos["id"], "is_stock_item": false});
+    let peel_item = uid(&t.insert(&a, "Item", item("PEEL")).await);
+    let ship = uid(&t.insert(&a, "Item", item("SHIP")).await);
+    let stores = t.find_one("Warehouse", json!({"warehouse_name": "Stores", "company": cid.to_string()})).await;
+    let selling = t.find_one("PriceList", json!({"price_list_name": "Standard Selling"})).await;
+    t.insert(
+        &a,
+        "StoreSettings",
+        json!({"store_name": "Peel", "company": cid.to_string(), "currency": inr["id"], "price_list": selling["id"], "fulfilment_warehouse": stores["id"],
+               "shipping_item": ship.to_string(), "payment_methods": [{"gateway": "fakepay", "label": "Card", "expiry_minutes": 30}], "store_url": "https://peel.test"}),
+    )
+    .await;
+    let fakepay = {
+        let role = "plugin:fakepay".to_string();
+        for entity in ["PaymentRequest", "PaymentException", "OrderRefund"] {
+            let p = ferrum_meta::PermissionDef { entity: entity.into(), read: true, write: true, ..Default::default() };
+            t.k.set_role_permission(&a, &role, &p).await.unwrap();
+        }
+        let u = t.k.create_user(&a, "fakepay@plugins.ferrum.invalid", "Plugin: fakepay", None, &[role], false).await.unwrap();
+        t.k.load_ctx(t.tenant, u, None, "plugin-fakepay".into()).await.unwrap()
+    };
+    t.insert(
+        &a,
+        "BookingSettings",
+        json!({"company": cid.to_string(), "public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 30,
+               "cancellation_window_hours": 0, "reschedule_window_hours": 0, "bpay_payment_method": "fakepay"}),
+    )
+    .await;
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let mira =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Mira", "email": "mira@peel.test", "time_zone": "Asia/Kolkata", "working_hours": every})).await;
+    let service = |name: &str, hold: Option<i64>| {
+        json!({"service_name": name, "duration_minutes": 60, "price": "1000", "item": peel_item.to_string(), "location_type": "In Person",
+               "staff": [{"staff": sid(&mira)}], "bpay_deposit_percent": "30", "bpay_hold_minutes": hold})
+    };
+    let peel = uid(&t.insert(&a, "BookingService", service("Peel", Some(15))).await);
+    let facial = uid(&t.insert(&a, "BookingService", service("Facial", None)).await);
+    let book = |svc: Uuid, hhmm: &'static str, email: &'static str| {
+        let t = &t;
+        async move {
+            let v = t.book(json!({"service": svc.to_string(), "start_time": rfc(at(hhmm)), "name": "Guest", "email": email})).await?;
+            Ok::<Uuid, Error>(uid(&t.find_one("Booking", json!({"number": v["booking"]["number"]})).await))
+        }
+    };
+    let pay = |b: Uuid| {
+        let (t, fakepay) = (&t, &fakepay);
+        async move {
+            let pr: Uuid = t.get("Booking", b).await["bpay_payment_request"].as_str().unwrap().parse().unwrap();
+            t.action(fakepay, "PaymentRequest", pr, "mark_paid", json!({"amount": "300", "currency": "INR", "gateway_reference": format!("pi_{b}")})).await
+        }
+    };
+    let status = |b: Uuid| {
+        let t = &t;
+        async move { t.get("Booking", b).await["status"].as_str().unwrap().to_string() }
+    };
+    let subjects = |email: &'static str| {
+        let t = &t;
+        async move { t.mails_to(email).await.iter().map(|m| m["subject"].as_str().unwrap().to_string()).collect::<Vec<_>>() }
+    };
+    let soon = Utc::now() + Duration::minutes(16);
+
+    // ───────────── held, then released after 15 minutes; paid late while free: restored ─────────────
+    let ann = book(peel, "10:00", "ann@example.test").await.unwrap();
+    assert_eq!(status(ann).await, "Pending");
+    let e = book(peel, "10:00", "bob@example.test").await.unwrap_err();
+    assert!(matches!(e, Error::Conflict(_)), "the unpaid deposit holds the time: {e:?}");
+    t.maintain(Utc::now() + Duration::minutes(14)).await;
+    assert_eq!(status(ann).await, "Pending", "inside its hold");
+    t.maintain(soon).await;
+    t.maintain(soon).await;
+    assert_eq!(status(ann).await, "Expired");
+    let mails = subjects("ann@example.test").await;
+    assert_eq!(mails.iter().filter(|s| s.starts_with("Booking released")).count(), 1, "told once: {mails:?}");
+    pay(ann).await.expect("still payable: its request lasts 30 minutes");
+    assert_eq!(status(ann).await, "Confirmed", "the time was still free");
+    t.maintain(soon).await;
+    assert!(subjects("ann@example.test").await.last().unwrap().starts_with("Booking confirmed"));
+
+    // ───────────── released and taken; paid late: refunded once ─────────────
+    let cat = book(peel, "12:00", "cat@example.test").await.unwrap();
+    t.maintain(soon).await;
+    assert_eq!(status(cat).await, "Expired");
+    let dan = book(peel, "12:00", "dan@example.test").await.expect("the released time");
+    pay(cat).await.expect("paid late");
+    assert_eq!((status(cat).await, status(dan).await), ("Expired".to_string(), "Pending".to_string()), "not restored over Dan");
+    t.maintain(soon).await;
+    t.maintain(soon).await;
+    let b = t.get("Booking", cat).await;
+    let refunds = t.list(&a, "OrderRefund", json!({"payment_request": b["bpay_payment_request"]})).await.unwrap();
+    assert_eq!(refunds.len(), 1, "refunded exactly once");
+    assert_eq!((dec_of(&refunds[0]["amount"]), dec_of(&b["bpay_kept"])), ("300".to_string(), "0".to_string()), "all of it");
+    assert!(subjects("cat@example.test").await.last().unwrap().starts_with("Deposit refunded"));
+
+    // ───────────── no hold set: the time is kept until the deposit request expires ─────────────
+    let eve = book(facial, "14:00", "eve@example.test").await.unwrap();
+    t.maintain(soon).await;
+    assert_eq!(status(eve).await, "Pending", "the request is still payable");
+    t.maintain(Utc::now() + Duration::minutes(31)).await;
+    assert_eq!(status(eve).await, "Expired");
+    let b = t.get("Booking", eve).await;
+    let request = t.get("PaymentRequest", b["bpay_payment_request"].as_str().unwrap().parse().unwrap()).await;
+    let invoice = t.get("SalesInvoice", b["sales_invoice"].as_str().unwrap().parse().unwrap()).await;
+    assert_eq!((request["status"].clone(), invoice["docstatus"].clone()), (json!("Cancelled"), json!(2)), "nothing more can be paid: both cancelled");
+
+    // ───────────── a race: the hold running out, another guest, and the late payment at once ─────────────
+    let fay = book(peel, "16:00", "fay@example.test").await.unwrap();
+    let (_, gus, paid) = tokio::join!(t.maintain(soon), book(peel, "16:00", "gus@example.test"), pay(fay));
+    t.maintain(soon).await;
+    let active = t
+        .scalar(
+            &format!("select count(*) from e_booking where tenant_id = $1 and start_time = '{}' and status in ('Pending', 'Confirmed')", rfc(at("16:00"))),
+            None,
+        )
+        .await;
+    assert_eq!(active, 1, "one of them holds the time: gus {gus:?}, paid {paid:?}");
+    let f = t.get("Booking", fay).await;
+    if f["status"] == json!("Expired") && paid.is_ok() {
+        assert_eq!(dec_of(&f["bpay_kept"]), "0", "Fay paid but lost the time: refunded");
+    }
+}
+
+#[test]
+fn guests_become_clients_end_to_end() {
+    run(guests_become_clients());
+}
+
+/// A guest who books is a customer at once: found by email (any case), else made; booking twice,
+/// or two bookings at the same moment, make one; erasing the guest erases the customer too.
+async fn guests_become_clients() {
+    let t = boot("visit", &[]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    t.insert(&a, "BookingSettings", json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60})).await;
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let staff =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Noor", "email": "noor@visit.test", "time_zone": "Asia/Kolkata", "working_hours": every})).await;
+    let svc = uid(&t.insert(&a, "BookingService", json!({"service_name": "Visit", "duration_minutes": 60, "staff": [{"staff": sid(&staff)}]})).await);
+    let book = |hhmm: &'static str, email: &'static str| {
+        let t = &t;
+        async move {
+            let v = t
+                .book(json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, hhmm)), "name": "Ravi Kumar", "email": email, "phone": "+91 98200 12345"}))
+                .await
+                .expect("booked");
+            t.find_one("Booking", json!({"number": v["booking"]["number"]})).await
+        }
+    };
+    let customers = |email: &'static str| {
+        let t = &t;
+        async move { t.scalar(&format!("select count(*) from e_customer where tenant_id = $1 and lower(email) = '{email}'"), None).await }
+    };
+    let first = book("09:00", "ravi@example.test").await;
+    assert_eq!(customers("ravi@example.test").await, 1, "a customer at once");
+    let again = book("10:00", "Ravi@Example.test").await;
+    assert_eq!((customers("ravi@example.test").await, first["customer"].clone()), (1, again["customer"].clone()), "the same person booking twice");
+    let cust = t.get("Customer", first["customer"].as_str().unwrap().parse().unwrap()).await;
+    assert_eq!((cust["customer_name"].clone(), cust["customer_type"].clone()), (json!("Ravi Kumar"), json!("Individual")));
+    // An existing customer is linked, not copied.
+    let known = uid(&t.insert(&a, "Customer", json!({"customer_name": "Sara Ali", "customer_type": "Individual", "email": "sara@example.test"})).await);
+    assert_eq!(book("11:00", "sara@example.test").await["customer"], json!(known.to_string()));
+    // Two bookings for one new address at the same moment make one customer.
+    let (x, y) = tokio::join!(book("12:00", "pat@example.test"), book("13:00", "pat@example.test"));
+    assert_eq!((customers("pat@example.test").await, x["customer"].clone()), (1, y["customer"].clone()));
+    // Without an email (staff booking a caller), the phone's digits find the customer.
+    let call = t
+        .insert(
+            &a,
+            "Booking",
+            json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, "14:00")), "guest_name": "R. Kumar", "guest_phone": "098200-12345"}),
+        )
+        .await;
+    assert_ne!(call["customer"], first["customer"], "different digits (a leading 0): not assumed the same person");
+    let call = t
+        .insert(
+            &a,
+            "Booking",
+            json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, "15:00")), "guest_name": "R. Kumar", "guest_phone": "+91-98200-12345"}),
+        )
+        .await;
+    assert_eq!(call["customer"], first["customer"], "the same digits");
+    // Erasing the guest reaches the customer made for them, as it reaches the booking's guest fields.
+    t.k.erase_personal_data(&a, "ravi@example.test", "the guest asked").await.expect("erased");
+    let (b, c) = (t.get("Booking", uid(&first)).await, t.get("Customer", uid(&cust)).await);
+    assert!(b["guest_email"].is_null() && c["email"].is_null(), "booking {} customer {}", b["guest_email"], c["email"]);
+    assert_ne!(c["customer_name"], json!("Ravi Kumar"));
+}
