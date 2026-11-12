@@ -43,6 +43,20 @@ pub struct ServiceInfo {
     pub questions: Vec<Question>,
     /// Times in a row a guest may book it from the booking page (0 or 1: once).
     pub guest_repeats: i64,
+    /// Its own booking rules; empty ones are Booking Settings' (see `Settings::for_service`).
+    pub rules: ServiceRules,
+}
+
+/// A service's own booking rules, each `None` (or empty) when it follows Booking Settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServiceRules {
+    pub min_notice_minutes: Option<i64>,
+    pub max_advance_days: Option<i64>,
+    pub cancellation_window_hours: Option<i64>,
+    pub reschedule_window_hours: Option<i64>,
+    pub approval_required: Option<bool>,
+    /// Reminder offsets in minutes; empty: the workspace's.
+    pub reminders: Vec<i64>,
 }
 
 impl ServiceInfo {
@@ -128,7 +142,40 @@ pub async fn service(tx: &mut Tx, tenant: Uuid, id: Uuid) -> Result<Option<Servi
     .bind(id)
     .fetch_all(&mut **tx)
     .await?;
+    let (min_notice_minutes, max_advance_days, cancellation_window_hours, reschedule_window_hours, approval): (
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "select min_notice_minutes, max_advance_days, cancellation_window_hours, reschedule_window_hours, approval_required \
+         from e_booking_service where tenant_id = $1 and id = $2",
+    )
+    .bind(tenant)
+    .bind(id)
+    .fetch_one(&mut **tx)
+    .await?;
+    let reminders: Vec<i64> =
+        sqlx::query_scalar("select minutes_before from e_booking_service__reminders where tenant_id = $1 and parent_id = $2 and minutes_before > 0")
+            .bind(tenant)
+            .bind(id)
+            .fetch_all(&mut **tx)
+            .await?;
+    let rules = ServiceRules {
+        min_notice_minutes,
+        max_advance_days,
+        cancellation_window_hours,
+        reschedule_window_hours,
+        approval_required: approval.as_deref().and_then(|a| match a {
+            "Yes" => Some(true),
+            "No" => Some(false),
+            _ => None,
+        }),
+        reminders,
+    };
     Ok(Some(ServiceInfo {
+        rules,
         id,
         name,
         active,

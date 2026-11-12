@@ -158,6 +158,12 @@
     - {name: staff, type: table, of: BookingServiceStaff, required: true, description: "Staff who provide it"}
     - {name: resources, type: table, of: BookingServiceResource, description: "Each booking needs one of these free; empty = none"}
     - {name: questions, type: table, of: BookingQuestion, label: Intake Questions}
+    - {name: min_notice_minutes, type: int, label: Minimum Notice (Minutes), min: 0, max: 525600, description: "Empty = Booking Settings"}
+    - {name: max_advance_days, type: int, label: Book Ahead At Most (Days), min: 1, max: 730, description: "Empty = Booking Settings"}
+    - {name: cancellation_window_hours, type: int, label: Guests Cancel Up To (Hours Before), min: 0, max: 8760, description: "0 = until the start. Empty = Booking Settings"}
+    - {name: reschedule_window_hours, type: int, label: Guests Reschedule Up To (Hours Before), min: 0, max: 8760, description: "0 = until the start. Empty = Booking Settings"}
+    - {name: approval_required, type: select, options: ["Yes", "No"], label: Confirm Public Bookings Manually, description: "Empty = Booking Settings"}
+    - {name: reminders, type: table, of: BookingReminder, description: "Reminders before each confirmed booking of this service. Empty = Booking Settings'"}
   actions:
     # The booking screens list the free times; a record page could not show them.
     - {name: find_slots, label: Find Free Slots, permission: read, hidden: true}
@@ -167,6 +173,7 @@
     - {label: Price, fields: [price, item]}
     - {label: Staff and Resources, fields: [staff, resources]}
     - {label: Intake Questions, collapsible: true, fields: [questions]}
+    - {label: Rules, collapsible: true, fields: [min_notice_minutes, max_advance_days, cancellation_window_hours, reschedule_window_hours, approval_required, reminders]}
   list: {columns: [service_name, duration_minutes, capacity, price, location_type, active], sort: service_name asc}
 
 - name: BookingAnswer

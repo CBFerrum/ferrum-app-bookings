@@ -144,9 +144,9 @@ async fn service_of(tx: &mut Tx, tenant: Uuid, doc: &Doc) -> Result<ServiceInfo>
 /// A new booking: the engine places it (staff, resource, session) and the derived fields follow.
 async fn schedule_new(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
     let tenant = hc.ctx.tenant;
-    let st = settings::load(hc.tx, tenant).await?;
     let public = s(doc, "source") == Some("Public");
     let svc = service_of(hc.tx, tenant, doc).await?;
+    let st = settings::load(hc.tx, tenant).await?.for_service(&svc);
     if !svc.active {
         return Err(Error::field("service", format!("{} is not taking bookings", svc.name)));
     }
@@ -266,7 +266,8 @@ pub async fn reschedule(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, m: &M
         return Err(Error::invalid(format!("only pending or confirmed bookings can be rescheduled; this one is {}", status(booking))));
     }
     let tenant = ctx.tenant;
-    let st = settings::load(tx, tenant).await?;
+    let svc = service_of(tx, tenant, booking).await?;
+    let st = settings::load(tx, tenant).await?.for_service(&svc);
     let now = Utc::now();
     let current = time(booking, "start_time").ok_or_else(|| Error::internal("booking without a start"))?;
     if public && now > current - st.reschedule_window {
@@ -275,7 +276,6 @@ pub async fn reschedule(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, m: &M
             st.reschedule_window.num_hours()
         )));
     }
-    let svc = service_of(tx, tenant, booking).await?;
     let seats = m.seats.unwrap_or_else(|| seats_of(booking));
     check_seats(&svc, seats)?;
     let staff = match m.staff {
@@ -319,7 +319,8 @@ pub async fn cancel(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, reason: O
     if !matches!(was.as_str(), "Pending" | "Confirmed" | "Waitlisted") {
         return Err(Error::invalid(format!("this booking is already {}", if was.is_empty() { "closed" } else { was.as_str() })));
     }
-    let st = settings::load(tx, ctx.tenant).await?;
+    let svc = service_of(tx, ctx.tenant, booking).await?;
+    let st = settings::load(tx, ctx.tenant).await?.for_service(&svc);
     if public && was != "Waitlisted" {
         let start = time(booking, "start_time").ok_or_else(|| Error::internal("booking without a start"))?;
         if Utc::now() > start - st.cancel_window {
@@ -335,11 +336,9 @@ pub async fn cancel(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, reason: O
     let out = update(k, ctx, tx, booking, patch, true).await?;
     if ACTIVE.contains(&was.as_str())
         && let Some(key) = s(booking, "session_key")
+        && svc.group()
     {
-        let svc = service_of(tx, ctx.tenant, booking).await?;
-        if svc.group() {
-            promote(k, ctx, tx, &svc, &st, key).await?;
-        }
+        promote(k, ctx, tx, &svc, &st, key).await?;
     }
     Ok(out)
 }
@@ -361,6 +360,7 @@ pub async fn finish(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, to: &str)
 /// booking whose seats fit (re-checked like a booking, under the locks) is confirmed — or Pending
 /// when public bookings need approval. Returns how many moved up.
 pub async fn promote(k: &Kernel, ctx: &Ctx, tx: &mut Tx, svc: &ServiceInfo, st: &Settings, session: &str) -> Result<usize> {
+    let st = &st.for_service(svc);
     let waiting: Vec<(Uuid, Option<Uuid>, Instant, Option<i64>, Option<String>, Option<i64>)> = sqlx::query_as(
         "select id, staff, start_time, seats, source, notice_version from e_booking where tenant_id = $1 and session_key = $2 and status = 'Waitlisted' \
          and start_time > now() order by created_at, id for update skip locked",
