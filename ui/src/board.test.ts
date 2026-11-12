@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Bk, blocks, clip, dropHint, hhmm, hourMarks, initials, inOrder, landing, makeLane, mergeSpans, nextSteps, pack, type ServiceRow, snap, viewWindow, workSpans } from "./board";
+import { type Bk, blocks, clashed, clip, dropHint, hhmm, hourMarks, initials, inOrder, landing, makeLane, mergeSpans, nextSteps, pack, type ServiceRow, snap, tone, viewWindow, workSpans } from "./board";
 import { instantAt } from "./zone";
 
 const Z = "Asia/Kolkata";
@@ -88,6 +88,7 @@ describe("blocks", () => {
 
   it("leaves out what holds no time, and a class with one guest is still a class", () => {
     expect(blocks([booking("1", { status: "Cancelled" }), booking("2", { status: "Waitlisted" })], services)).toEqual([]);
+    expect(blocks([booking("e", { status: "Expired" })], services)).toEqual([]);
     expect(blocks([booking("p", { service: "pilates", session_key: "k" })], services)[0].kind).toBe("session");
   });
 
@@ -229,5 +230,19 @@ describe("what can be done to a booking", () => {
 
   it("makes initials", () => {
     expect([initials("Asha Rao"), initials("ravi"), initials(null), initials("Mary Jane Watson")]).toEqual(["AR", "R", "?", "MW"]);
+  });
+});
+
+describe("statuses and the closed-calendar mark", () => {
+  it("colours Expired like Cancelled, and offers nothing for it", () => {
+    expect(tone("Expired")).toBe(tone("Cancelled"));
+    expect(nextSteps({ status: "Expired", start_time: new Date(Date.now() + 3_600_000).toISOString() }, Date.now())).toEqual([]);
+  });
+
+  it("marks a block only while one of its bookings still holds a closed time", () => {
+    const one = (over: Partial<Bk>) => blocks([booking("1", over)], services)[0];
+    expect(clashed(one({ closed_clash: true }))).toBe(true);
+    expect(clashed(one({}))).toBe(false);
+    expect(clashed(one({ closed_clash: true, status: "No Show" }))).toBe(false);
   });
 });
