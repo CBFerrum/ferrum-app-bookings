@@ -61,7 +61,7 @@ export interface Slots {
 /** What a guest sees of their booking (`guest_view` in the app's site). */
 export interface GuestBooking {
   number?: string | null;
-  status: "Pending" | "Confirmed" | "Waitlisted" | "Cancelled" | "No Show" | "Completed";
+  status: "Pending" | "Confirmed" | "Waitlisted" | "Cancelled" | "No Show" | "Completed" | "Expired";
   service: { id: string; name: string };
   staff: { id: string | null; name: string | null };
   start_time: string;

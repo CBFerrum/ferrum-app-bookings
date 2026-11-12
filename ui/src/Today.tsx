@@ -10,10 +10,10 @@ import { Link, useSearchParams } from "react-router";
 import { errorMessage, t, isolate } from "@ferrum/client";
 import { Badge, Button, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, useEntityMeta, useMe } from "@ferrum/records";
-import { type Bk, blocks as makeBlocks, type Block, inOrder, nextSteps, tone } from "./board";
+import { type Bk, blocks as makeBlocks, type Block, clashed, inOrder, nextSteps, tone } from "./board";
 import { act, loadMeta, loadRange, loadWaiting } from "./data";
 import { BookingSheet, refreshBookings } from "./Sheet";
-import { Failed, Loading, Nothing } from "./states";
+import { ClashMark, Failed, Loading, Nothing } from "./states";
 import { Tabs } from "./Tabs";
 import { browserZone, clockText, dayBounds, dayOf, dayText, prefers12Hour } from "./zone";
 
@@ -63,6 +63,7 @@ function Row({ block, zone, hour12, now, canWrite, showWho, busy, run, onOpen, o
             <span className="bk-row-title">{isolate(block.title)}</span>
           )}
           {next && <Badge tone="blue">{t("Next")}</Badge>}
+          {clashed(block) && <ClashMark />}
         </span>
         <span className="muted">
           {block.kind === "booking" ? first.service_name : t("{seats} of {capacity} seats", { seats: block.seats, capacity: block.capacity })}
