@@ -426,7 +426,7 @@ async fn guest_view(ctx: &Ctx, tx: &mut Tx, b: &Doc, st: &Settings, root: &str, 
         "until": end.with_timezone(&tz).format("%H:%M").to_string(),
         "seats": int(b, "seats"),
         "location_type": b.get("location_type"),
-        "location": if status == "Cancelled" { Value::Null } else { b.get("location").cloned().unwrap_or(Value::Null) },
+        "location": if matches!(status, "Cancelled" | "Expired") { Value::Null } else { b.get("location").cloned().unwrap_or(Value::Null) },
         "guest": {"name": b.get("guest_name"), "email": b.get("guest_email"), "phone": b.get("guest_phone")},
         "answers": rows(b, "answers").iter().map(|r| json!({"question": r.get("question"), "answer": r.get("answer")})).collect::<Vec<_>>(),
         "amount": money(d(b, "amount")),
@@ -507,7 +507,7 @@ async fn download(k: &Kernel, ctx: &Ctx, tok: &str) -> Result<SiteResponse> {
     let (_, b) = by_token(k, ctx, &mut tx, tok, false).await?;
     tx.commit().await?;
     let status = match s(&b, "status") {
-        Some("Cancelled") => "CANCELLED",
+        Some("Cancelled" | "Expired") => "CANCELLED",
         Some("Confirmed" | "Completed") => "CONFIRMED",
         _ => "TENTATIVE",
     };

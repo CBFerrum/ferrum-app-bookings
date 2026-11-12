@@ -343,6 +343,62 @@ pub async fn cancel(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, reason: O
     Ok(out)
 }
 
+/// A Pending booking whose deposit was not paid in time: its time and seats are released (a freed
+/// class seat goes to the waitlist) and the guest is told. Paid after all, it may come back (`restore`).
+pub async fn expire(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc) -> Result<Doc> {
+    if status(booking) != "Pending" {
+        return Err(Error::invalid(format!("only pending bookings expire; this one is {}", status(booking))));
+    }
+    let patch = obj(json!({"status": "Expired", "cancelled_at": ts(Utc::now()), "last_change": "Expired"}));
+    let out = update(k, ctx, tx, booking, patch, true).await?;
+    if let Some(key) = s(booking, "session_key") {
+        let svc = service_of(tx, ctx.tenant, booking).await?;
+        if svc.group() {
+            let st = settings::load(tx, ctx.tenant).await?;
+            promote(k, ctx, tx, &svc, &st, key).await?;
+        }
+    }
+    Ok(out)
+}
+
+/// An Expired booking paid after all: back at its time with its staff member, confirmed, when that
+/// is still free and ahead (checked like any booking, under the same locks). `false`: it was taken,
+/// or has passed, and the booking stays Expired.
+pub async fn restore(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc) -> Result<bool> {
+    let now = Utc::now();
+    let start = time(booking, "start_time").ok_or_else(|| Error::internal("booking without a start"))?;
+    if status(booking) != "Expired" || start <= now {
+        return Ok(false);
+    }
+    let svc = service_of(tx, ctx.tenant, booking).await?;
+    let st = settings::load(tx, ctx.tenant).await?.for_service(&svc);
+    let bid = doc_id(booking)?;
+    let request = Request {
+        svc: &svc,
+        st: &st,
+        start,
+        seats: seats_of(booking),
+        staff: id(booking, "staff"),
+        exclude: Some(bid),
+        rules: Rules::default(),
+        waitlist: false,
+    };
+    let p = match plan(tx, ctx.tenant, &request).await {
+        Ok(p) => p,
+        Err(Error::Conflict(_) | Error::Validation(_) | Error::Invalid(_)) => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let mut patch = schedule_fields(&p, bid);
+    patch.extend(obj(json!({"status": "Confirmed", "confirmed_at": ts(now), "cancelled_at": null, "last_change": "Restored"})));
+    update(k, ctx, tx, booking, patch, true).await?;
+    Ok(true)
+}
+
+/// Tells the guest about `change` (a notice version of its own).
+pub async fn told(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, change: &str) -> Result<Doc> {
+    update(k, ctx, tx, booking, obj(json!({"last_change": change})), true).await
+}
+
 /// Completed or No Show, once the booking has started (no guest notice).
 pub async fn finish(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, to: &str) -> Result<Doc> {
     let allowed: &[&str] = if to == "Completed" { &["Confirmed"] } else { &ACTIVE };

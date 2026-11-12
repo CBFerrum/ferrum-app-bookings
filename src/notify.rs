@@ -32,6 +32,10 @@ pub enum Guest {
     Rescheduled,
     Cancelled,
     Reminder,
+    /// Its deposit was not paid in time: the time was released.
+    Expired,
+    /// Its deposit came after the time was released and taken: it goes back.
+    Refunded,
 }
 
 /// What the staff member is told in-app.
@@ -44,6 +48,8 @@ pub enum StaffNote {
     SeatFilled,
     /// Their outside calendar became busy at a booking's time after it was booked (FEO-032).
     Clash,
+    /// A booking's deposit was not paid in time: the time is free again.
+    Expired,
 }
 
 /// The messages for a change notice, from the booking's current state and whether anything was
@@ -51,6 +57,9 @@ pub enum StaffNote {
 /// made and moved within a minute is announced once, at its new time.
 pub fn change_messages(status: &str, last_change: &str, first: bool) -> (Option<Guest>, Option<StaffNote>) {
     match (status, first) {
+        ("Expired", _) if last_change == "Refunded" => (Some(Guest::Refunded), None),
+        ("Expired", true) => (Some(Guest::Expired), None),
+        ("Expired", false) => (Some(Guest::Expired), Some(StaffNote::Expired)),
         ("Cancelled", true) => (None, None),
         ("Cancelled", false) => (Some(Guest::Cancelled), Some(StaffNote::Cancelled)),
         ("Waitlisted", true) => (Some(Guest::Waitlisted), None),
@@ -58,6 +67,7 @@ pub fn change_messages(status: &str, last_change: &str, first: bool) -> (Option<
         ("Confirmed", true) => (Some(Guest::Confirmed), Some(StaffNote::New)),
         ("Pending" | "Confirmed", false) => match last_change {
             "Rescheduled" => (Some(Guest::Rescheduled), Some(StaffNote::Rescheduled)),
+            "Restored" => (Some(Guest::Confirmed), Some(StaffNote::New)),
             "Promoted" if status == "Pending" => (Some(Guest::Requested), Some(StaffNote::AwaitsConfirmation)),
             "Promoted" => (Some(Guest::Confirmed), Some(StaffNote::SeatFilled)),
             "Confirmed" => (Some(Guest::Confirmed), None),
@@ -142,7 +152,16 @@ pub fn compose(kind: Guest, b: &Doc, tz: Tz, manage: &str, ics_url: &str) -> (St
         Guest::Rescheduled => (format!("Booking moved: {service}, {at}"), "Your booking has a new time."),
         Guest::Cancelled => (format!("Booking cancelled: {service}, {at}"), "Your booking is cancelled."),
         Guest::Reminder => (format!("Reminder: {service}, {at}"), "This is a reminder of your booking."),
+        Guest::Expired => (
+            format!("Booking released: {service}, {at}"),
+            "The deposit for this booking was not paid in time, so its time was released. A deposit paid now confirms it if the time is still free, and is refunded if not.",
+        ),
+        Guest::Refunded => (
+            format!("Deposit refunded: {service}, {at}"),
+            "Your deposit arrived after the booking's time was released, and the time has since been booked. Your deposit is being refunded.",
+        ),
     };
+    let closed = matches!(kind, Guest::Cancelled | Guest::Expired | Guest::Refunded);
     let row = |label: &str, value: &str| format!("<tr><td style=\"padding:2px 12px 2px 0;color:#57606a\">{label}</td><td>{}</td></tr>", html_escape(value));
     let mut rows = vec![row("What", service), row("When", &at)];
     if let Some(end) = time(b, "end_time") {
@@ -151,7 +170,7 @@ pub fn compose(kind: Guest, b: &Doc, tz: Tz, manage: &str, ics_url: &str) -> (St
     if let Some(staff) = s(b, "staff_name") {
         rows.push(row("With", staff));
     }
-    if kind != Guest::Cancelled {
+    if !closed {
         let place = match (s(b, "location_type"), s(b, "location")) {
             (Some(kind), Some(l)) => format!("{kind}: {l}"),
             (Some(kind), None) => kind.to_string(),
@@ -171,7 +190,7 @@ pub fn compose(kind: Guest, b: &Doc, tz: Tz, manage: &str, ics_url: &str) -> (St
     {
         rows.push(row("Reason", reason));
     }
-    let links = if kind == Guest::Cancelled {
+    let links = if closed {
         String::new()
     } else {
         format!("<p><a href=\"{}\">View, reschedule or cancel</a> &middot; <a href=\"{}\">Add to calendar</a></p>", html_escape(manage), html_escape(ics_url))
@@ -213,7 +232,7 @@ async fn email_guest(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, kind: Guest, s
     let summary = format!("{} with {}", s(b, "service_name").unwrap_or("Booking"), s(b, "staff_name").unwrap_or("us"));
     let invite = match kind {
         Guest::Confirmed | Guest::Rescheduled => booking_event(b, summary, "CONFIRMED").map(|e| ics::calendar(Some("REQUEST"), None, &[e])),
-        Guest::Cancelled => booking_event(b, summary, "CANCELLED").map(|e| ics::calendar(Some("CANCEL"), None, &[e])),
+        Guest::Cancelled | Guest::Expired => booking_event(b, summary, "CANCELLED").map(|e| ics::calendar(Some("CANCEL"), None, &[e])),
         _ => None,
     };
     let mail = obj(json!({
@@ -262,6 +281,7 @@ pub(crate) async fn tell_staff(tx: &mut Tx, tenant: Uuid, b: &Doc, note: StaffNo
         StaffNote::Cancelled => format!("Booking cancelled: {service} with {guest}"),
         StaffNote::SeatFilled => format!("Waitlist seat filled: {service} with {guest}"),
         StaffNote::Clash => format!("Clashes with your calendar: {service} with {guest}"),
+        StaffNote::Expired => format!("Deposit not paid, time released: {service} with {guest}"),
     };
     let mut body = format!("{at} · {}", s(b, "number").unwrap_or_default());
     if note == StaffNote::Cancelled
@@ -354,6 +374,8 @@ pub struct Round {
     pub purged: u64,
     /// Bookings whose working calendar closed (or opened again) at their time.
     pub closed: usize,
+    /// Unpaid deposits whose hold ran out, and what followed (see `payments::upkeep`).
+    pub deposits: usize,
 }
 
 /// One maintenance round for a tenant. Steps run independently; the first error is returned after
@@ -385,6 +407,10 @@ pub async fn run(k: &Kernel, tenant: Uuid, schema: Arc<Schema>, now: Instant) ->
     match purge(k, &ctx, now).await {
         Ok(n) => round.purged = n,
         Err(e) => note("purge", e),
+    }
+    match crate::payments::upkeep(k, &ctx, now).await {
+        Ok(n) => round.deposits = n,
+        Err(e) => note("deposits", e),
     }
     match closed_clashes(k, &ctx, now).await {
         Ok(n) => round.closed = n,
@@ -594,6 +620,10 @@ mod tests {
         assert_eq!(change_messages("Pending", "Promoted", false), (Some(G::Requested), Some(S::AwaitsConfirmation)));
         assert_eq!(change_messages("Cancelled", "Cancelled", false), (Some(G::Cancelled), Some(S::Cancelled)));
         assert_eq!(change_messages("Completed", "Booked", false), (None, None));
+        assert_eq!(change_messages("Expired", "Expired", false), (Some(G::Expired), Some(S::Expired)));
+        assert_eq!(change_messages("Expired", "Expired", true), (Some(G::Expired), None), "released before it was announced");
+        assert_eq!(change_messages("Expired", "Refunded", false), (Some(G::Refunded), None));
+        assert_eq!(change_messages("Confirmed", "Restored", false), (Some(G::Confirmed), Some(S::New)));
     }
 
     #[test]
