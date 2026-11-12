@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+The interface knows what 0.6.0 added. A booking whose time a working calendar closed shows a warning mark, **Outside opening hours**, with what to do (move it, or confirm with the guest): on the schedule's block, on Today, on a pending booking waiting for an answer and at the top of its sheet. **Expired** is muted like Cancelled, holds no block on the schedule, and a guest opening it is told it expired and why. The new fields' and options' names (working calendars, per-service rules, the unpaid-deposit hold, Expired, Restored, Refunded) are in Arabic and Hindi too. Rebuilt with Ferrum-Frontend 0a47157.
+
 ## 0.6.0
 
 - **Working calendars.** A staff member, a resource and Booking Settings may name a working calendar from Admin, Calendars. A staff member is then bookable in that calendar's open time (inside the business calendar's, when one is set), so a holiday entered once closes every service; a resource only in its calendar's. Booking Settings keeps **Closed and Extra Open Dates** per calendar (empty: the whole business), for a one-off closure or an extra open Saturday. Staff without a calendar keep their weekly hours as before. A booking whose time a calendar later closed stays and is marked **Outside Opening Hours**.

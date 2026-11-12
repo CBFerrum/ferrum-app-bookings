@@ -17,7 +17,7 @@ import { act, LIMIT, loadMeta, loadRange, loadWaiting, type Range } from "./data
 import { NewBooking, type Start } from "./NewBooking";
 import { Pop } from "./Pop";
 import { BookingSheet, refreshBookings, SessionSheet } from "./Sheet";
-import { Failed, Loading, Nothing } from "./states";
+import { ClashMark, Failed, Loading, Nothing } from "./states";
 import { Tabs } from "./Tabs";
 import { TimeOff } from "./TimeOff";
 import { addDays, browserZone, clockText, dayBounds, dayOf, dayText, firstWeekday, isDate, prefers12Hour, weekStart } from "./zone";
@@ -59,6 +59,7 @@ function Approvals({ waiting, zone, hour12, canWrite, onOpen, onDone }: { waitin
           <span className="faint">
             {isolate(dayText(dayOf(start, zone), { weekday: "short", day: "numeric", month: "short" }))}, {isolate(clockText(start, zone, hour12))}
           </span>
+          {b.closed_clash && <ClashMark />}
         </button>
         {canWrite && b.status === "Pending" && (
           <div className="bk-ask-actions">

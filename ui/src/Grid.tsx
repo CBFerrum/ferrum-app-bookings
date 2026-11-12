@@ -5,9 +5,10 @@
 // it would land, and in red when it would clash; the server answers for real, and the caller puts the
 // booking back, with its reason, when it refuses. Touch screens open the booking, whose sheet moves it.
 
+import { TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { clockText } from "./zone";
-import { type Block, type Drop, dropText, hourMarks, landing, type Lane, minutesIn, pack, STEP, type Window } from "./board";
+import { type Block, clashed, type Drop, dropText, hourMarks, landing, type Lane, minutesIn, pack, STEP, type Window } from "./board";
 import { t as tr, isolate } from "@ferrum/client";
 
 /** Pixels an hour takes, and the shortest a block is drawn (minutes). */
@@ -255,7 +256,7 @@ export function Board(p: BoardProps) {
                   const minutes = (b.end - b.start) / 60_000;
                   const h = Math.max(minutes * PX, LEAST * PX * 0.7);
                   const first = b.bookings[0];
-                  const label = `${range(b)}, ${b.title}${b.kind === "session" ? tr(", {seats} of {capacity} seats", { seats: b.seats, capacity: b.capacity }) : first.service_name ? `, ${first.service_name}` : ""}, ${b.status}`;
+                  const label = `${range(b)}, ${b.title}${b.kind === "session" ? tr(", {seats} of {capacity} seats", { seats: b.seats, capacity: b.capacity }) : first.service_name ? `, ${first.service_name}` : ""}${clashed(b) ? tr(", outside opening hours") : ""}, ${b.status}`;
                   return (
                     <div key={b.key} className="bk-slot" style={{ top: at(b.from, lane), left: `calc(${(col / cols) * 100}% + 2px)`, width: `calc(${100 / cols}% - 4px)` }} data-lifted={lifted || undefined}>
                       {before > 0 && <div className="bk-buffer" style={{ height: before * PX }} aria-hidden="true" />}
@@ -264,13 +265,14 @@ export function Board(p: BoardProps) {
                         id={`bk-${b.key}`}
                         className="bk-block"
                         data-status={b.status}
+                        data-clash={clashed(b) || undefined}
                         data-kind={b.kind}
                         data-selected={p.selected === b.key || undefined}
                         data-short={h < 44 || undefined}
                         style={{ height: h }}
                         aria-label={label}
                         aria-keyshortcuts={p.canMove && b.kind === "booking" ? "M" : undefined}
-                        title={`${label}${p.canMove && b.kind === "booking" ? ". Drag to move it, or press M." : ""}`}
+                        title={`${label}${clashed(b) ? `. ${tr("A working calendar closed this time after it was booked. Move it, or confirm with the guest that it stands.")}` : ""}${p.canMove && b.kind === "booking" ? ". Drag to move it, or press M." : ""}`}
                         onPointerDown={(e) => {
                           if (!p.canMove || b.kind !== "booking" || e.button !== 0 || e.pointerType === "touch") return;
                           setPressed({ key: b.key, lane: lane.id, x: e.clientX, y: e.clientY, grab: (e.clientY - e.currentTarget.getBoundingClientRect().top) / PX });
@@ -283,7 +285,10 @@ export function Board(p: BoardProps) {
                           }
                         }}
                       >
-                        <span className="bk-block-time">{h < 44 ? clockText(b.start, p.zone, p.hour12) : range(b)}</span>
+                        <span className="bk-block-time">
+                          {clashed(b) && <TriangleAlert size={12} className="bk-block-warn" aria-hidden="true" />}
+                          {h < 44 ? clockText(b.start, p.zone, p.hour12) : range(b)}
+                        </span>
                         <strong className="bk-block-title">{isolate(b.title)}</strong>
                         <span className="bk-block-sub">
                           {b.kind === "session" ? tr("{seats} of {capacity} seats", { seats: b.seats, capacity: b.capacity }) : first.service_name}

@@ -27,6 +27,7 @@ const HEAD: Record<GuestBooking["status"], { title: string; icon: ReactNode; ton
   Waitlisted: { get title() { return t("You are on the waitlist"); }, icon: <Hourglass size={22} />, tone: "amber" },
   Cancelled: { get title() { return t("This booking was cancelled"); }, icon: <CalendarX size={22} />, tone: "red" },
   Completed: { get title() { return t("This booking is done"); }, icon: <CircleCheck size={22} />, tone: "neutral" },
+  Expired: { get title() { return t("This booking expired"); }, icon: <CalendarX size={22} />, tone: "neutral" },
   "No Show": { get title() { return t("This appointment was missed"); }, icon: <CalendarX size={22} />, tone: "neutral" },
 };
 
@@ -278,6 +279,7 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
                 {(b.waitlist_position ? t("You are number {waitlist_position} in line. We will email you if a seat becomes free.", { waitlist_position: b.waitlist_position }) : t("We will email you if a seat becomes free."))}
               </p>
             )}
+            {b.status === "Expired" && <p className="muted">{t("Its deposit was not paid in time, so its time was released.")}</p>}
             {b.status === "Cancelled" && b.cancellation_reason && <p className="muted">{t("Reason given: {cancellation_reason}", { cancellation_reason: b.cancellation_reason })}</p>}
           </div>
         </header>
