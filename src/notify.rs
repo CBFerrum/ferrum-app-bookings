@@ -19,6 +19,7 @@ use ferrum_domain::util::{id, s};
 use ferrum_kernel::{Ctx, Doc, Error, Kernel, Result, Tx, with_retry};
 use ferrum_meta::Schema;
 use serde_json::json;
+use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -410,12 +411,15 @@ async fn changes(k: &Kernel, ctx: &Ctx) -> Result<usize> {
 async fn reminders(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> {
     let mut tx = k.db.tenant_tx(ctx.tenant).await?;
     let st = settings::load(&mut tx, ctx.tenant).await?;
-    let Some(furthest) = st.reminders.first().copied() else {
+    // The furthest offset any service (or the workspace) reminds at bounds the bookings read.
+    let services: Option<i64> =
+        sqlx::query_scalar("select max(minutes_before) from e_booking_service__reminders where tenant_id = $1").bind(ctx.tenant).fetch_one(&mut *tx).await?;
+    let Some(furthest) = st.reminders.first().copied().max(services) else {
         tx.commit().await?;
         return Ok(0);
     };
-    let rows: Vec<(Uuid, Instant, Instant)> = sqlx::query_as(
-        "select id, start_time, coalesce(scheduled_at, created_at) from e_booking where tenant_id = $1 and status = 'Confirmed' \
+    let rows: Vec<(Uuid, Instant, Instant, Uuid)> = sqlx::query_as(
+        "select id, start_time, coalesce(scheduled_at, created_at), service from e_booking where tenant_id = $1 and status = 'Confirmed' \
          and start_time > $2 and start_time <= $2 + make_interval(mins => $3) order by start_time, id limit 1000",
     )
     .bind(ctx.tenant)
@@ -423,11 +427,17 @@ async fn reminders(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> {
     .bind(furthest as i32)
     .fetch_all(&mut *tx)
     .await?;
+    let mut offsets: HashMap<Uuid, Vec<i64>> = HashMap::new();
+    for (_, _, _, service) in &rows {
+        if !offsets.contains_key(service) {
+            let svc = calendar::service(&mut tx, ctx.tenant, *service).await?;
+            offsets.insert(*service, svc.map_or_else(|| st.reminders.clone(), |svc| st.for_service(&svc).reminders));
+        }
+    }
     tx.commit().await?;
     let mut sent = 0;
-    for (bid, start, scheduled) in rows {
-        let due: Vec<i64> = st
-            .reminders
+    for (bid, start, scheduled, service) in rows {
+        let due: Vec<i64> = offsets[&service]
             .iter()
             .copied()
             .filter(|m| {

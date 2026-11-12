@@ -1499,3 +1499,67 @@ async fn working_calendars() {
     let e = t.k.update(&a, "BookingSettings", settings, obj(json!({"calendar": "nowhere"})), None).await.unwrap_err();
     assert!(messages(&e).contains("working calendar"), "{}", messages(&e));
 }
+
+#[test]
+fn service_rules_end_to_end() {
+    run(service_rules());
+}
+
+/// The workspace asks 2 hours' notice, a day's cancellation window, no approval and a reminder a
+/// day ahead; "Walk-in Consult" sets its own: no notice, approval, cancel until the start, a reminder
+/// 30 minutes ahead. "Standard" sets nothing and follows the workspace.
+async fn service_rules() {
+    let t = boot("rules", &[]).await;
+    let a = t.admin.clone();
+    t.insert(
+        &a,
+        "BookingSettings",
+        json!({"public_page": true, "min_notice_minutes": 120, "max_advance_days": 60, "slot_interval_minutes": 60,
+               "cancellation_window_hours": 24, "reschedule_window_hours": 24, "reminders": [{"minutes_before": 1440}]}),
+    )
+    .await;
+    let all_day: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "00:00", "end_time": "24:00"})).collect();
+    let s1 =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Lee", "email": "lee@rules.test", "time_zone": "Asia/Kolkata", "working_hours": all_day})).await;
+    let s2 =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Kay", "email": "kay@rules.test", "time_zone": "Asia/Kolkata", "working_hours": all_day})).await;
+    let walk_in = uid(&t
+        .insert(
+            &a,
+            "BookingService",
+            json!({"service_name": "Walk-in Consult", "duration_minutes": 30, "staff": [{"staff": sid(&s1)}], "min_notice_minutes": 0,
+                   "approval_required": "Yes", "cancellation_window_hours": 0, "reminders": [{"minutes_before": 30}]}),
+        )
+        .await);
+    let standard = uid(&t.insert(&a, "BookingService", json!({"service_name": "Standard", "duration_minutes": 30, "staff": [{"staff": sid(&s2)}]})).await);
+    // The next whole hour at least an hour away: inside the workspace's notice, outside the walk-in's.
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let soon = {
+        let l = (Utc::now() + Duration::minutes(59)).with_timezone(&ist);
+        local(ist, l.date_naive(), &format!("{:02}:00", chrono::Timelike::hour(&l))) + Duration::hours(1)
+    };
+    let book = |svc: Uuid, at: DateTime<Utc>| {
+        let t = &t;
+        async move { t.book(json!({"service": svc.to_string(), "start_time": rfc(at), "name": "Guest", "email": "g@example.test"})).await }
+    };
+    // Notice: the service's 0 wins; the other service's empty one falls back to the workspace's 2 hours.
+    let e = book(standard, soon).await.unwrap_err();
+    assert!(messages(&e).contains("minimum notice"), "{}", messages(&e));
+    let mine = book(walk_in, soon).await.expect("no notice for walk-ins");
+    // Approval: the service's Yes wins over the workspace's off; the other is confirmed at once.
+    assert_eq!(mine["booking"]["status"], json!("Pending"));
+    let theirs = book(standard, soon + Duration::hours(2)).await.unwrap();
+    assert_eq!(theirs["booking"]["status"], json!("Confirmed"));
+    // Cancellation window: until the start for the walk-in; a day for the other, so not online now.
+    assert_eq!((mine["booking"]["can_cancel"].clone(), theirs["booking"]["can_cancel"].clone()), (json!(true), json!(false)));
+    let e = t.post_pub(&format!("/manage/{}/cancel", theirs["token"].as_str().unwrap()), json!({})).await.unwrap_err();
+    assert!(messages(&e).contains("24 hours"), "{}", messages(&e));
+    // Reminders: 30 minutes before the walk-in (confirmed now); none for the other inside its day-ahead
+    // reminder (booked after it was due).
+    let id = uid(&t.find_one("Booking", json!({"number": mine["booking"]["number"]})).await);
+    t.act(&a, "Booking", id, "confirm", json!({})).await;
+    t.maintain(soon - Duration::minutes(29)).await;
+    let keys = t.texts("select key from bookings_notice where tenant_id = $1 and booking_id = $2 and kind = 'reminder'", Some(id)).await;
+    assert_eq!(keys, [format!("30@{}", soon.timestamp())], "the service's offset");
+    t.post_pub(&format!("/manage/{}/cancel", mine["token"].as_str().unwrap()), json!({})).await.expect("cancelled online until the start");
+}

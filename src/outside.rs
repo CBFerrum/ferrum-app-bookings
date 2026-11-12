@@ -256,8 +256,12 @@ pub(crate) async fn read_due(k: &Kernel, tenant: Uuid, schema: Arc<Schema>, now:
     .fetch_all(&mut *tx)
     .await?;
     let settings = crate::settings::load(&mut tx, tenant).await?;
+    // As far ahead as any service may be booked.
+    let ahead: Option<i64> =
+        sqlx::query_scalar("select max(max_advance_days) from e_booking_service where tenant_id = $1").bind(tenant).fetch_one(&mut *tx).await?;
     tx.commit().await?;
-    let (from, to) = (now - Duration::days(1), now + settings.max_advance + Duration::days(1));
+    let ahead = settings.max_advance.max(Duration::days(ahead.unwrap_or(0)));
+    let (from, to) = (now - Duration::days(1), now + ahead + Duration::days(1));
     let mut read = 0;
     for (staff, zone) in due {
         let tz: Tz = zone.parse().unwrap_or(Tz::UTC);

@@ -176,6 +176,7 @@ async fn open_slots(k: &Kernel, ctx: &Ctx, req: &SiteRequest) -> Result<Value> {
     let mut tx = k.db.tenant_tx(ctx.tenant).await?;
     let st = open_page(&mut tx, ctx.tenant).await?;
     let svc = bookable(&mut tx, ctx.tenant, query(req, "service")).await?;
+    let st = st.for_service(&svc);
     let waitlist = matches!(query(req, "waitlist"), Some("1" | "true"));
     let out = slots::find(&mut tx, ctx.tenant, &svc, &st, &q, st.public_rules(Utc::now()), None, waitlist).await?;
     tx.commit().await?;
@@ -405,6 +406,13 @@ async fn guest_view(ctx: &Ctx, tx: &mut Tx, b: &Doc, st: &Settings, root: &str, 
     } else {
         None
     };
+    let st = match id(b, "service") {
+        Some(sid) => match calendar::service(tx, ctx.tenant, sid).await? {
+            Some(svc) => st.for_service(&svc),
+            None => st.clone(),
+        },
+        None => st.clone(),
+    };
     let (cancel_until, move_until) = (start - st.cancel_window, start - st.reschedule_window);
     Ok(json!({
         "number": b.get("number"),
@@ -455,6 +463,7 @@ async fn manage_slots(k: &Kernel, ctx: &Ctx, req: &SiteRequest, tok: &str) -> Re
     q.seats = int(&b, "seats").max(1);
     let sid = id(&b, "service").ok_or_else(|| Error::NotFound("booking".into()))?;
     let svc = calendar::service(&mut tx, ctx.tenant, sid).await?.ok_or_else(|| Error::NotFound("booking".into()))?;
+    let st = st.for_service(&svc);
     let out = slots::find(&mut tx, ctx.tenant, &svc, &st, &q, st.public_rules(Utc::now()), Some(doc_id(&b)?), false).await?;
     tx.commit().await?;
     Ok(out)
@@ -622,6 +631,7 @@ mod tests {
             resources: vec![],
             questions,
             guest_repeats: 0,
+            rules: Default::default(),
         }
     }
 

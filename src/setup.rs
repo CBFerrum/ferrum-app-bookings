@@ -56,6 +56,7 @@ impl DocHook for ServiceHook {
         let mut errors = duplicates(doc, "staff", "staff", "is listed twice");
         errors.extend(duplicates(doc, "resources", "resource", "is listed twice"));
         errors.extend(duplicates(doc, "questions", "question", "is asked twice"));
+        errors.extend(duplicates(doc, "reminders", "minutes_before", "is already a reminder"));
         for (i, q) in rows(doc, "questions").iter().enumerate() {
             if s(q, "answer_type") == Some("Choice") && s(q, "options").is_none_or(|o| o.lines().all(|l| l.trim().is_empty())) {
                 errors.push(FieldError::new("options", "list the choices, one per line").in_row("questions", i));

@@ -102,6 +102,35 @@ pub async fn load(tx: &mut Tx, tenant: Uuid) -> Result<Settings> {
 }
 
 impl Settings {
+    /// The rules that hold for `svc`: each of its own (notice, booking ahead, cancel and reschedule
+    /// windows, approval, reminders), or this workspace's where it left one empty. Every caller
+    /// deciding by these rules goes through here.
+    pub fn for_service(&self, svc: &crate::calendar::ServiceInfo) -> Settings {
+        let r = &svc.rules;
+        let mut st = self.clone();
+        if let Some(m) = r.min_notice_minutes {
+            st.min_notice = Duration::minutes(m.max(0));
+        }
+        if let Some(d) = r.max_advance_days {
+            st.max_advance = Duration::days(d.max(1));
+        }
+        if let Some(h) = r.cancellation_window_hours {
+            st.cancel_window = Duration::hours(h.max(0));
+        }
+        if let Some(h) = r.reschedule_window_hours {
+            st.reschedule_window = Duration::hours(h.max(0));
+        }
+        if let Some(a) = r.approval_required {
+            st.approval_required = a;
+        }
+        if !r.reminders.is_empty() {
+            st.reminders = r.reminders.clone();
+            st.reminders.sort_unstable_by(|a, b| b.cmp(a));
+            st.reminders.dedup();
+        }
+        st
+    }
+
     /// The dated changes to the calendar `name`; with `business`, also those for the business as a whole.
     pub fn dated_for(&self, name: &str, business: bool) -> Vec<crate::engine::Dated> {
         self.dated.iter().filter(|(c, _)| c == name || (business && c.is_empty())).map(|(_, d)| *d).collect()
@@ -201,6 +230,57 @@ mod tests {
             dated: vec![],
             zone: chrono_tz::Tz::UTC,
         }
+    }
+
+    #[test]
+    fn a_service_rule_wins_and_an_empty_one_falls_back() {
+        use crate::calendar::{ServiceInfo, ServiceRules};
+        let ws = Settings { reminders: vec![1440, 60], ..settings(None, None) };
+        let svc = |rules: ServiceRules| ServiceInfo {
+            id: Uuid::nil(),
+            name: "S".into(),
+            active: true,
+            description: None,
+            duration: 60,
+            before: 0,
+            after: 0,
+            interval: None,
+            capacity: 1,
+            price: Default::default(),
+            item: None,
+            location_type: "In Person".into(),
+            location: None,
+            staff: vec![],
+            resources: vec![],
+            questions: vec![],
+            guest_repeats: 0,
+            rules,
+        };
+        let same = ws.for_service(&svc(ServiceRules::default()));
+        assert_eq!(
+            (same.min_notice, same.max_advance, same.cancel_window, same.reschedule_window, same.approval_required, same.reminders.clone()),
+            (ws.min_notice, ws.max_advance, ws.cancel_window, ws.reschedule_window, ws.approval_required, ws.reminders.clone()),
+            "empty: every rule is the workspace's"
+        );
+        let own = ws.for_service(&svc(ServiceRules {
+            min_notice_minutes: Some(0),
+            max_advance_days: Some(365),
+            cancellation_window_hours: Some(48),
+            reschedule_window_hours: Some(2),
+            approval_required: Some(true),
+            reminders: vec![30, 2880, 30],
+        }));
+        assert_eq!(own.min_notice, Duration::zero(), "notice");
+        assert_eq!(own.max_advance, Duration::days(365), "how far ahead");
+        assert_eq!(own.cancel_window, Duration::hours(48), "cancellation window");
+        assert_eq!(own.reschedule_window, Duration::hours(2), "reschedule window");
+        assert!(own.approval_required, "approval");
+        assert_eq!(own.reminders, [2880, 30], "reminders, largest first, once each");
+        let now = chrono::Utc::now();
+        assert_eq!(own.public_rules(now).earliest, Some(now), "the guest rules follow");
+        // A service may also turn approval off where the workspace has it on.
+        let strict = Settings { approval_required: true, ..ws.clone() };
+        assert!(!strict.for_service(&svc(ServiceRules { approval_required: Some(false), ..Default::default() })).approval_required);
     }
 
     #[test]
