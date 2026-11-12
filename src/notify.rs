@@ -412,6 +412,10 @@ pub async fn run(k: &Kernel, tenant: Uuid, schema: Arc<Schema>, now: Instant) ->
         Ok(n) => round.deposits = n,
         Err(e) => note("deposits", e),
     }
+    // Before the closed-time check, so what it moves is read at once (once per workspace, then nothing).
+    if let Err(e) = crate::superseded::move_dates(k, &ctx).await {
+        note("moving dated openings", e);
+    }
     match closed_clashes(k, &ctx, now).await {
         Ok(n) => round.closed = n,
         Err(e) => note("opening hours", e),
@@ -561,7 +565,7 @@ async fn closed_clashes(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> {
     let business = calendar::business_open(&mut tx, ctx.tenant, &st, window).await?;
     let mut changed = 0;
     for s in calendar::staff(&mut tx, ctx.tenant, &ids).await? {
-        let Some(open) = calendar::staff_open(&mut tx, ctx.tenant, &st, &s, &business, window).await? else { continue };
+        let Some(open) = calendar::staff_open(&mut tx, ctx.tenant, &s, &business, window).await? else { continue };
         for (bid, _, start, end, flagged) in rows.iter().filter(|r| r.1 == s.id) {
             let closed = !open.iter().any(|w| w.contains(&Span::new(*start, *end)));
             if closed != *flagged {
