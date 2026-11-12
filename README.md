@@ -289,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.6.0** | Working calendars with holidays and dated openings; rules per service; unpaid deposits release their time; guests become customers when they book. |
 | **0.5.1** | The redesigned interface: the upgraded design system, shaped loading, told-apart states. |
 | **0.5.0** | A booking the staff member's outside calendar became busy over is marked, said to them and to the guest, and moved or kept. |
 | **0.4.18** | Its reports' names in Arabic and Hindi. |
