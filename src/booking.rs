@@ -568,10 +568,10 @@ pub struct BookingHook;
 impl DocHook for BookingHook {
     async fn before_validate(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
         // Stored bookings change only through the actions below.
-        if doc.contains_key("created_at") {
-            return Ok(());
+        if !doc.contains_key("created_at") {
+            schedule_new(hc, doc).await?;
         }
-        schedule_new(hc, doc).await
+        crate::video::sync(hc, doc).await
     }
 
     async fn validate(&self, _hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {

@@ -177,6 +177,9 @@ announced).
   reminders. Confirmations and moves carry a calendar invitation (METHOD:REQUEST, SEQUENCE =
   notice version), cancellations a METHOD:CANCEL. Without the Mail app guests get nothing
   automatically: staff hand out `guest_link`s.
+  A Video service with no link of its own (Location details empty) gets a meeting per booking
+  when Comms 0.14.0 and a meeting server are there: the guest's join link is the booking's
+  location, so every notice and the invitation carry it (see `src/video.rs`).
 * **Staff**, in-app: new booking, to confirm, moved, cancelled, waitlist seat filled — unless
   they made the change themselves.
 * **Reminders** (Confirmed bookings, at each `reminders` offset): skipped when already due when
