@@ -1181,6 +1181,17 @@
   background: var(--danger-soft);
 }
 
+.bk-block[data-clash] {
+  outline: 2px solid var(--warning);
+  outline-offset: -2px;
+}
+
+.bk-block-warn {
+  margin-inline-end: 0.25rem;
+  color: var(--warning);
+  vertical-align: -1px;
+}
+
 .bk-block[data-kind="session"] {
   border-left-color: var(--purple);
   background: var(--purple-soft);

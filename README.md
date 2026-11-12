@@ -289,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.6.2** | The interface shows Expired and the Outside opening hours warning, with their names in Arabic and Hindi. |
 | **0.6.1** | Rebuilt on the tuned design system: better menu icons, a lighter first page, a visible scroll cue, cleaner print. |
 | **0.6.0** | Working calendars with holidays and dated openings; rules per service; unpaid deposits release their time; guests become customers when they book. |
 | **0.5.1** | The redesigned interface: the upgraded design system, shaped loading, told-apart states. |

@@ -14,7 +14,7 @@ import { type Bk, nextSteps, type Step, tone } from "./board";
 import { act } from "./data";
 import { priceText } from "./guest/booking";
 import { Reschedule } from "./Reschedule";
-import { Failed, Loading } from "./states";
+import { closedNote, Failed, Loading } from "./states";
 import { clockText, dayOf, dayText } from "./zone";
 
 type Full = Bk & { answers?: { question: string; answer: string }[]; guest_time_zone?: string | null };
@@ -289,6 +289,8 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
                 <Cancel b={b} onClose={() => setMode("info")} onDone={(next) => { changed(next); toast(b.status === "Pending" ? t("Declined") : t("Cancelled")); }} />
               ) : (
                 <>
+                  {b.closed_clash && (b.status === "Pending" || b.status === "Confirmed") && <Alert tone="warning">{closedNote()}</Alert>}
+                  {b.status === "Expired" && <p className="muted">{t("Its deposit was not paid in time, so its time was released.")}</p>}
                   <section className="bk-part">
                     <h3>{t("When")}</h3>
                     <p className="bk-big">{isolate(dayText(dayOf(start, zone), { weekday: "long", day: "numeric", month: "long", year: "numeric" }))}</p>

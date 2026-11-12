@@ -8,7 +8,7 @@
 import { addDays, clockText, dayBounds, dayOf, instantAt, weekday } from "./zone";
 import { t as tr } from "@ferrum/client";
 
-export type Status = "Pending" | "Confirmed" | "Waitlisted" | "Cancelled" | "No Show" | "Completed";
+export type Status = "Pending" | "Confirmed" | "Waitlisted" | "Cancelled" | "No Show" | "Completed" | "Expired";
 
 export interface Bk {
   id: string;
@@ -39,6 +39,8 @@ export interface Bk {
   location?: string | null;
   notes?: string | null;
   cancellation_reason?: string | null;
+  /** A working calendar closed this time after it was booked; the booking is kept, for staff to move or confirm. */
+  closed_clash?: boolean | null;
   _titles?: Record<string, string>;
 }
 
@@ -83,6 +85,9 @@ export interface ResourceRow {
 /** The colour a status wears on a badge. */
 export const tone = (s: Status): "neutral" | "blue" | "green" | "amber" | "red" | "purple" =>
   s === "Pending" ? "amber" : s === "Confirmed" ? "blue" : s === "Completed" ? "green" : s === "No Show" ? "red" : s === "Waitlisted" ? "purple" : "neutral";
+
+/** Whether a block has a booking whose time a working calendar closed after it was booked. */
+export const clashed = (b: { bookings: Bk[] }) => b.bookings.some((x) => x.closed_clash && holds(x));
 
 /** Statuses that hold time. */
 export const HOLDING: Status[] = ["Pending", "Confirmed"];
@@ -161,10 +166,10 @@ function sessionStatus(list: Bk[]): Status {
 }
 
 /** Bookings on the grid: one block each, except the seats of a class, which are one block together.
- *  Cancelled and waitlisted bookings hold no time, so they have none. */
+ *  Cancelled, expired and waitlisted bookings hold no time, so they have none. */
 export function blocks(bookings: Bk[], services: Map<string, ServiceRow>): Block[] {
   const groups = new Map<string, Bk[]>();
-  for (const b of bookings.filter((x) => x.status !== "Cancelled" && x.status !== "Waitlisted")) {
+  for (const b of bookings.filter((x) => x.status !== "Cancelled" && x.status !== "Expired" && x.status !== "Waitlisted")) {
     const key = b.session_key || b.id;
     groups.set(key, [...(groups.get(key) ?? []), b]);
   }

@@ -31,7 +31,7 @@ export async function loadMeta(signal?: AbortSignal): Promise<Meta> {
   return { staff, services, resources };
 }
 
-const FIELDS = "number,service,service_name,staff,staff_name,start_time,end_time,block_start,block_end,seats,status,resource,session_key,guest_name,source,series,amount,version";
+const FIELDS = "number,service,service_name,staff,staff_name,start_time,end_time,block_start,block_end,seats,status,closed_clash,resource,session_key,guest_name,source,series,amount,version";
 
 const iso = (ms: number) => new Date(ms).toISOString();
 

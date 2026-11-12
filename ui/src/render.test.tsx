@@ -187,6 +187,13 @@ describe("a guest's own booking", () => {
     expect(html).toContain("Leave the waitlist");
   });
 
+  it("tells a guest their unpaid booking expired", () => {
+    const html = show(booking({ status: "Expired", can_cancel: false, can_reschedule: false, location: null }));
+    expect(html).toContain("This booking expired");
+    expect(html).toContain("deposit was not paid in time");
+    expect(html).not.toContain("Add to calendar");
+  });
+
   it("offers another time after a cancellation", () => {
     const html = show(booking({ status: "Cancelled", can_cancel: false, can_reschedule: false, cancellation_reason: "Flight changed", location: null }));
     expect(html).toContain("This booking was cancelled");
@@ -363,6 +370,16 @@ describe("a booking's sheet and the dialogs", () => {
     expect(pending).toContain("Confirm");
     expect(pending).toContain("Decline");
     expect(sheet({ status: "Pending" }, false)).not.toContain("Decline");
+  });
+
+  it("warns on a booking a working calendar closed, and says an expired one let go of its time", () => {
+    const soon = new Date(Date.now() + 86_400_000).toISOString();
+    const clash = sheet({ start_time: soon, closed_clash: true });
+    expect(clash).toContain("closed this time after it was booked");
+    expect(sheet({ start_time: soon })).not.toContain("closed this time");
+    const expired = sheet({ status: "Expired", start_time: soon });
+    expect(expired).toContain("Expired");
+    expect(expired).toContain("deposit was not paid in time");
   });
 
   it("asks who and when for a new booking, with the person and the start filled in", () => {
