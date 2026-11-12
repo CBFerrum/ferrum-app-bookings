@@ -4,6 +4,16 @@
   fields:
     - {name: minutes_before, type: int, label: Minutes Before, required: true, min: 5, max: 43200, in_list: true, description: "e.g. 1440 = a day before, 60 = an hour before"}
 
+- name: BookingCalendarDate
+  label: Calendar Date
+  kind: child
+  fields:
+    - {name: calendar, type: data, max_length: 64, in_list: true, description: "The working calendar it changes (Admin, Calendars). Empty: the business as a whole"}
+    - {name: date, type: date, required: true, in_list: true}
+    - {name: change, type: select, options: [Closed, Open], default: Closed, required: true, in_list: true, description: "Closed: nobody following that calendar is booked then. Open: an extra opening, even on a weekend or holiday"}
+    - {name: start_time, type: data, max_length: 5, in_list: true, description: "HH:MM in the calendar's zone; empty with the end: the whole day"}
+    - {name: end_time, type: data, max_length: 5, in_list: true, description: "HH:MM; 24:00 = midnight"}
+
 - name: BookingSettings
   label: Booking Settings
   kind: settings
@@ -21,10 +31,13 @@
     - {name: reminders, type: table, of: BookingReminder, description: "Reminders before each confirmed booking; a reminder already due when the booking was made or moved is skipped"}
     - {name: public_url, type: url, label: Server Address, description: "Address this server is reached at from the internet (e.g. https://erp.example.com), for links in emails and calendar feed URLs"}
     - {name: manage_page_url, type: url, label: Self-Service Page, description: "Your booking page's address; guest links become <address>?token=<token>. Empty: links point at this app's endpoints"}
+    - {name: calendar, type: data, max_length: 64, label: Business Calendar, description: "A working calendar (Admin, Calendars): nobody is booked outside its open time, so its holidays close every service. Empty: staff hours alone decide"}
+    - {name: calendar_dates, type: table, of: BookingCalendarDate, label: Closed and Extra Open Dates, description: "One-off closures and openings of a working calendar, entered once for everyone who follows it"}
     - {name: signing_secret, type: secret, label: Link Signing Secret, description: "HMAC key signing staff calendar feed links; created on first use. Replacing it retires every feed link handed out"}
   form:
     - {label: Booking Page, fields: [public_page, approval_required, company, min_notice_minutes, max_advance_days, slot_interval_minutes]}
     - {label: Guest Self-Service, fields: [cancellation_window_hours, reschedule_window_hours, reminders]}
+    - {label: Opening Days, fields: [calendar, calendar_dates]}
     - {label: Links, collapsible: true, fields: [public_url, manage_page_url, signing_secret]}
 
 - name: BookingResource
@@ -38,6 +51,7 @@
     - {name: resource_type, type: select, options: [Room, Equipment, Vehicle, Other], default: Room, required: true, in_list: true, in_filter: true}
     - {name: capacity, type: int, default: 1, required: true, min: 1, max: 1000, in_list: true, description: "Bookings or class sessions it can host at once"}
     - {name: active, type: check, default: true, in_list: true, in_filter: true, description: "Inactive resources are not given to new bookings"}
+    - {name: calendar, type: data, max_length: 64, label: Working Calendar, description: "A working calendar (Admin, Calendars): it is booked only in its open time. Empty: whenever staff work"}
     - {name: description, type: text}
   list: {columns: [resource_name, resource_type, capacity, active], sort: resource_name asc}
 
@@ -63,6 +77,7 @@
     - {name: time_zone, type: data, required: true, default_expr: "user.timezone", max_length: 64, in_list: true, description: "IANA time zone of the working hours, e.g. Europe/London"}
     - {name: active, type: check, default: true, in_list: true, in_filter: true, description: "Inactive staff get no new bookings"}
     - {name: bio, type: text, description: "Shown on the booking page"}
+    - {name: calendar, type: data, max_length: 64, label: Working Calendar, description: "A working calendar (Admin, Calendars): when set, its open time (holidays and dated changes included) replaces the working hours below"}
     - {name: working_hours, type: table, of: BookingWorkingHour}
     - {name: feed_version, type: int, default: 1, read_only: true, hidden: true, no_copy: true}
     - {name: outside_calendar, type: secret, description: "The address of a calendar of theirs in iCalendar format: Google Calendar's secret address in iCal format, Outlook's published ICS link, an iCloud or Nextcloud subscription link. When it says they are busy, guests are not offered that time; nothing else is read or kept"}
@@ -74,7 +89,7 @@
     - {name: rotate_calendar_feed, label: Reset Calendar Feed Link, permission: read, confirm: "A new feed link is made and every earlier one stops working. Continue?"}
   form:
     - {label: Staff, fields: [display_name, email, time_zone, active, bio]}
-    - {label: Working Hours, fields: [working_hours]}
+    - {label: Working Hours, fields: [calendar, working_hours]}
     - {label: Outside Calendar, fields: [outside_calendar, outside_calendar_read, outside_calendar_error]}
   list: {columns: [display_name, email, time_zone, active], sort: display_name asc}
 
@@ -213,6 +228,8 @@
        description: "The staff member's outside calendar became busy at this time after it was booked: reschedule it, or keep it"}
     - {name: outside_clash_since, type: datetime, read_only: true, no_copy: true, label: Clash Found}
     - {name: outside_clash_kept, type: datetime, read_only: true, no_copy: true, label: Kept Despite a Clash, description: "Not flagged again at this time"}
+    - {name: closed_clash, type: check, read_only: true, no_copy: true, in_filter: true, label: Outside Opening Hours,
+       description: "A working calendar (the staff member's or the business's) closed this time after it was booked. It is kept: reschedule or cancel it"}
   indexes: [[staff, start_time], [service, start_time], [status, start_time]]
   rules:
     - {name: guest_or_customer, check: "doc.customer != null || (doc.guest_name != null && doc.guest_name != '')", message: "Choose a customer or enter the guest's name"}
@@ -252,5 +269,5 @@
     - {label: Intake Answers, collapsible: true, fields: [answers]}
     - {label: Location, collapsible: true, fields: [location_type, location]}
     - {label: Billing, collapsible: true, fields: [company, item, rate, amount, sales_invoice]}
-    - {label: History, collapsible: true, fields: [cancellation_reason, scheduled_at, confirmed_at, cancelled_at, completed_at, outside_clash, outside_clash_since, outside_clash_kept]}
+    - {label: History, collapsible: true, fields: [cancellation_reason, scheduled_at, confirmed_at, cancelled_at, completed_at, outside_clash, outside_clash_since, outside_clash_kept, closed_clash]}
   list: {columns: [number, start_time, service_name, staff_name, guest_name, seats, status, outside_clash], sort: start_time desc}

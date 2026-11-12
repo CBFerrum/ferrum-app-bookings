@@ -1369,3 +1369,133 @@ fn dec_of(v: &Value) -> String {
     };
     text.parse::<rust_decimal::Decimal>().map(|d| d.normalize().to_string()).unwrap_or(text)
 }
+
+/// A fresh database with one workspace (zone Asia/Kolkata) on Bookings and the packages in `extra`
+/// (`commerce` and `bookings_payments` for deposits, `comms` for the Mail stand-in).
+async fn boot(slug: &str, extra: &[&str]) -> T {
+    let url = std::env::var("FERRUM_BOOKINGS_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_bookings_test".into());
+    let db = Db::connect(DbConfig { url, max_connections: 24, ..Default::default() }).await.expect("connect");
+    sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    let commerce = extra.contains(&"commerce");
+    let mut packages = ferrum_domain::packages().expect("platform packages");
+    packages.extend(ferrum_app_erp::packages().expect("ERP's packages"));
+    if commerce {
+        packages.extend(ferrum_app_commerce::packages().expect("Commerce's packages").into_iter().filter(|p| p.name() != "commerce_subscriptions"));
+    }
+    packages.extend(ferrum_app_bookings::packages().expect("app packages").into_iter().filter(|p| commerce || p.name() != "bookings_payments"));
+    packages.push(mail_stand_in());
+    let catalog = Catalog::from_packages(packages).expect("catalog");
+    let mut hooks = HookRegistry::default();
+    ferrum_domain::register(&mut hooks);
+    ferrum_app_erp::register(&mut hooks);
+    if commerce {
+        ferrum_app_commerce::register(&mut hooks);
+    }
+    ferrum_app_bookings::register(&mut hooks);
+    let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), ..Default::default() };
+    let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
+    ferrum_domain::maintenance(&k).await.expect("partitions");
+    ferrum_app_erp::maintenance(&k).await.expect("partitions");
+    let mut installed = vec!["bookings".to_string()];
+    installed.extend(extra.iter().map(|p| p.to_string()));
+    let tenant = k
+        .create_tenant(NewTenant {
+            slug: slug.into(),
+            name: slug.into(),
+            admin_email: format!("admin@{slug}.test"),
+            admin_password: "Correct-Horse-9".into(),
+            admin_name: None,
+            packages: installed,
+            settings: Some(json!({"fiscal_year_start_month": 4, "timezone": "Asia/Kolkata"})),
+        })
+        .await
+        .expect("tenant");
+    let session = k.login(slug, &format!("admin@{slug}.test"), "Correct-Horse-9").await.expect("login");
+    let admin = k.load_ctx(tenant, session.user, Some(session.token_version), "it".into()).await.expect("ctx");
+    let site = k.hooks.site("bookings").cloned().expect("bookings site");
+    T { k: k.clone(), tenant, admin, site, calls: AtomicU32::new(0) }
+}
+
+fn run(f: impl std::future::Future<Output = ()> + Send + 'static) {
+    let _db = DB.lock().unwrap_or_else(|e| e.into_inner());
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(16 << 20).build().unwrap();
+    rt.block_on(async { tokio::spawn(f).await.unwrap() });
+}
+
+/// The first `weekday` on or after `from`.
+fn next(from: NaiveDate, weekday: chrono::Weekday) -> NaiveDate {
+    use chrono::Datelike;
+    from.iter_days().find(|d| d.weekday() == weekday).unwrap()
+}
+
+#[test]
+fn working_calendars_end_to_end() {
+    run(working_calendars());
+}
+
+/// A clinic's staff follow the workspace's "pune" calendar (weekdays 09:00-12:00): its holiday
+/// closes a Monday for every service, a dated row opens a Saturday morning once, and a booking on a
+/// day closed after it was made is kept and flagged.
+async fn working_calendars() {
+    let t = boot("clinic", &[]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let monday = next(Utc::now().with_timezone(&ist).date_naive() + Duration::days(3), chrono::Weekday::Mon);
+    let (tuesday, saturday) = (monday + Duration::days(1), monday + Duration::days(5));
+    {
+        let mut tx = t.k.db.tenant_tx(t.tenant).await.unwrap();
+        let hours = json!({"mon": [["09:00", "12:00"]], "tue": [["09:00", "12:00"]], "wed": [["09:00", "12:00"]], "thu": [["09:00", "12:00"]], "fri": [["09:00", "12:00"]]});
+        sqlx::query("insert into logic_calendar (tenant_id, name, zone, weekends, holidays, hours) values ($1, 'pune', 'Asia/Kolkata', '{sat,sun}', $2, $3)")
+            .bind(t.tenant)
+            .bind(vec![monday])
+            .bind(hours)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    }
+    let settings =
+        uid(&t.insert(&a, "BookingSettings", json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60})).await);
+    let e = t.k.insert(&a, "BookingStaff", obj(json!({"display_name": "X", "email": "x@clinic.test", "calendar": "nowhere"}))).await.unwrap_err();
+    assert!(messages(&e).contains("working calendar"), "{}", messages(&e));
+    let staff = t.insert(&a, "BookingStaff", json!({"display_name": "Dr Rao", "email": "rao@clinic.test", "calendar": "pune"})).await;
+    let svc = uid(&t.insert(&a, "BookingService", json!({"service_name": "Checkup", "duration_minutes": 60, "staff": [{"staff": sid(&staff)}]})).await);
+    let who = sid(&staff);
+    let day = |d: NaiveDate| {
+        let (t, who) = (&t, &who);
+        async move { times_for(&t.get_pub(&format!("/slots?service={svc}&from={d}&to={d}&time_zone=Asia/Kolkata")).await, who) }
+    };
+    assert!(day(monday).await.is_empty(), "the calendar's holiday removes that day's slots");
+    assert_eq!(day(tuesday).await, ["09:00", "10:00", "11:00"], "no working hours of their own: the calendar's");
+    assert!(day(saturday).await.is_empty(), "weekend");
+    t.update(
+        &a,
+        "BookingSettings",
+        settings,
+        json!({"calendar_dates": [{"calendar": "pune", "date": saturday.to_string(), "change": "Open", "start_time": "10:00", "end_time": "12:00"}]}),
+    )
+    .await;
+    assert_eq!(day(saturday).await, ["10:00", "11:00"], "a one-off open Saturday adds them");
+
+    // Booked on Tuesday; then the business closes that Tuesday: the booking stays, flagged.
+    let b =
+        t.book(json!({"service": svc.to_string(), "start_time": rfc(local(ist, tuesday, "10:00")), "name": "Guest", "email": "g@example.test"})).await.unwrap();
+    let bid = uid(&t.find_one("Booking", json!({"number": b["booking"]["number"]})).await);
+    t.maintain(Utc::now()).await;
+    assert_eq!(t.get("Booking", bid).await["closed_clash"], json!(false));
+    t.update(
+        &a,
+        "BookingSettings",
+        settings,
+        json!({"calendar_dates": [{"calendar": "pune", "date": saturday.to_string(), "change": "Open", "start_time": "10:00", "end_time": "12:00"},
+                                  {"date": tuesday.to_string(), "change": "Closed"}]}),
+    )
+    .await;
+    assert!(day(tuesday).await.is_empty(), "a business-wide closure");
+    t.maintain(Utc::now()).await;
+    let kept = t.get("Booking", bid).await;
+    assert_eq!((kept["status"].clone(), kept["closed_clash"].clone()), (json!("Confirmed"), json!(true)), "kept and flagged, not deleted");
+    // A business calendar that does not exist is refused; one that does closes its holidays for everyone.
+    let e = t.k.update(&a, "BookingSettings", settings, obj(json!({"calendar": "nowhere"})), None).await.unwrap_err();
+    assert!(messages(&e).contains("working calendar"), "{}", messages(&e));
+}

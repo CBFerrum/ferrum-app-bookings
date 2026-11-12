@@ -9,6 +9,7 @@
 
 use crate::booking;
 use crate::calendar;
+use crate::engine::Span;
 use crate::ics::{self, Event};
 use crate::settings::{self, Settings};
 use crate::{Instant, int, obj, time, token, when};
@@ -350,6 +351,8 @@ pub struct Round {
     pub expired: usize,
     pub promoted: usize,
     pub purged: u64,
+    /// Bookings whose working calendar closed (or opened again) at their time.
+    pub closed: usize,
 }
 
 /// One maintenance round for a tenant. Steps run independently; the first error is returned after
@@ -381,6 +384,10 @@ pub async fn run(k: &Kernel, tenant: Uuid, schema: Arc<Schema>, now: Instant) ->
     match purge(k, &ctx, now).await {
         Ok(n) => round.purged = n,
         Err(e) => note("purge", e),
+    }
+    match closed_clashes(k, &ctx, now).await {
+        Ok(n) => round.closed = n,
+        Err(e) => note("opening hours", e),
     }
     first_error.map_or(Ok(round), Err)
 }
@@ -492,6 +499,43 @@ async fn sweep_waitlists(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> {
         .await?;
     }
     Ok(promoted)
+}
+
+/// Active bookings ahead whose working calendars (the staff member's, the business's) no longer open
+/// at their time are flagged `closed_clash`: kept, never moved or cancelled. A flagged one whose time
+/// opens again is cleared. Staff on weekly hours alone are not checked (as before calendars).
+async fn closed_clashes(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> {
+    let mut tx = k.db.tenant_tx(ctx.tenant).await?;
+    let st = settings::load(&mut tx, ctx.tenant).await?;
+    let rows: Vec<(Uuid, Uuid, Instant, Instant, bool)> = sqlx::query_as(
+        "select id, staff, start_time, end_time, coalesce(closed_clash, false) from e_booking where tenant_id = $1 \
+         and status in ('Pending', 'Confirmed') and start_time > $2 order by start_time, id limit 2000",
+    )
+    .bind(ctx.tenant)
+    .bind(now)
+    .fetch_all(&mut *tx)
+    .await?;
+    let Some(window) = rows.first().zip(rows.iter().map(|r| r.3).max()).map(|(a, end)| Span::new(a.2, end)) else {
+        tx.commit().await?;
+        return Ok(0);
+    };
+    let mut ids: Vec<Uuid> = rows.iter().map(|r| r.1).collect();
+    ids.sort();
+    ids.dedup();
+    let business = calendar::business_open(&mut tx, ctx.tenant, &st, window).await?;
+    let mut changed = 0;
+    for s in calendar::staff(&mut tx, ctx.tenant, &ids).await? {
+        let Some(open) = calendar::staff_open(&mut tx, ctx.tenant, &st, &s, &business, window).await? else { continue };
+        for (bid, _, start, end, flagged) in rows.iter().filter(|r| r.1 == s.id) {
+            let closed = !open.iter().any(|w| w.contains(&Span::new(*start, *end)));
+            if closed != *flagged {
+                k.set_values_tx(ctx, &mut tx, "Booking", *bid, obj(json!({"closed_clash": closed}))).await?;
+                changed += 1;
+            }
+        }
+    }
+    tx.commit().await?;
+    Ok(changed)
 }
 
 /// Guest links of bookings over for 30 days, and claims of bookings over for 60 days.
