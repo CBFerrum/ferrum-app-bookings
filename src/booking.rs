@@ -302,6 +302,7 @@ pub async fn reschedule(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, m: &M
         // A time the staff member is free at, outside calendar and all.
         "outside_clash": false,
         "outside_clash_since": null,
+        "closed_clash": false,
     })));
     let out = update(k, ctx, tx, booking, patch, true).await?;
     if svc.group()

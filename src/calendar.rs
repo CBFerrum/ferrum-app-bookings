@@ -72,6 +72,8 @@ pub struct StaffInfo {
     pub bio: Option<String>,
     pub hours: Vec<Hours>,
     pub feed_version: i64,
+    /// Their working calendar (Admin → Calendars): when set, it replaces the weekly hours.
+    pub calendar: Option<String>,
 }
 
 pub fn zone(name: &str) -> Option<Tz> {
@@ -181,12 +183,13 @@ pub async fn staff(tx: &mut Tx, tenant: Uuid, ids: &[Uuid]) -> Result<Vec<StaffI
     if ids.is_empty() {
         return Ok(vec![]);
     }
-    let rows: Vec<(Uuid, String, String, Option<String>, bool, Option<String>, Option<i64>)> =
-        sqlx::query_as("select id, display_name, email, time_zone, active, bio, feed_version from e_booking_staff where tenant_id = $1 and id = any($2)")
-            .bind(tenant)
-            .bind(ids)
-            .fetch_all(&mut **tx)
-            .await?;
+    let rows: Vec<(Uuid, String, String, Option<String>, bool, Option<String>, Option<i64>, Option<String>)> = sqlx::query_as(
+        "select id, display_name, email, time_zone, active, bio, feed_version, calendar from e_booking_staff where tenant_id = $1 and id = any($2)",
+    )
+    .bind(tenant)
+    .bind(ids)
+    .fetch_all(&mut **tx)
+    .await?;
     let hours: Vec<(Uuid, Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
         "select parent_id, weekday, start_time, end_time from e_booking_staff__working_hours where tenant_id = $1 and parent_id = any($2) order by parent_id, idx",
     )
@@ -205,7 +208,7 @@ pub async fn staff(tx: &mut Tx, tenant: Uuid, ids: &[Uuid]) -> Result<Vec<StaffI
     }
     let mut found: HashMap<Uuid, StaffInfo> = rows
         .into_iter()
-        .map(|(id, name, email, tz, active, bio, feed_version)| {
+        .map(|(id, name, email, tz, active, bio, feed_version, calendar)| {
             let info = StaffInfo {
                 id,
                 name,
@@ -215,11 +218,65 @@ pub async fn staff(tx: &mut Tx, tenant: Uuid, ids: &[Uuid]) -> Result<Vec<StaffI
                 bio,
                 hours: by_staff.remove(&id).unwrap_or_default(),
                 feed_version: feed_version.unwrap_or(1),
+                calendar: calendar.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()),
             };
             (id, info)
         })
         .collect();
     Ok(ids.iter().filter_map(|i| found.remove(i)).collect())
+}
+
+/// A working calendar's open time near `window` (Admin → Calendars), with the dated changes entered
+/// in Booking Settings for it (with `business`, also those for the business as a whole). A calendar
+/// that is missing or unusable is closed: it never opens time nobody set.
+pub async fn calendar_open(tx: &mut Tx, tenant: Uuid, st: &Settings, name: &str, business: bool, window: Span) -> Result<Vec<Span>> {
+    let Some(cal) = ferrum_kernel::load_calendar(tx, tenant, name).await? else { return Ok(vec![]) };
+    let Some(tz) = zone(&cal.zone).filter(|_| cal.problem().is_none()) else { return Ok(vec![]) };
+    let mut hours = Vec::new();
+    for (i, day) in ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].iter().enumerate() {
+        let Ok(weekday) = chrono::Weekday::try_from(i as u8) else { continue };
+        if cal.weekends.iter().any(|w| w == day) {
+            continue;
+        }
+        match &cal.hours {
+            // Without hours of the day every hour of a business day is open.
+            None => hours.push(Hours { weekday, from: 0, to: 1440 }),
+            Some(h) => hours.extend(
+                h.get(*day).into_iter().flatten().filter_map(|(a, b)| Some(Hours { weekday, from: engine::parse_hhmm(a)?, to: engine::parse_hhmm(b)? })),
+            ),
+        }
+    }
+    let holidays: Vec<_> = cal.holidays.iter().copied().collect();
+    Ok(engine::calendar_spans(tz, &hours, &holidays, &st.dated_for(name, business), window))
+}
+
+/// The business's open time near `window`: its calendar's, or every hour less its dated closures;
+/// `None` when it set neither (nothing is closed for everyone).
+pub async fn business_open(tx: &mut Tx, tenant: Uuid, st: &Settings, window: Span) -> Result<Option<Vec<Span>>> {
+    if let Some(name) = &st.calendar {
+        return Ok(Some(calendar_open(tx, tenant, st, name, true, window).await?));
+    }
+    let dated = st.dated_for("", true);
+    if dated.is_empty() {
+        return Ok(None);
+    }
+    let all_day: Vec<Hours> = engine::WEEKDAYS.iter().filter_map(|d| Some(Hours { weekday: engine::weekday(d)?, from: 0, to: 1440 })).collect();
+    Ok(Some(engine::calendar_spans(st.zone, &all_day, &[], &dated, window)))
+}
+
+/// A staff member's working time near `window` when calendars decide it (theirs, the business's):
+/// their calendar's open time, or their weekly hours, inside the business's open time. `None`: their
+/// weekly hours alone, exactly as without calendars.
+pub async fn staff_open(tx: &mut Tx, tenant: Uuid, st: &Settings, s: &StaffInfo, business: &Option<Vec<Span>>, window: Span) -> Result<Option<Vec<Span>>> {
+    let own = match &s.calendar {
+        Some(name) => Some(calendar_open(tx, tenant, st, name, false, window).await?),
+        None => None,
+    };
+    Ok(match (own, business) {
+        (None, None) => None,
+        (own, Some(b)) => Some(engine::intersect(own.unwrap_or_else(|| engine::working_spans(s.tz, &s.hours, window)), b.clone())),
+        (own, None) => own,
+    })
 }
 
 /// Locks staff rows in id order for the rest of the transaction.
@@ -255,10 +312,11 @@ pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffI
     let from = around.start - Duration::days(2);
     let to = around.end + Duration::days(2);
     let staff_ids: Vec<Uuid> = staff.iter().map(|s| s.id).collect();
-    let resources: Vec<(Uuid, Option<i64>)> = if svc.resources.is_empty() {
+    let range = Span::new(from, to);
+    let resources: Vec<(Uuid, Option<i64>, Option<String>)> = if svc.resources.is_empty() {
         vec![]
     } else {
-        sqlx::query_as("select id, capacity from e_booking_resource where tenant_id = $1 and id = any($2) and active")
+        sqlx::query_as("select id, capacity, calendar from e_booking_resource where tenant_id = $1 and id = any($2) and active")
             .bind(tenant)
             .bind(&svc.resources)
             .fetch_all(&mut **tx)
@@ -296,26 +354,31 @@ pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffI
     .bind(exclude.unwrap_or_default())
     .fetch_all(&mut **tx)
     .await?;
+    let business = business_open(tx, tenant, st, range).await?;
+    let mut working = Vec::new();
+    for s in staff.iter().filter(|s| s.active) {
+        working.push(engine::Staff {
+            id: s.id,
+            tz: s.tz,
+            hours: s.hours.clone(),
+            time_off: off.iter().filter(|o| o.0 == s.id).map(|o| Span::new(o.1, o.2)).collect(),
+            busy: elsewhere.iter().filter(|o| o.0 == s.id).map(|o| Span::new(o.1, o.2)).collect(),
+            open: staff_open(tx, tenant, st, s, &business, range).await?,
+        });
+    }
+    // In the service's order of preference.
+    let mut usable = Vec::new();
+    for (id, capacity, cal) in svc.resources.iter().filter_map(|r| resources.iter().find(|x| x.0 == *r)) {
+        let open = match cal.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+            Some(name) => Some(calendar_open(tx, tenant, st, name, false, range).await?),
+            None => None,
+        };
+        usable.push(engine::Resource { id: *id, capacity: capacity.unwrap_or(1).max(1), open });
+    }
     Ok(World {
         service: svc.engine(st),
-        staff: staff
-            .iter()
-            .filter(|s| s.active)
-            .map(|s| engine::Staff {
-                id: s.id,
-                tz: s.tz,
-                hours: s.hours.clone(),
-                time_off: off.iter().filter(|o| o.0 == s.id).map(|o| Span::new(o.1, o.2)).collect(),
-                busy: elsewhere.iter().filter(|o| o.0 == s.id).map(|o| Span::new(o.1, o.2)).collect(),
-            })
-            .collect(),
-        // In the service's order of preference.
-        resources: svc
-            .resources
-            .iter()
-            .filter_map(|r| resources.iter().find(|x| x.0 == *r))
-            .map(|(id, capacity)| engine::Resource { id: *id, capacity: capacity.unwrap_or(1).max(1) })
-            .collect(),
+        staff: working,
+        resources: usable,
         booked: booked
             .into_iter()
             .map(|(id, staff, service, resource, start, end, block_start, block_end, session, seats)| Booked {

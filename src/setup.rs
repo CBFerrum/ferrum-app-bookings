@@ -31,6 +31,15 @@ fn duplicates(doc: &Doc, table: &str, field: &str, message: &str) -> Vec<FieldEr
         .collect()
 }
 
+/// An error when `name` (trimmed, if set) is not a working calendar of the workspace (Admin → Calendars).
+async fn calendar_error(hc: &mut HookCtx<'_>, name: Option<&str>, field: &str) -> Result<Option<FieldError>> {
+    let Some(name) = name.map(str::trim).filter(|n| !n.is_empty()) else { return Ok(None) };
+    Ok(ferrum_kernel::load_calendar(hc.tx, hc.ctx.tenant, name)
+        .await?
+        .is_none()
+        .then(|| FieldError::new(field, "is not the name of a working calendar (Admin, Calendars)")))
+}
+
 fn param(params: &Value, key: &str) -> Option<String> {
     match params.get(key)? {
         Value::String(v) => Some(v.trim().to_string()).filter(|v| !v.is_empty()),
@@ -104,8 +113,8 @@ async fn feed_link(hc: &mut HookCtx<'_>, staff: Uuid, version: i64) -> Result<Va
 
 #[async_trait]
 impl DocHook for StaffHook {
-    async fn validate(&self, _hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
-        let mut errors = Vec::new();
+    async fn validate(&self, hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
+        let mut errors: Vec<FieldError> = calendar_error(hc, s(doc, "calendar"), "calendar").await?.into_iter().collect();
         if s(doc, "time_zone").is_some_and(|z| calendar::zone(z).is_none()) {
             errors.push(FieldError::new("time_zone", "is not an IANA time zone (e.g. Europe/London)"));
         }
@@ -204,13 +213,43 @@ impl DocHook for TimeOffHook {
     }
 }
 
+pub struct ResourceHook;
+
+#[async_trait]
+impl DocHook for ResourceHook {
+    async fn validate(&self, hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
+        match calendar_error(hc, s(doc, "calendar"), "calendar").await? {
+            Some(e) => Err(Error::Validation(vec![e])),
+            None => Ok(()),
+        }
+    }
+}
+
 pub struct SettingsHook;
 
 #[async_trait]
 impl DocHook for SettingsHook {
-    async fn validate(&self, _hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
-        let errors = duplicates(doc, "reminders", "minutes_before", "is already a reminder");
+    async fn validate(&self, hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
+        let mut errors = duplicates(doc, "reminders", "minutes_before", "is already a reminder");
+        errors.extend(calendar_error(hc, s(doc, "calendar"), "calendar").await?);
+        for (i, r) in rows(doc, "calendar_dates").iter().enumerate() {
+            errors.extend(calendar_error(hc, s(r, "calendar"), "calendar").await?.map(|e| e.in_row("calendar_dates", i)));
+            errors.extend(hours_error(s(r, "start_time"), s(r, "end_time")).map(|e| e.in_row("calendar_dates", i)));
+        }
         if errors.is_empty() { Ok(()) } else { Err(Error::Validation(errors)) }
+    }
+}
+
+/// Start and end of a dated change: both empty (the whole day), or HH:MM to a later HH:MM.
+fn hours_error(from: Option<&str>, to: Option<&str>) -> Option<FieldError> {
+    match (from.map(engine::parse_hhmm), to.map(engine::parse_hhmm)) {
+        (None, None) => None,
+        (Some(Some(a)), Some(Some(b))) if b > a => None,
+        (Some(Some(_)), Some(Some(_))) => Some(FieldError::new("end_time", "must be after the start time")),
+        (Some(Some(_)), None) => Some(FieldError::new("end_time", "is needed with a start time (both empty: the whole day)")),
+        (None, Some(Some(_))) => Some(FieldError::new("start_time", "is needed with an end time (both empty: the whole day)")),
+        (Some(None), _) => Some(FieldError::new("start_time", "use HH:MM (00:00 to 23:59)")),
+        (_, Some(None)) => Some(FieldError::new("end_time", "use HH:MM (00:00 to 24:00)")),
     }
 }
 
@@ -231,5 +270,14 @@ mod tests {
         assert_eq!(param(&json!({"seats": 2, "from": " 2026-11-02 ", "x": true, "e": ""}), "seats").as_deref(), Some("2"));
         assert_eq!(param(&json!({"from": " 2026-11-02 "}), "from").as_deref(), Some("2026-11-02"));
         assert_eq!(param(&json!({"e": ""}), "e"), None);
+        assert!(hours_error(None, None).is_none() && hours_error(Some("10:00"), Some("24:00")).is_none(), "the whole day, or a window");
+        for (a, b, field) in [
+            (Some("10:00"), Some("09:00"), "end_time"),
+            (Some("10:00"), None, "end_time"),
+            (None, Some("10:00"), "start_time"),
+            (Some("9:00"), Some("10:00"), "start_time"),
+        ] {
+            assert_eq!(hours_error(a, b).map(|e| e.field), Some(field.to_string()), "{a:?} {b:?}");
+        }
     }
 }
