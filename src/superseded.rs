@@ -2,7 +2,9 @@
 //! exceptions of the platform's working calendars, which every other app and the calendar's own functions read.
 //! Once per workspace the upkeep moves them: each row into the exceptions of the calendar it names (the business
 //! calendar when it names none; a business calendar is created when the workspace had dates but no calendar),
-//! never over an exception the calendar already has for that date. The rows stay, readable, and are not read again.
+//! never over an exception the calendar already has for that date. The rows stay, readable, and are not read for
+//! availability. The upkeep does this on every run for any row it has not moved yet, so a date written into the
+//! old field at any time (an old screen, an import, an API client) still closes or opens the day within a minute.
 
 use crate::engine::parse_hhmm;
 use crate::obj;
@@ -36,45 +38,56 @@ fn exception(row: &Row) -> Option<(String, Value)> {
     Some((date.as_ref()?.to_string(), x))
 }
 
-/// Moves the workspace's dated rows into its calendars, once. Returns the exceptions written.
+/// Moves the workspace's dated rows it has not moved yet into its calendars. Returns the exceptions written.
+/// A row naming a calendar that does not exist yet is left for a later run, so no closure is lost.
 pub(crate) async fn move_dates(k: &Kernel, ctx: &Ctx) -> Result<usize> {
     let mut tx = k.db.tenant_tx(ctx.tenant).await?;
-    let done: Option<i32> = sqlx::query_scalar("select 1 from bookings_calendar_moved where tenant_id = $1").bind(ctx.tenant).fetch_optional(&mut *tx).await?;
-    if done.is_some() {
-        return Ok(0);
-    }
     let settings: Option<(Uuid, Option<String>)> =
         sqlx::query_as("select id, calendar from e_booking_settings where tenant_id = $1 limit 1").bind(ctx.tenant).fetch_optional(&mut *tx).await?;
-    let rows: Vec<Row> = match &settings {
-        Some((id, _)) => sqlx::query_as(
-            "select calendar, date, start_time, end_time, change from e_booking_settings__calendar_dates where tenant_id = $1 and parent_id = $2 order by idx",
+    let rows: Vec<(Uuid, Row)> = match &settings {
+        Some((id, _)) => sqlx::query_as::<_, (Uuid, Option<String>, Option<chrono::NaiveDate>, Option<String>, Option<String>, Option<String>)>(
+            "select d.id, d.calendar, d.date, d.start_time, d.end_time, d.change from e_booking_settings__calendar_dates d \
+             where d.tenant_id = $1 and d.parent_id = $2 \
+             and not exists (select 1 from bookings_calendar_rows_moved m where m.tenant_id = d.tenant_id and m.row_id = d.id) order by d.idx",
         )
         .bind(ctx.tenant)
         .bind(id)
         .fetch_all(&mut *tx)
-        .await?,
+        .await?
+        .into_iter()
+        .map(|(id, a, b, c, d, e)| (id, (a, b, c, d, e)))
+        .collect(),
         None => vec![],
     };
+    if rows.is_empty() {
+        return Ok(0);
+    }
     let business = settings.as_ref().and_then(|s| s.1.as_deref()).map(str::trim).filter(|c| !c.is_empty()).map(str::to_string);
     // Per calendar, the exceptions to add (one per date: the first row for a date wins).
     let mut plan: BTreeMap<String, BTreeMap<String, Value>> = BTreeMap::new();
     let mut created = false;
     let mut seen = HashSet::new();
-    for row in &rows {
+    let mut targets: Vec<(Uuid, Option<String>)> = vec![]; // row, the calendar it needs (None: nothing to do)
+    for (rid, row) in &rows {
         let named = row.0.as_deref().map(str::trim).filter(|c| !c.is_empty()).map(str::to_string);
-        let Some((date, x)) = exception(row) else { continue };
+        let Some((date, x)) = exception(row) else {
+            targets.push((*rid, None));
+            continue;
+        };
         let target = match (named, &business) {
             (Some(n), _) => n,
             (None, Some(b)) => b.clone(),
             (None, None) => {
                 // Without a business calendar the whole day was open: an extra opening changed nothing.
                 if x["open"] == json!(true) {
+                    targets.push((*rid, None));
                     continue;
                 }
                 created = true;
                 CREATED.to_string()
             }
         };
+        targets.push((*rid, Some(target.clone())));
         if seen.insert((target.clone(), date.clone())) {
             plan.entry(target).or_default().insert(date, x);
         }
@@ -83,6 +96,7 @@ pub(crate) async fn move_dates(k: &Kernel, ctx: &Ctx) -> Result<usize> {
         sqlx::query_scalar("select settings->>'timezone' from tenant where id = $1").bind(ctx.tenant).fetch_optional(&mut *tx).await?.flatten();
     let mut written = 0;
     let mut puts = vec![];
+    let mut missing = HashSet::new();
     for (name, add) in plan {
         let existing = ferrum_kernel::load_calendar(&mut tx, ctx.tenant, &name).await?;
         let mut body = match existing {
@@ -90,8 +104,11 @@ pub(crate) async fn move_dates(k: &Kernel, ctx: &Ctx) -> Result<usize> {
             None if name == CREATED => {
                 json!({"zone": zone.as_deref().filter(|z| z.parse::<chrono_tz::Tz>().is_ok()).unwrap_or("UTC"), "weekends": [], "holidays": []})
             }
-            // A calendar the old rows named that does not exist never opened or closed anything.
-            None => continue,
+            // A calendar that does not exist (yet) cannot take the rows: they wait, and are tried again.
+            None => {
+                missing.insert(name);
+                continue;
+            }
         };
         if !body["exceptions"].is_object() {
             body["exceptions"] = json!({});
@@ -112,7 +129,12 @@ pub(crate) async fn move_dates(k: &Kernel, ctx: &Ctx) -> Result<usize> {
     if let (true, Some((id, _))) = (created, &settings) {
         k.set_values_tx(ctx, &mut tx, "BookingSettings", *id, obj(json!({"calendar": CREATED}))).await?;
     }
-    sqlx::query("insert into bookings_calendar_moved (tenant_id) values ($1) on conflict do nothing").bind(ctx.tenant).execute(&mut *tx).await?;
+    let done: Vec<Uuid> = targets.into_iter().filter(|(_, c)| c.as_ref().is_none_or(|c| !missing.contains(c))).map(|(r, _)| r).collect();
+    sqlx::query("insert into bookings_calendar_rows_moved (tenant_id, row_id) select $1, unnest($2::uuid[]) on conflict do nothing")
+        .bind(ctx.tenant)
+        .bind(&done)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(written)
 }
