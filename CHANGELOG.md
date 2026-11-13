@@ -14,11 +14,11 @@
 - **A video meeting for each booking** (BK-48). A Video service that states no link of its own gives each booking its own meeting in the Mail, Chat and Calendar app (needs Comms 0.15.0 and a meeting server) once the booking is confirmed, hosted by the booked staff member. The guest's own join link, which needs no account and admits only to that meeting, becomes the booking's Where: the booking page, the confirmation, the reminders and the calendar entry all carry it. Rescheduling a booking moves its meeting (the link stays the same); cancelling or expiring it ends the meeting and the link stops working. Without Comms, without a meeting server, without the workspace's public address in Comms settings, or when the service states its own link, bookings are exactly as before; a meeting that cannot be made never stops a booking. A class's guests each get their own meeting for now.
 ## 0.6.2
 
-The interface knows what 0.6.0 added. A booking whose time a working calendar closed shows a warning mark, **Outside opening hours**, with what to do (move it, or confirm with the guest): on the schedule's block, on Today, on a pending booking waiting for an answer and at the top of its sheet. **Expired** is muted like Cancelled, holds no block on the schedule, and a guest opening it is told it expired and why. The new fields' and options' names (working calendars, per-service rules, the unpaid-deposit hold, Expired, Restored, Refunded) are in Arabic and Hindi too. Rebuilt with Ferrum-Frontend 0a47157.
+The interface knows what 0.6.0 added. A booking whose time a working calendar closed shows a warning mark, **Outside opening hours**, with what to do (move it, or confirm with the guest): on the schedule's block, on Today, on a pending booking waiting for an answer and at the top of its sheet. **Expired** is muted like Cancelled, holds no block on the schedule, and a guest opening it is told it expired and why. The new fields' and options' names (working calendars, per-service rules, the unpaid-deposit hold, Expired, Restored, Refunded) are in Arabic and Hindi too. Rebuilt with Ferrum-Frontend 76c4fad.
 
 ## 0.6.1
 
-Rebuilt with Ferrum-Frontend 45dad7f, the design system as tuned after the landed build was reviewed. The left menu's icons are chosen so that none repeats on more than three rows and each fits its row; their drawings load beside the first page instead of inside it, so the page starts lighter; a row that scrolls sideways fades at the edge where there is more, in every browser and with reduced motion; a printed record leaves out empty fields and keeps its totals with the table; menus and popovers sit inside the page's landmarks for assistive technology; a selection bar folds what does not fit into More on a narrow screen. Nothing else changes.
+Rebuilt with Ferrum-Frontend 9e7190c, the design system as tuned after the landed build was reviewed. The left menu's icons are chosen so that none repeats on more than three rows and each fits its row; their drawings load beside the first page instead of inside it, so the page starts lighter; a row that scrolls sideways fades at the edge where there is more, in every browser and with reduced motion; a printed record leaves out empty fields and keeps its totals with the table; menus and popovers sit inside the page's landmarks for assistive technology; a selection bar folds what does not fit into More on a narrow screen. Nothing else changes.
 
 ## 0.6.0
 
@@ -29,7 +29,7 @@ Rebuilt with Ferrum-Frontend 45dad7f, the design system as tuned after the lande
 
 ## 0.5.1
 
-The interface follows the upgraded design system, rebuilt with Ferrum-Frontend 0a47157. Text uses the kit's type roles (nothing under 12px) and controls its height tokens; loading shows skeletons shaped like what is coming; empty, no matches, denied, offline and failed are told apart; status colours come from stored state ids. The interface check now runs the UI lint against an empty baseline. The schedule's hour labels no longer wrap.
+The interface follows the upgraded design system, rebuilt with Ferrum-Frontend 76c4fad. Text uses the kit's type roles (nothing under 12px) and controls its height tokens; loading shows skeletons shaped like what is coming; empty, no matches, denied, offline and failed are told apart; status colours come from stored state ids. The interface check now runs the UI lint against an empty baseline. The schedule's hour labels no longer wrap.
 
 ## 0.5.0
 
@@ -44,7 +44,7 @@ What stays as it was:
 - A series a person repeats is the business's bookings at the guest's request: invoiced, without a deposit per date.
 - A no-show keeps its deposit, and only a cancellation settles one.
 
-Rebuilt with Ferrum-Frontend 9f5a466, with the new fields and words in Arabic and Hindi.
+Rebuilt with Ferrum-Frontend 69de8aa, with the new fields and words in Arabic and Hindi.
 
 ## 0.4.18
 
@@ -52,11 +52,11 @@ The reports it defines in code (their titles and parameters) have names in Arabi
 
 ## 0.4.17
 
-Rebuilt with Ferrum-Frontend c59c9a2: the names of its models, fields and manifest in Arabic and Hindi (249 each in ui/src/locales/names, which the platform serves to every page of the workspace, so a record's labels, the launcher and the bar read in the person's language), and the sentences its pages still showed in English (split around a link or a figure, built in code from a template or word by word) whole and translated (370 words each in ui/src/locales). Translated by the model, to be reviewed by native speakers.
+Rebuilt with Ferrum-Frontend 43d7779: the names of its models, fields and manifest in Arabic and Hindi (249 each in ui/src/locales/names, which the platform serves to every page of the workspace, so a record's labels, the launcher and the bar read in the person's language), and the sentences its pages still showed in English (split around a link or a figure, built in code from a template or word by word) whole and translated (370 words each in ui/src/locales). Translated by the model, to be reviewed by native speakers.
 
 ## 0.4.16
 
-Rebuilt with Ferrum-Frontend 155518c: the sentences its pages built in code (counts, dates, what a toast or a screen reader says) go through t() too, as whole sentences where code chose a word, and carry built-in Arabic and Hindi (339 words each in ui/src/locales, translated by the model and to be reviewed by native speakers). The later dates of a guest's series are recorded as booked from the page, as the first is.
+Rebuilt with Ferrum-Frontend 046a3a2: the sentences its pages built in code (counts, dates, what a toast or a screen reader says) go through t() too, as whole sentences where code chose a word, and carry built-in Arabic and Hindi (339 words each in ui/src/locales, translated by the model and to be reviewed by native speakers). The later dates of a guest's series are recorded as booked from the page, as the first is.
 
 ## 0.4.15
 
@@ -68,39 +68,39 @@ The assistant knows what its records mean in its pages (contributes.shell.assist
 
 ## 0.4.13
 
-Rebuilt with Ferrum-Frontend 5b22e7b: its own words carry built-in Arabic and Hindi (305 words each, ui/src/locales, translated by the model and to be reviewed by native speakers), fetched for the page's language only. The labels it keeps in objects, its dialogs, its page titles and the words it keeps in variables go through t() as well, and the names and sizes it shows as they are keep their order right to left. Its pages are drawn once their words are in, and its entry carries only the parts of the kit it uses.
+Rebuilt with Ferrum-Frontend 389b2af: its own words carry built-in Arabic and Hindi (305 words each, ui/src/locales, translated by the model and to be reviewed by native speakers), fetched for the page's language only. The labels it keeps in objects, its dialogs, its page titles and the words it keeps in variables go through t() as well, and the names and sizes it shows as they are keep their order right to left. Its pages are drawn once their words are in, and its entry carries only the parts of the kit it uses.
 
 ## 0.4.12
 
-Rebuilt with Ferrum-Frontend 6537d65: an action's link, code or token shown once is kept in a dialog to copy, and on a page that reads right to left, English left untranslated keeps its own order. Its own words go through the kit's t() (272 places), so a workspace's own words for its language reach them, and Admin, Interface words lists them under it (dist/words.json).
+Rebuilt with Ferrum-Frontend 1f5981d: an action's link, code or token shown once is kept in a dialog to copy, and on a page that reads right to left, English left untranslated keeps its own order. Its own words go through the kit's t() (272 places), so a workspace's own words for its language reach them, and Admin, Interface words lists them under it (dist/words.json).
 
 ## 0.4.11
 
-Rebuilt with Ferrum-Frontend d5d98f2: a workspace's own words for its interface (Admin, Interface words) reach its pages as they load; an attachment field that holds a picture shows it; and a value another record already has is said so, where the form said the record had been changed by someone else. Its own screens' margins, paddings, borders, alignment and insets go by the line's start and end, so they mirror right to left as the kit's do; what it places by coordinates (boards, timelines, charts, handles) stays as it was.
+Rebuilt with Ferrum-Frontend 8a1c2e7: a workspace's own words for its interface (Admin, Interface words) reach its pages as they load; an attachment field that holds a picture shows it; and a value another record already has is said so, where the form said the record had been changed by someone else. Its own screens' margins, paddings, borders, alignment and insets go by the line's start and end, so they mirror right to left as the kit's do; what it places by coordinates (boards, timelines, charts, handles) stays as it was.
 
 ## 0.4.10
 
-Rebuilt with Ferrum-Frontend 63280d3: right to left, its pages mirror as they read (icons that point along the line, margins and alignment by the line's start and end, arrow keys along it), and the records pages' words are in Arabic and Hindi.
+Rebuilt with Ferrum-Frontend 9d80f4f: right to left, its pages mirror as they read (icons that point along the line, margins and alignment by the line's start and end, arrow keys along it), and the records pages' words are in Arabic and Hindi.
 
 ## 0.4.9
 
-Rebuilt with Ferrum-Frontend a64416a: a new record's box whose default is 1 shows ticked, as it is saved.
+Rebuilt with Ferrum-Frontend 204b713: a new record's box whose default is 1 shows ticked, as it is saved.
 
 ## 0.4.8
 
-Rebuilt with Ferrum-Frontend 922fcfb: an action's dialog says every refusal, the errors on what the action made (another record's rows) among them, and an action with parameters and a confirmation asks once.
+Rebuilt with Ferrum-Frontend 6cfda39: an action's dialog says every refusal, the errors on what the action made (another record's rows) among them, and an action with parameters and a confirmation asks once.
 
 ## 0.4.7
 
-Rebuilt with Ferrum-Frontend a76295e: its pages show times on a person's own clock when they chose one on their Account page, while today and due dates stay on the workspace's day.
+Rebuilt with Ferrum-Frontend b39fffb: its pages show times on a person's own clock when they chose one on their Account page, while today and due dates stay on the workspace's day.
 
 ## 0.4.6
 
-A booking's history is on the workspace's clock, as the team's board is; guests keep their own. Rebuilt with Ferrum-Frontend 24c3951, so its records' pages show times on the workspace's clock too, a draft numbered on submit is headed as a draft, and a record of an app that is not installed says so.
+A booking's history is on the workspace's clock, as the team's board is; guests keep their own. Rebuilt with Ferrum-Frontend d350579, so its records' pages show times on the workspace's clock too, a draft numbered on submit is headed as a draft, and a record of an app that is not installed says so.
 
 ## 0.4.5
 
-Rebuilt with Ferrum-Frontend bb60115: a record page reads an empty number or check as the server does, so an action whose condition needs one shows, and a workspace's settings open as their one record.
+Rebuilt with Ferrum-Frontend 20d08e5: a record page reads an empty number or check as the server does, so an action whose condition needs one shows, and a workspace's settings open as their one record.
 
 ## 0.4.4
 
@@ -108,7 +108,7 @@ A booking's record page offers what it can do: Repeat asks how often, how many b
 
 ## 0.4.3
 
-Rebuilt with Ferrum-Frontend 00dea07: in a workflow state that names what may change, the other fields show read-only, and the fields the state needs show required.
+Rebuilt with Ferrum-Frontend ae13c69: in a workflow state that names what may change, the other fields show read-only, and the fields the state needs show required.
 
 ## 0.4.2
 
@@ -144,7 +144,7 @@ Bookings already sends.
 
 ## 0.3.1
 
-Rebuilt with Ferrum-Frontend 80ff179: a field's label names its control for assistive technology, and a record whose title is a link shows that record's title, not its id.
+Rebuilt with Ferrum-Frontend 89b7cc7: a field's label names its control for assistive technology, and a record whose title is a link shows that record's title, not its id.
 
 ## 0.3.0, and Booking Deposits 0.1.0
 
