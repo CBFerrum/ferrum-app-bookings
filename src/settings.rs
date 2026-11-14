@@ -20,7 +20,12 @@ pub struct Settings {
     pub reschedule_window: Duration,
     /// Reminder offsets in minutes, largest first, without duplicates.
     pub reminders: Vec<i64>,
+    /// Where the package's endpoints are reached (`/api/site/…`): the setting `public_url`, or, once [`Settings::reached`],
+    /// the platform's address for people outside.
     pub public_url: Option<String>,
+    /// Where the booking page is reached (a page of the interface): the setting `public_url`, or, once
+    /// [`Settings::reached`], the platform's address of the workspace's main host, the one host that serves it.
+    pub page_url: Option<String>,
     pub manage_page_url: Option<String>,
     /// The business's working calendar (Admin → Calendars): nobody is booked outside its open time.
     pub calendar: Option<String>,
@@ -67,6 +72,7 @@ pub async fn load(tx: &mut Tx, tenant: Uuid) -> Result<Settings> {
         cancel_window: Duration::hours(cancel.unwrap_or(24).max(0)),
         reschedule_window: Duration::hours(reschedule.unwrap_or(24).max(0)),
         reminders,
+        page_url: url(public_url.clone()),
         public_url: url(public_url),
         manage_page_url: url(manage),
         calendar: calendar.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()),
@@ -113,16 +119,35 @@ impl Settings {
     pub fn manage_link(&self, root: &str, token: &str) -> String {
         match &self.manage_page_url {
             Some(page) => format!("{page}{}token={token}", if page.contains('?') { '&' } else { '?' }),
-            None => self.absolute(&format!("{}/manage/{token}", page_root(root))),
+            None => at(self.page_url.as_deref(), &format!("{}/manage/{token}", page_root(root))),
         }
     }
 
-    /// `path` on this server: absolute when the server address is set.
+    /// `path` of the package's endpoints on this server: absolute when there is an address.
     pub fn absolute(&self, path: &str) -> String {
-        match &self.public_url {
-            Some(base) => format!("{base}{path}"),
-            None => path.to_string(),
+        at(self.public_url.as_deref(), path)
+    }
+
+    /// These settings with where links a guest follows lead when the setting `public_url` is empty: the platform's
+    /// address for people outside ([`Kernel::person_link`]), through the operator's link host when there is one, so a
+    /// link sent today keeps working when the workspace's address changes. The endpoints through `p` (every host of the
+    /// workspace serves them, its portal's too); the booking page through `s`, since the portal's host leads everything
+    /// but the portal, sign-in and the API to the portal. With the setting, or with no address at all, as they are.
+    pub async fn reached(mut self, k: &Kernel, tenant: Uuid) -> Settings {
+        use ferrum_kernel::notify::Audience;
+        if self.public_url.is_none() {
+            self.public_url = k.person_link(tenant, Audience::Outside, "").await;
+            self.page_url = k.person_link(tenant, Audience::Staff, "").await;
         }
+        self
+    }
+}
+
+/// `path` after `base`, or alone without one.
+fn at(base: Option<&str>, path: &str) -> String {
+    match base {
+        Some(base) => format!("{base}{path}"),
+        None => path.to_string(),
     }
 }
 
@@ -192,6 +217,7 @@ mod tests {
             reschedule_window: Duration::hours(24),
             reminders: vec![],
             public_url: url.map(str::to_string),
+            page_url: url.map(str::to_string),
             manage_page_url: page.map(str::to_string),
             calendar: None,
         }
@@ -246,6 +272,14 @@ mod tests {
         // A service may also turn approval off where the workspace has it on.
         let strict = Settings { approval_required: true, ..ws.clone() };
         assert!(!strict.for_service(&svc(ServiceRules { approval_required: Some(false), ..Default::default() })).approval_required);
+    }
+
+    #[test]
+    fn a_guests_links_take_the_hosts_that_serve_them() {
+        // As `Settings::reached` leaves them with no address of their own: the page through `s`, the endpoints through `p`.
+        let st = Settings { public_url: Some("https://go.test/go/spa/p".into()), page_url: Some("https://go.test/go/spa/s".into()), ..settings(None, None) };
+        assert_eq!(st.manage_link("/api/site/spa/bookings", "tok"), "https://go.test/go/spa/s/bookings/book/spa/manage/tok");
+        assert_eq!(st.absolute("/api/site/spa/bookings/manage/tok"), "https://go.test/go/spa/p/api/site/spa/bookings/manage/tok");
     }
 
     #[test]

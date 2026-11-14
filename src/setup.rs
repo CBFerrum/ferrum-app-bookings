@@ -104,8 +104,13 @@ async fn feed_link(hc: &mut HookCtx<'_>, staff: Uuid, version: i64) -> Result<Va
     let expires = Utc::now() + Duration::days(365);
     let sig = token::feed_signature(&key, tenant, staff, version, expires.timestamp());
     let path = format!("{root}/feeds/{staff}.ics?v={version}&exp={}&sig={sig}", expires.timestamp());
+    // Calendar services fetch it: without an address of the settings', it starts where services call back.
+    let url = match (&st.public_url, hc.kernel.settings.callback_base()) {
+        (None, Some(base)) => format!("{base}{path}"),
+        _ => st.absolute(&path),
+    };
     Ok(json!({
-        "url": st.absolute(&path),
+        "url": url,
         "path": path,
         "expires_at": ts(expires),
         "note": "Subscribe to it in a calendar app. Anyone with the link sees these bookings: keep it private (Reset Calendar Feed Link retires it).",
