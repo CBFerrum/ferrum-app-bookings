@@ -34,7 +34,7 @@ Administrators can do everything. Staff without a Bookings role see nothing of t
    | `slot_interval_minutes` | 30 | Start times are offered every this many minutes from the start of each working interval |
    | `cancellation_window_hours` / `reschedule_window_hours` | 24 / 24 | Guests may cancel / move up to this many hours before the start (0 = until the start). Waitlist places can always be cancelled |
    | `reminders` | none | Rows of `minutes_before` (5–43200, unique), e.g. 1440 and 60 |
-   | `public_url` | — | This server's internet address, for absolute links in emails and feed URLs |
+   | `public_url` | the server's | This server's internet address, for absolute links in emails and feed URLs. Empty: a guest's links (in emails and `guest_link`) are the platform's for people outside, through the operator's link host when there is one (`FERRUM_LINK_HOST`), so they keep working when the workspace's address changes: the booking page through `/go/{workspace}/s` (only the workspace's main host serves it), the endpoints through `/go/{workspace}/p`; a staff feed starts where services call back (`FERRUM_HOOKS_HOST`, else the server's public address); with no address at all, they are relative, as before |
    | `manage_page_url` | — | Your own booking page; guest links become `<url>?token=<token>` (else they open the booking page this app serves, `/bookings/book/{workspace}/manage/{token}`) |
    | `signing_secret` | made on first use | **Secret field** (needs `FERRUM_SECRET_KEY`): the HMAC key of staff feed links. Write-only; replacing it retires every feed link |
 

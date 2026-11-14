@@ -213,6 +213,8 @@ async fn email_guest(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, kind: Guest, s
     if !via_mail_app && k.mailer.is_none() {
         return Ok(false);
     }
+    // The links leave the workspace: absolute, through the operator's link host when there is one.
+    let st = &st.clone().reached(k, ctx.tenant).await;
     let bid = id(b, "id").ok_or_else(|| Error::internal("booking without id"))?;
     let root = settings::site_root(tx, ctx.tenant).await?;
     let token = token::mint(tx, ctx.tenant, bid).await?;

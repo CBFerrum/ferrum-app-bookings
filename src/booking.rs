@@ -549,7 +549,7 @@ pub(crate) async fn client_for(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc) ->
 /// `guest_link`: a fresh self-service link to hand to the guest (when no email goes out).
 async fn guest_link(hc: &mut HookCtx<'_>, booking: &Doc) -> Result<Value> {
     let tenant = hc.ctx.tenant;
-    let st = settings::load(hc.tx, tenant).await?;
+    let st = settings::load(hc.tx, tenant).await?.reached(hc.kernel, tenant).await;
     let root = settings::site_root(hc.tx, tenant).await?;
     let token = token::mint(hc.tx, tenant, doc_id(booking)?).await?;
     let end = time(booking, "end_time").ok_or_else(|| Error::internal("booking without an end"))?;

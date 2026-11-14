@@ -770,6 +770,35 @@ async fn scenario() {
     let link = t.act(&manager, "Booking", uid(&b1), "guest_link", json!({})).await;
     assert!(link["url"].as_str().unwrap().starts_with("https://spa.test/manage?token="));
     assert_eq!(t.get_pub(&format!("/manage/{}", link["token"].as_str().unwrap())).await["booking"]["guest"]["name"], json!("Meera Iyer"));
+    // With neither address in the settings, a server behind a link host gives the guest links through it: the booking
+    // page through `s` (only the workspace's main host serves a page of the interface), its endpoints through `p`.
+    t.update(&manager, "BookingSettings", settings_id, json!({"public_url": null, "manage_page_url": null})).await;
+    let relative = t.act(&manager, "Booking", uid(&b1), "guest_link", json!({})).await;
+    assert!(relative["url"].as_str().unwrap().starts_with("/bookings/book/spa/manage/"), "no address here, as before: {relative}");
+    let linked = {
+        let url = std::env::var("FERRUM_BOOKINGS_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_bookings_test".into());
+        let db = Db::connect(DbConfig { url, max_connections: 4, ..Default::default() }).await.expect("connect");
+        let mut packages = ferrum_domain::packages().expect("platform packages");
+        packages.extend(ferrum_app_erp::packages().expect("ERP's packages"));
+        packages.extend(ferrum_app_bookings::packages().expect("app packages").into_iter().filter(|p| p.name() != "bookings_payments"));
+        packages.push(mail_stand_in());
+        let mut hooks = HookRegistry::default();
+        ferrum_domain::register(&mut hooks);
+        ferrum_app_erp::register(&mut hooks);
+        ferrum_app_bookings::register(&mut hooks);
+        let named = KernelSettings {
+            secret_key: Some(SecretKey::new([7u8; 32])),
+            public_url: Some("https://erp.spa.test".into()),
+            link_host: Some("go.spa.test".into()),
+            ..Default::default()
+        };
+        Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, named, None).await.expect("boot")
+    };
+    let link = linked.run_action(&manager, "Booking", uid(&b1), "guest_link", json!({})).await.expect("a link");
+    let token = link["token"].as_str().unwrap();
+    assert_eq!(link["url"], json!(format!("https://go.spa.test/go/spa/s/bookings/book/spa/manage/{token}")));
+    assert_eq!(link["api"], json!(format!("https://go.spa.test/go/spa/p/api/site/spa/bookings/manage/{token}")));
+    t.update(&manager, "BookingSettings", settings_id, json!({"public_url": "https://erp.spa.test/", "manage_page_url": "https://spa.test/manage"})).await;
 
     // ───────────── with the Mail app: emails with invitations, approval ─────────────
     t.k.install_packages(tenant, &["comms".to_string()]).await.expect("install mail");
