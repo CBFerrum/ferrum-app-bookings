@@ -244,7 +244,7 @@ fn bookings_end_to_end() {
 async fn scenario() {
     let url = std::env::var("FERRUM_BOOKINGS_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_bookings_test".into());
     let db = Db::connect(DbConfig { url, max_connections: 24, ..Default::default() }).await.expect("connect");
-    sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_erp::packages().expect("ERP's packages"));
     // Bookings without its Commerce connector, which deposits_end_to_end tests.
@@ -1242,8 +1242,9 @@ fn deposits_end_to_end() {
 /// A facial of 1,000 takes a 30% deposit online, all of it back if cancelled two days ahead.
 async fn deposits() {
     let url = std::env::var("FERRUM_BOOKINGS_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_bookings_test".into());
-    let db = Db::connect(DbConfig { url, max_connections: 24, ..Default::default() }).await.expect("connect");
-    sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 24, ..Default::default() }).await.expect("connect");
+    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_erp::packages().expect("ERP's packages"));
     // Commerce's own packages (its Store Subscriptions connector needs Finance, which this test leaves out).
@@ -1253,7 +1254,7 @@ async fn deposits() {
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
     ferrum_app_erp::register(&mut hooks);
-    ferrum_app_commerce::register(&mut hooks);
+    hooks.app("commerce", &[], ferrum_app_commerce::register);
     ferrum_app_bookings::register(&mut hooks);
     set_report_sources();
     let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), ..Default::default() };
@@ -1406,8 +1407,9 @@ fn set_report_sources() {
 
 async fn boot(slug: &str, extra: &[&str]) -> T {
     let url = std::env::var("FERRUM_BOOKINGS_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_bookings_test".into());
-    let db = Db::connect(DbConfig { url, max_connections: 24, ..Default::default() }).await.expect("connect");
-    sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 24, ..Default::default() }).await.expect("connect");
+    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
     let commerce = extra.contains(&"commerce");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_erp::packages().expect("ERP's packages"));
@@ -1427,10 +1429,10 @@ async fn boot(slug: &str, extra: &[&str]) -> T {
     ferrum_domain::register(&mut hooks);
     ferrum_app_erp::register(&mut hooks);
     if real_comms {
-        ferrum_app_comms::register(&mut hooks);
+        hooks.app("comms", &[], ferrum_app_comms::register);
     }
     if commerce {
-        ferrum_app_commerce::register(&mut hooks);
+        hooks.app("commerce", &[], ferrum_app_commerce::register);
     }
     ferrum_app_bookings::register(&mut hooks);
     set_report_sources();
@@ -2165,4 +2167,14 @@ async fn video_meetings() {
     let fay = bare.find_one("Booking", json!({"number": v["booking"]["number"]})).await;
     assert_eq!((fay["status"].clone(), fay["location"].clone()), (json!("Confirmed"), Value::Null));
     meeting_server(false);
+}
+
+/// What opens the test's vault: the database password of `url`, with Argon2id kept cheap for tests.
+fn opener(url: &str) -> ferrum_kernel::vault::Opener {
+    ferrum_kernel::vault::Opener {
+        database_url: url.to_string(),
+        file: "/nonexistent/root.key".into(),
+        kdf: ferrum_kernel::vault::Kdf { m_kib: 64, t: 1, p: 1 },
+        ..Default::default()
+    }
 }
