@@ -171,9 +171,9 @@ pub async fn signing_key(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<Vec<u8>> 
     let settings: Option<Uuid> =
         sqlx::query_scalar("select id from e_booking_settings where tenant_id = $1 limit 1 for update").bind(tenant).fetch_optional(&mut **tx).await?;
     if let Some(id) = settings
-        && let Some(key) = k.secret(tx, tenant, "BookingSettings", id, "signing_secret").await?
+        && let Some(key) = crate::keys::field(k, tx, tenant, "BookingSettings", id, "signing_secret").await?
     {
-        return Ok(key.into_bytes());
+        return Ok(key.as_bytes().to_vec());
     }
     let fresh = hex::encode(rand::random::<[u8; 32]>());
     let mut values = Doc::new();
@@ -196,7 +196,7 @@ pub async fn existing_key(k: &Kernel, tx: &mut Tx, tenant: Uuid) -> Result<Optio
     let settings: Option<Uuid> =
         sqlx::query_scalar("select id from e_booking_settings where tenant_id = $1 limit 1").bind(tenant).fetch_optional(&mut **tx).await?;
     match settings {
-        Some(id) => Ok(k.secret(tx, tenant, "BookingSettings", id, "signing_secret").await?.map(String::into_bytes)),
+        Some(id) => Ok(crate::keys::field(k, tx, tenant, "BookingSettings", id, "signing_secret").await?.map(|key| key.as_bytes().to_vec())),
         None => Ok(None),
     }
 }

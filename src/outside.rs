@@ -266,7 +266,7 @@ pub(crate) async fn read_due(k: &Kernel, tenant: Uuid, schema: Arc<Schema>, now:
     for (staff, zone) in due {
         let tz: Tz = zone.parse().unwrap_or(Tz::UTC);
         let mut tx = k.db.tenant_tx(tenant).await?;
-        let Some(url) = k.secret(&mut tx, tenant, "BookingStaff", staff, "outside_calendar").await? else { continue };
+        let Some(url) = crate::keys::field(k, &mut tx, tenant, "BookingStaff", staff, "outside_calendar").await? else { continue };
         let found = match fetch(k, &url).await {
             Ok(text) => busy(&text, tz, from, to),
             Err(e) => Err(e),

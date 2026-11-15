@@ -243,8 +243,9 @@ fn bookings_end_to_end() {
 
 async fn scenario() {
     let url = std::env::var("FERRUM_BOOKINGS_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_bookings_test".into());
-    let db = Db::connect(DbConfig { url, max_connections: 24, ..Default::default() }).await.expect("connect");
+    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 24, ..Default::default() }).await.expect("connect");
     sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_erp::packages().expect("ERP's packages"));
     // Bookings without its Commerce connector, which deposits_end_to_end tests.
@@ -253,8 +254,12 @@ async fn scenario() {
     let catalog = Catalog::from_packages(packages).expect("catalog");
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
-    ferrum_app_erp::register(&mut hooks);
-    ferrum_app_bookings::register(&mut hooks);
+    let erp_packages: Vec<String> = ferrum_app_erp::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    hooks.app("erp", &[], ferrum_app_erp::register);
+    hooks.own("erp", &erp_packages);
+    let bookings_packages: Vec<String> = ferrum_app_bookings::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    hooks.app("bookings", &bookings_packages, ferrum_app_bookings::register);
+    hooks.own("bookings", &bookings_packages);
     set_report_sources();
     // Private addresses allowed: the outside calendar's stand-in is on this machine.
     let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), webhooks_allow_private: true, ..Default::default() };
@@ -777,15 +782,20 @@ async fn scenario() {
     assert!(relative["url"].as_str().unwrap().starts_with("/bookings/book/spa/manage/"), "no address here, as before: {relative}");
     let linked = {
         let url = std::env::var("FERRUM_BOOKINGS_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_bookings_test".into());
-        let db = Db::connect(DbConfig { url, max_connections: 4, ..Default::default() }).await.expect("connect");
+        let db = Db::connect(DbConfig { url: url.clone(), max_connections: 4, ..Default::default() }).await.expect("connect");
+        ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
         let mut packages = ferrum_domain::packages().expect("platform packages");
         packages.extend(ferrum_app_erp::packages().expect("ERP's packages"));
         packages.extend(ferrum_app_bookings::packages().expect("app packages").into_iter().filter(|p| p.name() != "bookings_payments"));
         packages.push(mail_stand_in());
         let mut hooks = HookRegistry::default();
         ferrum_domain::register(&mut hooks);
-        ferrum_app_erp::register(&mut hooks);
-        ferrum_app_bookings::register(&mut hooks);
+        let erp_packages: Vec<String> = ferrum_app_erp::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+        hooks.app("erp", &[], ferrum_app_erp::register);
+        hooks.own("erp", &erp_packages);
+        let bookings_packages: Vec<String> = ferrum_app_bookings::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+        hooks.app("bookings", &bookings_packages, ferrum_app_bookings::register);
+        hooks.own("bookings", &bookings_packages);
         let named = KernelSettings {
             secret_key: Some(SecretKey::new([7u8; 32])),
             public_url: Some("https://erp.spa.test".into()),
@@ -1230,6 +1240,12 @@ async fn scenario() {
     }
     assert!(matches!(cancel("10.7.0.1").await, Err(Error::TooManyRequests(_))), "the 31st write in ten minutes");
     assert!(!matches!(cancel("10.7.0.2").await, Err(Error::TooManyRequests(_))), "another address");
+    // Every secret field Bookings read (the feed key, an outside calendar's address) it read with its own handle: none
+    // past the vault, which the platform notes (`ferrum task legacy_key`) in the background.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let past: Vec<_> =
+        k.legacy_key(vec![]).await.unwrap().uses.into_iter().filter(|u| u.0.starts_with("reader:") && u.1.starts_with("src/")).map(|u| u.1).collect();
+    assert!(past.is_empty(), "read past the vault: {past:?}");
 }
 
 #[test]
@@ -1253,9 +1269,15 @@ async fn deposits() {
     let catalog = Catalog::from_packages(packages).expect("catalog");
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
-    ferrum_app_erp::register(&mut hooks);
+    let erp_packages: Vec<String> = ferrum_app_erp::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    hooks.app("erp", &[], ferrum_app_erp::register);
+    hooks.own("erp", &erp_packages);
     hooks.app("commerce", &[], ferrum_app_commerce::register);
-    ferrum_app_bookings::register(&mut hooks);
+    let commerce_packages: Vec<String> = ferrum_app_commerce::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    hooks.own("commerce", &commerce_packages);
+    let bookings_packages: Vec<String> = ferrum_app_bookings::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    hooks.app("bookings", &bookings_packages, ferrum_app_bookings::register);
+    hooks.own("bookings", &bookings_packages);
     set_report_sources();
     let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
@@ -1427,14 +1449,22 @@ async fn boot(slug: &str, extra: &[&str]) -> T {
     let catalog = Catalog::from_packages(packages).expect("catalog");
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
-    ferrum_app_erp::register(&mut hooks);
+    let erp_packages: Vec<String> = ferrum_app_erp::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    hooks.app("erp", &[], ferrum_app_erp::register);
+    hooks.own("erp", &erp_packages);
     if real_comms {
         hooks.app("comms", &[], ferrum_app_comms::register);
+        let comms_packages: Vec<String> = ferrum_app_comms::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+        hooks.own("comms", &comms_packages);
     }
     if commerce {
         hooks.app("commerce", &[], ferrum_app_commerce::register);
+        let commerce_packages: Vec<String> = ferrum_app_commerce::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+        hooks.own("commerce", &commerce_packages);
     }
-    ferrum_app_bookings::register(&mut hooks);
+    let bookings_packages: Vec<String> = ferrum_app_bookings::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    hooks.app("bookings", &bookings_packages, ferrum_app_bookings::register);
+    hooks.own("bookings", &bookings_packages);
     set_report_sources();
     let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");

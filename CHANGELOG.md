@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.4
+
+Bookings reads its secret fields (Booking Settings' key that signs calendar feed links, a person's outside calendar address) with its own handle on the vault, in the same transaction as before, instead of the platform's reader that any app could use, which is deprecated. It registers as itself (`hooks.app("bookings", …)`) to be given that handle; another app's test that registers Bookings does the same. Needs a platform with the vault's field reader (0.3.8 on the platform's main from cdec881). Feeds, guest links and outside calendars work as before; while the vault is closed they refuse plainly. No database or interface change.
+
 ## 0.7.3
 
 - **A guest's links without a Server Address.** With Booking Settings' Server Address (`public_url`) empty, the links a guest is sent (the self-service page and its endpoints, the calendar invitation) and the ones `guest_link` hands out used to be relative, so they did not work from an email. They now come from the platform's address for people outside (`Kernel::person_link`): through the operator's link host when there is one (`FERRUM_LINK_HOST`), so a link sent today keeps working when the workspace's address changes, else the workspace's own address. The booking page goes through `/go/{workspace}/s`, since a page of the interface is served only by the workspace's main host (its portal's host sends everything but the portal, sign-in and the API to the portal); the endpoints (`/api/site/…`) through `/go/{workspace}/p`. A staff member's calendar feed, which calendar services fetch, starts where services call back (`FERRUM_HOOKS_HOST`, else the server's public address). With a Server Address (or a Manage Page URL) set, nothing changes; with no address at all, links stay relative. The booking page's address the settings page shows is still the setting's or the page's own. No database change, no interface change.

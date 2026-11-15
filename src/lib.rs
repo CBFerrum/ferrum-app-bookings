@@ -17,6 +17,7 @@ mod calendar;
 mod departures;
 pub mod engine;
 mod ics;
+mod keys;
 mod notify;
 mod outside;
 mod payments;
@@ -53,7 +54,11 @@ pub fn packages() -> std::result::Result<Vec<ferrum_meta::Package>, ferrum_meta:
 }
 
 /// Registers this app's document hooks and its public endpoints.
+/// Call it inside the platform's registration of the app, `hooks.app("bookings", …)`: it takes its own vault handle
+/// there, which reads its secret fields (`keys.rs`).
 pub fn register(hooks: &mut HookRegistry) {
+    let site: Arc<dyn ferrum_kernel::Site> = Arc::new(site::BookingSite);
+    keys::remember(&site, hooks.vault());
     hooks
         .register("Booking", Arc::new(booking::BookingHook))
         .register("BookingService", Arc::new(setup::ServiceHook))
@@ -61,7 +66,7 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("StaffTimeOff", Arc::new(setup::TimeOffHook))
         .register("BookingResource", Arc::new(setup::ResourceHook))
         .register("BookingSettings", Arc::new(setup::SettingsHook))
-        .add_site("bookings", Arc::new(site::BookingSite))
+        .add_site("bookings", site)
         .add_event_sink(Arc::new(departures::Departures));
     // The connector with Commerce: only where Booking Deposits is installed.
     hooks.scoped(&[payments::PACKAGE.to_string()], |h| {
