@@ -414,10 +414,6 @@ pub async fn run(k: &Kernel, tenant: Uuid, schema: Arc<Schema>, now: Instant) ->
         Ok(n) => round.deposits = n,
         Err(e) => note("deposits", e),
     }
-    // Before the closed-time check, so what it moves is read at once (once per workspace, then nothing).
-    if let Err(e) = crate::superseded::move_dates(k, &ctx).await {
-        note("moving dated openings", e);
-    }
     match closed_clashes(k, &ctx, now).await {
         Ok(n) => round.closed = n,
         Err(e) => note("opening hours", e),

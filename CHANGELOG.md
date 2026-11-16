@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.0
+
+- **A guest's customer is the one ERP finds or makes for a person** (`ferrum_app_erp::portal::customer_for`, ERP 0.28.3), which ERP took from Bookings' own. A customer a web shop made at a guest checkout under the guest's address is no longer theirs, since anyone may type anyone's address there: they get a customer of their own, found again next time. The lock that makes two bookings at once for one address find one customer is ERP's now, so a booking and another app's call for the address (Learn's purchases, for one) wait for each other. A booking without a guest name, or with neither an email nor a phone number, still gets no customer. ERP is a dependency of the app now, not of its tests only.
+- **Closed and Extra Open Dates are gone from Booking Settings.** Dated closures and openings are the working calendars' exceptions (Admin, Calendars), which availability has read since 0.7.1. The old field (`calendar_dates`, rows of `BookingCalendarDate`), the upkeep that moved its rows into the calendars, and the two tables that remembered the move (`bookings_calendar_moved`, which nothing read since 0.7.2, and `bookings_calendar_rows_moved`) are removed. The package's SQL is one file, `sql/001_bookings.sql`, with the outside calendars' busy times folded in. A database that applied the old files refuses the changed one: create it again.
+
 ## 0.7.4
 
 Bookings reads its secret fields (Booking Settings' key that signs calendar feed links, a person's outside calendar address) with its own handle on the vault, in the same transaction as before, instead of the platform's reader that any app could use, which is deprecated. It registers as itself (`hooks.app("bookings", …)`) to be given that handle; another app's test that registers Bookings does the same. Needs a platform with the vault's field reader (0.3.8 on the platform's main from cdec881). Feeds, guest links and outside calendars work as before; while the vault is closed they refuse plainly. No database or interface change.

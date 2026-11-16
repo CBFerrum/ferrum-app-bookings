@@ -128,7 +128,7 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 - **If it was taken while they typed.** Confirm is disabled with a message, and the server's complaints sit beside the field.
 - **Waitlist for a full class.** A guest can join the waitlist instead of failing.
 - **Their own booking page.** Every link shows the booking, lets the guest add it to a calendar (`.ics`), move it or cancel it. A cancel or move is allowed up to the configured number of hours before the start.
-- **Guests become customers.** A booking finds the guest's ERP customer by email or phone digits, or makes one, when it is booked.
+- **Guests become customers.** A booking finds the guest's ERP customer by email or phone digits, or makes one, when it is booked, as ERP finds a person's: never a customer a web shop's guest checkout made, and one for bookings at the same moment.
 - **Spam guard.** A hidden field and a limit of 30 writes per 10 minutes per address and workspace.
 - **Your own page.** Booking Settings can point guest links at a page of your own instead of the app's page.
 - **Switch off.** With the public page off, every public address answers not found. Staff calendar feeds keep working.
@@ -232,7 +232,7 @@ flowchart LR
     BK --> OB["Outbox: webhooks and notifications"]
 ```
 
-Everything Bookings adds is ordinary Ferrum metadata and Rust. Its records get lists, forms, search, permissions, an audit trail, exports and the REST and MCP APIs from the platform. A background job runs every minute for each workspace: it sends due notices and reminders, cancels waitlist places of classes that started, promotes waitlists, moves old dated openings into the calendars, reads outside calendars, expires unpaid deposits, and purges old guest links and claims.
+Everything Bookings adds is ordinary Ferrum metadata and Rust. Its records get lists, forms, search, permissions, an audit trail, exports and the REST and MCP APIs from the platform. A background job runs every minute for each workspace: it sends due notices and reminders, cancels waitlist places of classes that started, promotes waitlists, reads outside calendars, expires unpaid deposits, and purges old guest links and claims.
 
 ## 🧱 Data model
 
@@ -244,7 +244,7 @@ Everything Bookings adds is ordinary Ferrum metadata and Rust. Its records get l
 | **Staff Time Off** | Time a person cannot be booked | Staff, from, to, reason, conflicting bookings |
 | **Booking Resource** | A room or equipment | Type, capacity, working calendar, active |
 | **Booking Settings** | One per workspace | Public page, manual confirmation, notice, advance, interval, windows, reminders, addresses, business calendar |
-| **Working Hours, Service Staff, Service Resource, Intake Question, Intake Answer, Booking Reminder, Calendar Date** | Rows inside the records above | Weekday and times, who, which room, question and type, answer, minutes before, a dated closing or opening (superseded by working calendars) |
+| **Working Hours, Service Staff, Service Resource, Intake Question, Intake Answer, Booking Reminder** | Rows inside the records above | Weekday and times, who, which room, question and type, answer, minutes before |
 
 Deposits add fields to Booking Service, Booking Settings and Booking (deposit percent, refund hours, hold minutes, kept percent, payment method, deposit, payment request, refund).
 
@@ -335,6 +335,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 
 ### ✅ Recently shipped
 
+- [x] **0.8.0:** a guest's customer as ERP finds a person's, never a web shop's guest; dated closures and openings only in the working calendars, the old settings field gone.
 - [x] **0.7.3:** a guest's links and a staff feed are absolute without a server address in the settings: the platform's, through the operator's link host when there is one.
 - [x] **0.7.2:** a date written into the old Closed and Extra Open Dates field at any time is moved into the working calendar at the next upkeep.
 - [x] **0.7.1:** a platform calendar's dated exceptions decide availability, the Outside opening hours mark and the utilization report.
