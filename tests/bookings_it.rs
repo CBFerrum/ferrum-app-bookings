@@ -12,7 +12,6 @@
 
 use chrono::{DateTime, Duration, NaiveDate, SecondsFormat, TimeZone, Utc};
 use chrono_tz::Tz;
-use ferrum_kernel::secret::SecretKey;
 use ferrum_kernel::tenant::NewTenant;
 use ferrum_kernel::{Ctx, Db, DbConfig, Doc, Error, HookRegistry, Kernel, KernelSettings, ListQuery, Site, SiteRequest, SiteResponse};
 use ferrum_meta::Catalog;
@@ -262,7 +261,7 @@ async fn scenario() {
     hooks.own("bookings", &bookings_packages);
     set_report_sources();
     // Private addresses allowed: the outside calendar's stand-in is on this machine.
-    let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), webhooks_allow_private: true, ..Default::default() };
+    let settings = KernelSettings { webhooks_allow_private: true, ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("partitions");
     ferrum_app_erp::maintenance(&k).await.expect("partitions");
@@ -796,12 +795,7 @@ async fn scenario() {
         let bookings_packages: Vec<String> = ferrum_app_bookings::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
         hooks.app("bookings", &bookings_packages, ferrum_app_bookings::register);
         hooks.own("bookings", &bookings_packages);
-        let named = KernelSettings {
-            secret_key: Some(SecretKey::new([7u8; 32])),
-            public_url: Some("https://erp.spa.test".into()),
-            link_host: Some("go.spa.test".into()),
-            ..Default::default()
-        };
+        let named = KernelSettings { public_url: Some("https://erp.spa.test".into()), link_host: Some("go.spa.test".into()), ..Default::default() };
         Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, named, None).await.expect("boot")
     };
     let link = linked.run_action(&manager, "Booking", uid(&b1), "guest_link", json!({})).await.expect("a link");
@@ -1240,12 +1234,6 @@ async fn scenario() {
     }
     assert!(matches!(cancel("10.7.0.1").await, Err(Error::TooManyRequests(_))), "the 31st write in ten minutes");
     assert!(!matches!(cancel("10.7.0.2").await, Err(Error::TooManyRequests(_))), "another address");
-    // Every secret field Bookings read (the feed key, an outside calendar's address) it read with its own handle: none
-    // past the vault, which the platform notes (`ferrum task legacy_key`) in the background.
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-    let past: Vec<_> =
-        k.legacy_key(vec![]).await.unwrap().uses.into_iter().filter(|u| u.0.starts_with("reader:") && u.1.starts_with("src/")).map(|u| u.1).collect();
-    assert!(past.is_empty(), "read past the vault: {past:?}");
 }
 
 #[test]
@@ -1279,8 +1267,7 @@ async fn deposits() {
     hooks.app("bookings", &bookings_packages, ferrum_app_bookings::register);
     hooks.own("bookings", &bookings_packages);
     set_report_sources();
-    let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), ..Default::default() };
-    let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
+    let k = Kernel::boot(db, catalog, hooks, KernelSettings::default(), None).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("partitions");
     ferrum_app_erp::maintenance(&k).await.expect("partitions");
     let tenant = k
@@ -1466,8 +1453,7 @@ async fn boot(slug: &str, extra: &[&str]) -> T {
     hooks.app("bookings", &bookings_packages, ferrum_app_bookings::register);
     hooks.own("bookings", &bookings_packages);
     set_report_sources();
-    let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), ..Default::default() };
-    let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
+    let k = Kernel::boot(db, catalog, hooks, KernelSettings::default(), None).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("partitions");
     ferrum_app_erp::maintenance(&k).await.expect("partitions");
     let mut installed = vec!["bookings".to_string()];
