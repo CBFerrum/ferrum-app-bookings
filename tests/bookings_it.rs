@@ -1264,7 +1264,13 @@ async fn deposits() {
     let commerce_packages: Vec<String> = ferrum_app_commerce::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
     hooks.own("commerce", &commerce_packages);
     let bookings_packages: Vec<String> = ferrum_app_bookings::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
-    hooks.app("bookings", &bookings_packages, ferrum_app_bookings::register);
+    // Bookings' own handle, as its registration is given it: what the test calls Commerce with, as Bookings would.
+    let mut handle = None;
+    hooks.app("bookings", &bookings_packages, |h| {
+        ferrum_app_bookings::register(h);
+        handle = Some(h.vault());
+    });
+    let handle = handle.expect("Bookings' handle");
     hooks.own("bookings", &bookings_packages);
     set_report_sources();
     let k = Kernel::boot(db, catalog, hooks, KernelSettings::default(), None).await.expect("boot");
@@ -1354,6 +1360,7 @@ async fn deposits() {
     let invoice = t.get("SalesInvoice", b["sales_invoice"].as_str().unwrap().parse().unwrap()).await;
     assert_eq!((invoice["docstatus"].clone(), dec_of(&invoice["grand_total"])), (json!(1), "1000".to_string()), "invoiced at once");
     let request: Uuid = b["bpay_payment_request"].as_str().unwrap().parse().unwrap();
+    let (first_invoice, first_request, first_number) = (uid(&invoice), request, b["number"].as_str().unwrap().to_string());
     t.act(&fakepay, "PaymentRequest", request, "mark_paid", json!({"amount": "300", "currency": "INR", "gateway_reference": "pi_1"})).await;
     assert_eq!(t.get("Booking", first).await["status"], json!("Confirmed"), "paying the deposit confirms it");
     assert_eq!(dec_of(&t.get("SalesInvoice", uid(&invoice)).await["outstanding_amount"]), "700", "the rest is paid on the day");
@@ -1365,6 +1372,8 @@ async fn deposits() {
     let refund: Uuid = b["bpay_refund"].as_str().unwrap().parse().unwrap();
     let r = t.get("OrderRefund", refund).await;
     assert_eq!((r["kind"].clone(), dec_of(&r["amount"]), r["status"].clone()), (json!("Payment"), "300".to_string(), json!("Requested")));
+    let first_note = r["credit_note"].as_str().unwrap().to_string();
+    assert_eq!(r["requested_by"], json!("manager@glow.test"), "asked for by Bookings for the manager who cancelled");
     let note = t.get("SalesInvoice", r["credit_note"].as_str().unwrap().parse().unwrap()).await;
     assert_eq!(
         (dec_of(&note["grand_total"]), dec_of(&t.get("SalesInvoice", uid(&invoice)).await["outstanding_amount"])),
@@ -1394,6 +1403,92 @@ async fn deposits() {
     let request = t.get("PaymentRequest", b["bpay_payment_request"].as_str().unwrap().parse().unwrap()).await;
     let invoice = t.get("SalesInvoice", b["sales_invoice"].as_str().unwrap().parse().unwrap()).await;
     assert_eq!((request["status"].clone(), invoice["docstatus"].clone()), (json!("Cancelled"), json!(2)));
+
+    // ───────────── each of Commerce's operations was called by Bookings, for whoever booked or cancelled ─────────────
+    // The guests booked on the page, as the system (no person); the manager cancelled. One receipt per call, keyed by
+    // the booking and the step.
+    let mut receipts = receipts_of(&t).await;
+    receipts.retain(|r| r.1.starts_with("commerce."));
+    assert!(receipts.iter().all(|r| r.0.as_deref() == Some("bookings")), "every call is Bookings': {receipts:?}");
+    let of = |b: Uuid| -> Vec<(String, String, Option<Uuid>)> {
+        receipts.iter().filter(|r| r.2.ends_with(&b.to_string())).map(|r| (r.1.clone(), r.2.clone(), r.3)).collect()
+    };
+    let step = |cap: &str, key: &str, b: Uuid, who: Option<Uuid>| (cap.to_string(), format!("bookings:{key}:{b}"), who);
+    const ASK: &str = "commerce.sales_invoice.request_payment";
+    const REFUND: &str = "commerce.payment_request.refund";
+    assert_eq!(of(first), [step(ASK, "deposit", first, None), step(REFUND, "deposit-refund", first, Some(manager.user))]);
+    assert_eq!(of(second), [step(ASK, "deposit", second, None)], "kept: no refund asked for");
+    assert_eq!(of(third), [step(ASK, "deposit", third, None), step("commerce.payment_request.cancel", "deposit-cancel", third, Some(manager.user))]);
+    assert_eq!(receipts.len(), 5);
+    let first_requests = t.scalar("select count(*) from e_payment_request where tenant_id = $1 and sales_invoice = $2", Some(first_invoice)).await;
+    assert_eq!(first_requests, 1, "one request for the booking's deposit");
+
+    // ───────────── the same step again makes nothing new ─────────────
+    // Asked again with the booking's own key and the same input, Commerce answers what it did: the same request, and
+    // the same refund. Nothing more is asked of the guest, nothing more goes back.
+    let page = ferrum_kernel::Ctx::system(tenant, t.k.registry.schema(tenant).await.unwrap());
+    let again = |cap: &'static str, input: Value, key: String| {
+        let (k, handle, ctx) = (t.k.clone(), handle.clone(), page.clone());
+        async move {
+            let mut tx = k.db.tenant_tx(ctx.tenant).await.unwrap();
+            let done = k.call_tx(&handle, &ctx, &mut tx, &ferrum_kernel::capability::Invocation::new(cap, input).key(key)).await;
+            tx.commit().await.unwrap();
+            done
+        }
+    };
+    let asked = json!({"id": first_invoice, "params": {"gateway": "fakepay", "amount": "300", "payer_email": "asha@example.test"}});
+    let asked = again(ASK, asked, format!("deposit:{first}")).await.expect("answered");
+    assert!(asked.repeated, "{asked:?}");
+    assert_eq!(asked.result["payment_request"], json!(first_request.to_string()));
+    let note = format!("Booking {first_number} cancelled: 300 of its deposit back by the service's terms");
+    let back = json!({"id": first_request, "params": {"amount": "300", "credit_note": first_note, "note": note}});
+    let back = again(REFUND, back, format!("deposit-refund:{first}")).await.expect("answered");
+    assert!(back.repeated, "{back:?}");
+    assert_eq!(back.result["refund"], json!(refund.to_string()));
+    assert_eq!(t.scalar("select count(*) from e_payment_request where tenant_id = $1 and sales_invoice = $2", Some(first_invoice)).await, 1);
+    assert_eq!(t.scalar("select count(*) from e_order_refund where tenant_id = $1 and payment_request = $2", Some(first_request)).await, 1);
+    assert_eq!(receipts_of(&t).await.len(), 5, "no receipt more");
+
+    // ───────────── a refusal inside a booking leaves nothing of it ─────────────
+    // A payment method the store does not have: Commerce refuses, and the guest's booking goes with its invoice.
+    let counts = || async {
+        let n = |sql: &'static str| t.scalar(sql, None);
+        [
+            n("select count(*) from e_booking where tenant_id = $1").await,
+            n("select count(*) from e_sales_invoice where tenant_id = $1").await,
+            n("select count(*) from e_payment_request where tenant_id = $1").await,
+            n("select count(*) from logic_effect where tenant_id = $1").await,
+        ]
+    };
+    let settings = t.find_one("BookingSettings", json!({})).await;
+    t.update(&manager, "BookingSettings", uid(&settings), json!({"bpay_payment_method": "nopay"})).await;
+    let before = counts().await;
+    let refused = t.book(json!({"service": facial.to_string(), "start_time": rfc(at("16:00")), "name": "Guest", "email": "nia@example.test"})).await;
+    assert!(messages(&refused.unwrap_err()).contains("not one of the store's payment methods"), "the store's refusal");
+    assert_eq!(counts().await, before, "no booking, no invoice, no request, no receipt");
+    t.update(&manager, "BookingSettings", uid(&settings), json!({"bpay_payment_method": "fakepay"})).await;
+
+    // ───────────── Booking Deposits disabled: no deposit, and Bookings may not ask for one ─────────────
+    t.k.disable_packages(&t.admin, &["bookings_payments".to_string()]).await.expect("disabled");
+    let before = counts().await;
+    let (fourth, view) = book("16:00", "nia@example.test").await;
+    assert_eq!((view["status"].clone(), view["deposit"].clone()), (json!("Confirmed"), Value::Null), "confirmed without a deposit, as before it was installed");
+    let b = t.get("Booking", fourth).await;
+    assert_eq!((b["sales_invoice"].clone(), b.get("bpay_payment_request").cloned().unwrap_or_default()), (Value::Null, Value::Null));
+    assert_eq!(counts().await, [before[0] + 1, before[1], before[2], before[3]], "the booking alone");
+    let page = ferrum_kernel::Ctx::system(tenant, t.k.registry.schema(tenant).await.unwrap());
+    let mut tx = t.k.db.tenant_tx(tenant).await.unwrap();
+    let ask = json!({"id": first_invoice, "params": {"gateway": "fakepay", "amount": "1"}});
+    let refused = t.k.call_tx(&handle, &page, &mut tx, &ferrum_kernel::capability::Invocation::new(ASK, ask).key(format!("deposit:{fourth}"))).await;
+    assert_eq!(refused.as_ref().map_err(Error::code).unwrap_err(), "forbidden", "{refused:?}");
+    tx.commit().await.unwrap();
+    assert_eq!(counts().await, [before[0] + 1, before[1], before[2], before[3]], "the refused call wrote nothing");
+}
+
+/// The workspace's receipts of operations: (caller, capability, key, actor), oldest first.
+async fn receipts_of(t: &T) -> Vec<(Option<String>, String, String, Option<Uuid>)> {
+    let mut tx = t.k.db.tenant_tx(t.tenant).await.unwrap();
+    sqlx::query_as("select caller, capability, effect_key, actor from logic_effect order by created_at, effect_key").fetch_all(&mut *tx).await.unwrap()
 }
 
 /// A decimal as text without trailing zeros.
@@ -1440,7 +1535,10 @@ async fn boot(slug: &str, extra: &[&str]) -> T {
     hooks.app("erp", &[], ferrum_app_erp::register);
     hooks.own("erp", &erp_packages);
     if real_comms {
-        hooks.app("comms", &[], ferrum_app_comms::register);
+        hooks.app("comms", &[], |h| {
+            ferrum_app_comms::register(h);
+            *COMMS_VAULT.lock().unwrap_or_else(|e| e.into_inner()) = Some(h.vault());
+        });
         let comms_packages: Vec<String> = ferrum_app_comms::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
         hooks.own("comms", &comms_packages);
     }
@@ -1475,6 +1573,10 @@ async fn boot(slug: &str, extra: &[&str]) -> T {
     let site = k.hooks.site("bookings").cloned().expect("bookings site");
     T { k: k.clone(), tenant, admin, site, calls: AtomicU32::new(0) }
 }
+
+/// The handle the real Comms app was given at its last registration (`boot` with `comms_app`): what an operator's
+/// secrets for it are set with.
+static COMMS_VAULT: std::sync::Mutex<Option<ferrum_kernel::vault::Vault>> = std::sync::Mutex::new(None);
 
 fn run(f: impl std::future::Future<Output = ()> + Send + 'static) {
     let _db = DB.lock().unwrap_or_else(|e| e.into_inner());
@@ -1921,12 +2023,7 @@ async fn video_meetings() {
     use ferrum_app_comms::meetings;
     // SAFETY: the tests of this file run one at a time (`run`).
     let meeting_server = |on: bool| unsafe {
-        for (var, value) in [
-            ("FERRUM_MEET_URL", "wss://meet.clinic.test"),
-            ("FERRUM_MEET_KEY", "APIclinic"),
-            ("FERRUM_MEET_SECRET", "clinic-secret"),
-            ("FERRUM_MEET_API_URL", "http://127.0.0.1:1"),
-        ] {
+        for (var, value) in [("FERRUM_MEET_URL", "wss://meet.clinic.test"), ("FERRUM_MEET_API_URL", "http://127.0.0.1:1")] {
             if on {
                 std::env::set_var(var, value);
             } else {
@@ -1936,6 +2033,13 @@ async fn video_meetings() {
     };
     meeting_server(true);
     let t = boot("clinic", &["comms_app"]).await;
+    // LiveKit's key and secret as the operator gives them to Comms' vault, bound to the meeting server's hosts.
+    let comms = COMMS_VAULT.lock().unwrap_or_else(|e| e.into_inner()).clone().expect("Comms' handle");
+    for (name, value) in [("meet.key", "APIclinic"), ("meet.secret", "clinic-secret")] {
+        use ferrum_kernel::vault::{New, Rule, Scope, Zeroizing};
+        let rule = Rule { reveal: name == "meet.key", hosts: vec!["meet.clinic.test".into(), "127.0.0.1".into()], ..Default::default() };
+        comms.set(&t.k, Scope::Installation, name, New::Value(Zeroizing::new(value.as_bytes().to_vec())), rule).await.expect("set");
+    }
     let a = t.admin.clone();
     let ist: Tz = "Asia/Kolkata".parse().unwrap();
     let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);

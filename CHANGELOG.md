@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.9.0
+
+Booking Deposits (package `bookings_payments` 0.2.0, connector 0.3.0) needs Commerce 0.13 (`requires: {commerce: ">=0.13"}`)
+and the platform that lets an app call another's operation (Ferrum main 44520a63). No database change, no interface change.
+
+- **Deposits go through Commerce's operations, not its code.** Booking Deposits declares what it uses of Commerce
+  (`uses` in its package, each at `^0.6`): `commerce.sales_invoice.request_payment`, `commerce.payment_request.refund`
+  and `commerce.payment_request.cancel`. Bookings calls them through the platform's gate (`Kernel::call_tx`) with its own
+  vault handle, in the booking's transaction as before, so a booking and its deposit request commit together or not at
+  all. The install screen lists the three uses; disabling Booking Deposits withdraws them, and new bookings confirm
+  without a deposit as before it was installed.
+- **Once per booking and step.** Each call has a key of the booking and the step: `deposit:{booking}` (the request),
+  `deposit-cancel:{booking}` (an unpaid request stopped), `deposit-refund:{booking}` (cancelled by the terms) and
+  `deposit-late-refund:{booking}` (paid after its time was taken). The same step again is answered with what was done
+  the first time, and makes no second request or refund.
+- **Receipted as Bookings'.** Each call's receipt names Bookings and the person it acted for: nobody for a guest on the
+  booking page or for upkeep, the clerk who cancelled.
+- **What changed that a person may see.** A refund a clerk's cancellation asks for names the clerk as `requested_by`
+  (it named the system), and the payment request is made on the clerk's or the page's behalf. A store payment method that
+  does not exist refuses the booking on `gateway` (it was `payment_method`). A booking whose invoice is owed nothing
+  still refuses with "nothing to ask for on the booking's invoice".
+- `ferrum-app-commerce` is a development dependency only: the suite registers Commerce to answer the calls.
+
+Tests: `deposits_end_to_end` keeps its outcomes and adds: one receipt per call, by Bookings, for the guest (no person)
+or the manager, under the booking's keys; the same deposit request and refund asked again are answered `repeated` with
+the same records and no new receipt; a payment method the store lacks refuses the booking with nothing kept (no booking,
+invoice, request or receipt); with Booking Deposits disabled, a guest's booking is confirmed without a deposit and a call
+as Bookings is `forbidden`, writing nothing. `video_meetings_end_to_end` gives Comms LiveKit's key and secret through
+Comms' vault, as Comms 0.25 reads them.
+
 ## 0.8.0
 
 - **A guest's customer is the one ERP finds or makes for a person** (`ferrum_app_erp::portal::customer_for`, ERP 0.28.3), which ERP took from Bookings' own. A customer a web shop made at a guest checkout under the guest's address is no longer theirs, since anyone may type anyone's address there: they get a customer of their own, found again next time. The lock that makes two bookings at once for one address find one customer is ERP's now, so a booking and another app's call for the address (Learn's purchases, for one) wait for each other. A booking without a guest name, or with neither an email nor a phone number, still gets no customer. ERP is a dependency of the app now, not of its tests only.

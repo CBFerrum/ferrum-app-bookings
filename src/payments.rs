@@ -4,17 +4,73 @@
 //! booking settles the deposit by the service's terms: cancelled early enough, all of it comes
 //! back; later, the service keeps its share. The invoice is credited for what is not kept, and what
 //! the guest paid beyond that goes back through the gateway, once a person approves the refund.
+//!
+//! Commerce's requests and refunds are its operations, called through the platform's gate in the
+//! booking's transaction as Bookings (the `uses` of `packages/bookings_payments/package.yaml`): each
+//! once per key, the key the booking and the step, so the same step done again makes nothing new.
 
 use crate::{doc_id, time};
 use async_trait::async_trait;
 use chrono::{Duration, Utc};
 use ferrum_domain::util::{d, elevated, get, id, money, rows, s, set, sys};
+use ferrum_kernel::capability::Invocation;
 use ferrum_kernel::{Ctx, Doc, DocHook, Error, HookCtx, Kernel, Result, Tx};
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 pub(crate) const PACKAGE: &str = "bookings_payments";
+
+/// Commerce's operations Booking Deposits uses: each declared in its package with the versions it was built for.
+pub(crate) const REQUEST_PAYMENT: &str = "commerce.sales_invoice.request_payment";
+pub(crate) const REFUND: &str = "commerce.payment_request.refund";
+pub(crate) const CANCEL: &str = "commerce.payment_request.cancel";
+
+/// Commerce's operation `capability` on `input`, as Bookings, for `ctx`'s person, in `tx`, once per `key`: its result.
+async fn call(k: &Kernel, ctx: &Ctx, tx: &mut Tx, capability: &str, input: Value, key: String) -> Result<Value> {
+    Ok(k.call_tx(&crate::keys::handle(k)?, ctx, tx, &Invocation::new(capability, input).key(key)).await?.result)
+}
+
+/// The id a result names under `field`.
+fn made(result: &Value, field: &str) -> Result<Uuid> {
+    result[field].as_str().and_then(|v| v.parse().ok()).ok_or_else(|| Error::internal(format!("Commerce answered without its {field}")))
+}
+
+/// A submitted request for `amount` of the booking's `invoice` through the store's method `gateway`; key `deposit:{booking}`.
+async fn request_payment(
+    k: &Kernel,
+    ctx: &Ctx,
+    tx: &mut Tx,
+    booking: Uuid,
+    invoice: Uuid,
+    gateway: &str,
+    amount: Decimal,
+    payer: Option<&str>,
+) -> Result<Uuid> {
+    let input = json!({"id": invoice, "params": {"gateway": gateway, "amount": money(amount), "payer_email": payer}});
+    made(&call(k, ctx, tx, REQUEST_PAYMENT, input, format!("deposit:{booking}")).await?, "payment_request")
+}
+
+/// A Requested refund of `amount` of the paid request `pr`, against `credit_note`; key `{step}:{booking}`.
+async fn refund(
+    k: &Kernel,
+    ctx: &Ctx,
+    tx: &mut Tx,
+    step: &str,
+    booking: Uuid,
+    pr: Uuid,
+    amount: Decimal,
+    credit_note: Option<Uuid>,
+    note: &str,
+) -> Result<Uuid> {
+    let input = json!({"id": pr, "params": {"amount": money(amount), "credit_note": credit_note, "note": note}});
+    made(&call(k, ctx, tx, REFUND, input, format!("{step}:{booking}")).await?, "refund")
+}
+
+/// The unpaid request `pr` cancelled; key `deposit-cancel:{booking}`.
+async fn cancel_request(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: Uuid, pr: Uuid) -> Result<()> {
+    call(k, ctx, tx, CANCEL, json!({"id": pr}), format!("deposit-cancel:{booking}")).await.map(drop)
+}
 
 /// The share of the price a new booking takes as a deposit, and the method it is paid through:
 /// for guests' bookings of paid services that take one, where a payment method is set.
@@ -85,20 +141,15 @@ async fn ask_deposit(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
     let invoice = id(&fresh, "sales_invoice").ok_or_else(|| Error::internal("the booking was not invoiced"))?;
     let invoice = hc.kernel.submit_tx(&engine, hc.tx, "SalesInvoice", invoice, None).await?;
     let deposit = (d(&invoice, "grand_total") * percent / Decimal::ONE_HUNDRED).round_dp(2);
-    let request = ferrum_app_commerce::request_invoice_payment(
-        hc.kernel,
-        &sys(hc.ctx),
-        hc.tx,
-        &invoice,
-        &method,
-        Some(deposit),
-        s(doc, "guest_email").map(str::to_string),
-    )
-    .await?
-    .ok_or_else(|| Error::internal("nothing to ask for on the booking's invoice"))?;
+    // Nothing owed on it: Commerce refuses to ask, as any other refusal; this one keeps its own words.
+    if d(&invoice, "outstanding_amount") <= Decimal::ZERO {
+        return Err(Error::internal("nothing to ask for on the booking's invoice"));
+    }
+    let invoice = doc_id(&invoice)?;
+    let request = request_payment(hc.kernel, hc.ctx, hc.tx, booking, invoice, &method, deposit, s(doc, "guest_email")).await?;
     let mut v = Doc::new();
     set(&mut v, "bpay_deposit", money(deposit));
-    set(&mut v, "bpay_payment_request", s(&request, "id").unwrap_or_default());
+    set(&mut v, "bpay_payment_request", request.to_string());
     hc.kernel.set_values_tx(&sys(hc.ctx), hc.tx, "Booking", booking, v).await
 }
 
@@ -120,7 +171,7 @@ async fn settle_with(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc, all_back: bo
     let invoice = id(doc, "sales_invoice").ok_or_else(|| Error::internal("a booking with a deposit without its invoice"))?;
     if s(&request, "status") != Some("Paid") {
         if matches!(s(&request, "status"), Some("Initiated" | "Failed")) && request.get("docstatus").and_then(Value::as_i64) == Some(1) {
-            k.cancel_tx(&engine, tx, "PaymentRequest", pr, None).await?;
+            cancel_request(k, ctx, tx, booking, pr).await?;
         }
         let inv = k.get_tx(&sctx, tx, "SalesInvoice", invoice, false).await?;
         if inv.get("docstatus").and_then(Value::as_i64) == Some(1) && d(&inv, "outstanding_amount") == d(&inv, "grand_total") {
@@ -151,8 +202,10 @@ async fn settle_with(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc, all_back: bo
             } else {
                 format!("Booking {} cancelled: {} of its deposit back by the service's terms", s(doc, "number").unwrap_or_default(), owed_back.normalize())
             };
-            let refund = ferrum_app_commerce::refund_payment(k, &sctx, tx, pr, owed_back, id(&note, "id"), &why).await?;
-            set(&mut v, "bpay_refund", s(&refund, "id").unwrap_or_default());
+            // The late refund is a step of its own: a booking's cancellation and its late payment never share a key.
+            let step = if all_back { "deposit-late-refund" } else { "deposit-refund" };
+            let refund = refund(k, ctx, tx, step, booking, pr, owed_back, id(&note, "id"), &why).await?;
+            set(&mut v, "bpay_refund", refund.to_string());
         }
     }
     k.set_values_tx(&sctx, tx, "Booking", booking, v).await

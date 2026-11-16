@@ -12,8 +12,6 @@ ferrum-kernel = { git = "https://github.com/CBFerrum/Ferrum", branch = "main" }
 ferrum-meta = { git = "https://github.com/CBFerrum/Ferrum", branch = "main" }
 ferrum-domain = { git = "https://github.com/CBFerrum/Ferrum", branch = "main" }
 ferrum-calc = { git = "https://github.com/CBFerrum/Ferrum", branch = "main" }
-# Booking Deposits take and refund deposits through the store's payment requests.
-ferrum-app-commerce = { git = "https://github.com/CBFerrum/ferrum-app-commerce", branch = "main" }
 # A guest's customer, found or made as ERP finds a person's; the tests run on ERP's records
 # (customers, invoices, the ledger) too.
 ferrum-app-erp = { git = "https://github.com/CBFerrum/ferrum-app-erp", branch = "main" }
@@ -42,6 +40,9 @@ icalendar = { version = "0.17", default-features = false, features = ["parser", 
 reqwest = { version = "0.12", default-features = false }
 
 [dev-dependencies]
+# Booking Deposits call Commerce's operations through the platform's gate, never its code: the tests register the real
+# app to answer them.
+ferrum-app-commerce = { git = "https://github.com/CBFerrum/ferrum-app-commerce", branch = "main" }
 # Its tests check that its interface is a release the platform takes.
 ferrum-apps = { git = "https://github.com/CBFerrum/Ferrum", branch = "main" }
 tokio = { version = "1.45", features = ["rt-multi-thread", "macros", "sync", "time", "signal", "net", "io-util"] }

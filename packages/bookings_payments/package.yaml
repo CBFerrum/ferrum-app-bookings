@@ -1,9 +1,14 @@
 package: bookings_payments
-version: 0.1.0
+version: 0.2.0
 label: Booking Deposits
 description: Deposits for paid bookings through the store's payment methods - asked for when a guest books, the booking confirmed when it is paid, and refunded by the service's terms when the booking is cancelled.
 depends: [bookings, commerce]
 field_prefix: bpay_
+# Commerce's operations it calls through the platform's gate (src/payments.rs), at the versions it was built for.
+uses:
+  - {capability: commerce.sales_invoice.request_payment, version: "^0.6"}
+  - {capability: commerce.payment_request.refund, version: "^0.6"}
+  - {capability: commerce.payment_request.cancel, version: "^0.6"}
 
 overlays:
   - entity: BookingService
