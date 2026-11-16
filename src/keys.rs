@@ -19,7 +19,9 @@ pub(crate) fn remember(site: &Arc<dyn Site>, v: Vault) {
     HANDLES.lock().unwrap_or_else(|e| e.into_inner()).push((address(site), v));
 }
 
-fn handle(k: &Kernel) -> Result<Vault> {
+/// Bookings's own handle, which also proves that a call of another app's operation is Bookings's (`payments.rs`):
+/// kept inside this crate, never handed to another.
+pub(crate) fn handle(k: &Kernel) -> Result<Vault> {
     let missing = || Error::Unavailable("Bookings was registered without its vault handle: register it as the server does, hooks.app(\"bookings\", …)".into());
     let at = address(k.hooks.site("bookings").ok_or_else(missing)?);
     let held = HANDLES.lock().unwrap_or_else(|e| e.into_inner());

@@ -165,6 +165,10 @@ mod tests {
         let with_deposits = ferrum_meta::effective::build(&catalog, &["bookings".into(), "commerce".into(), payments::PACKAGE.into()], &[], 1)
             .unwrap_or_else(|e| panic!("{e}"));
         assert!(with_deposits.entity("Booking").is_some_and(|b| b.field("bpay_payment_request").is_some()), "the connector's fields");
+        // What it calls of Commerce is what its package declares, at the versions it was built for.
+        let uses: Vec<(&str, &str)> =
+            catalog.package(payments::PACKAGE).unwrap().manifest.uses.iter().map(|u| (u.capability.as_str(), u.version.as_str())).collect();
+        assert_eq!(uses, [(payments::REQUEST_PAYMENT, "^0.6"), (payments::REFUND, "^0.6"), (payments::CANCEL, "^0.6")]);
         assert!(super::CONNECTOR_MANIFEST.contains("packages: [bookings_payments]"));
         let schema = ferrum_meta::effective::build(&catalog, &["bookings".to_string()], &[], 1).unwrap_or_else(|e| panic!("{e}"));
         assert!(schema.warnings.is_empty(), "{:?}", schema.warnings);
