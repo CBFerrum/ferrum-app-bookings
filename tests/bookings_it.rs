@@ -1535,7 +1535,10 @@ async fn boot(slug: &str, extra: &[&str]) -> T {
     hooks.app("erp", &[], ferrum_app_erp::register);
     hooks.own("erp", &erp_packages);
     if real_comms {
-        hooks.app("comms", &[], ferrum_app_comms::register);
+        hooks.app("comms", &[], |h| {
+            ferrum_app_comms::register(h);
+            *COMMS_VAULT.lock().unwrap_or_else(|e| e.into_inner()) = Some(h.vault());
+        });
         let comms_packages: Vec<String> = ferrum_app_comms::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
         hooks.own("comms", &comms_packages);
     }
@@ -1570,6 +1573,10 @@ async fn boot(slug: &str, extra: &[&str]) -> T {
     let site = k.hooks.site("bookings").cloned().expect("bookings site");
     T { k: k.clone(), tenant, admin, site, calls: AtomicU32::new(0) }
 }
+
+/// The handle the real Comms app was given at its last registration (`boot` with `comms_app`): what an operator's
+/// secrets for it are set with.
+static COMMS_VAULT: std::sync::Mutex<Option<ferrum_kernel::vault::Vault>> = std::sync::Mutex::new(None);
 
 fn run(f: impl std::future::Future<Output = ()> + Send + 'static) {
     let _db = DB.lock().unwrap_or_else(|e| e.into_inner());
@@ -2016,12 +2023,7 @@ async fn video_meetings() {
     use ferrum_app_comms::meetings;
     // SAFETY: the tests of this file run one at a time (`run`).
     let meeting_server = |on: bool| unsafe {
-        for (var, value) in [
-            ("FERRUM_MEET_URL", "wss://meet.clinic.test"),
-            ("FERRUM_MEET_KEY", "APIclinic"),
-            ("FERRUM_MEET_SECRET", "clinic-secret"),
-            ("FERRUM_MEET_API_URL", "http://127.0.0.1:1"),
-        ] {
+        for (var, value) in [("FERRUM_MEET_URL", "wss://meet.clinic.test"), ("FERRUM_MEET_API_URL", "http://127.0.0.1:1")] {
             if on {
                 std::env::set_var(var, value);
             } else {
@@ -2031,6 +2033,13 @@ async fn video_meetings() {
     };
     meeting_server(true);
     let t = boot("clinic", &["comms_app"]).await;
+    // LiveKit's key and secret as the operator gives them to Comms' vault, bound to the meeting server's hosts.
+    let comms = COMMS_VAULT.lock().unwrap_or_else(|e| e.into_inner()).clone().expect("Comms' handle");
+    for (name, value) in [("meet.key", "APIclinic"), ("meet.secret", "clinic-secret")] {
+        use ferrum_kernel::vault::{New, Rule, Scope, Zeroizing};
+        let rule = Rule { reveal: name == "meet.key", hosts: vec!["meet.clinic.test".into(), "127.0.0.1".into()], ..Default::default() };
+        comms.set(&t.k, Scope::Installation, name, New::Value(Zeroizing::new(value.as_bytes().to_vec())), rule).await.expect("set");
+    }
     let a = t.admin.clone();
     let ist: Tz = "Asia/Kolkata".parse().unwrap();
     let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
