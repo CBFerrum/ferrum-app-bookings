@@ -128,7 +128,7 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 - **If it was taken while they typed.** Confirm is disabled with a message, and the server's complaints sit beside the field.
 - **Waitlist for a full class.** A guest can join the waitlist instead of failing.
 - **Their own booking page.** Every link shows the booking, lets the guest add it to a calendar (`.ics`), move it or cancel it. A cancel or move is allowed up to the configured number of hours before the start.
-- **Guests become customers.** A booking finds the guest's ERP customer by email or phone digits, or makes one, when it is booked.
+- **Guests become customers.** A booking finds the guest's ERP customer by email or phone digits, or makes one, when it is booked, as ERP finds a person's: never a customer a web shop's guest checkout made, and one for bookings at the same moment.
 - **Spam guard.** A hidden field and a limit of 30 writes per 10 minutes per address and workspace.
 - **Your own page.** Booking Settings can point guest links at a page of your own instead of the app's page.
 - **Switch off.** With the public page off, every public address answers not found. Staff calendar feeds keep working.

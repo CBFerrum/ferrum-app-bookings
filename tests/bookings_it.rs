@@ -1984,10 +1984,11 @@ fn guests_become_clients_end_to_end() {
     run(guests_become_clients());
 }
 
-/// A guest who books is a customer at once: found by email (any case), else made; booking twice,
-/// or two bookings at the same moment, make one; erasing the guest erases the customer too.
+/// A guest who books is a customer at once: found by email (any case), never a web shop's guest,
+/// else made; booking twice, or two bookings at the same moment, make one; erasing the guest erases
+/// the customer too.
 async fn guests_become_clients() {
-    let t = boot("visit", &[]).await;
+    let t = boot("visit", &["commerce"]).await;
     let a = t.admin.clone();
     let ist: Tz = "Asia/Kolkata".parse().unwrap();
     let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
@@ -2019,6 +2020,10 @@ async fn guests_become_clients() {
     // An existing customer is linked, not copied.
     let known = uid(&t.insert(&a, "Customer", json!({"customer_name": "Sara Ali", "customer_type": "Individual", "email": "sara@example.test"})).await);
     assert_eq!(book("11:00", "sara@example.test").await["customer"], json!(known.to_string()));
+    // A web shop's guest with the address is not: anyone may type anyone's address at a guest checkout.
+    let guest = json!({"customer_name": "Lee at the shop", "customer_type": "Individual", "email": "lee@example.test", "commerce_guest": true});
+    let guest = uid(&t.insert(&ferrum_domain::util::sys(&a), "Customer", guest).await);
+    assert_ne!(book("16:00", "lee@example.test").await["customer"], json!(guest.to_string()), "a customer of their own");
     // Two bookings for one new address at the same moment make one customer.
     let (x, y) = tokio::join!(book("12:00", "pat@example.test"), book("13:00", "pat@example.test"));
     assert_eq!((customers("pat@example.test").await, x["customer"].clone()), (1, y["customer"].clone()));

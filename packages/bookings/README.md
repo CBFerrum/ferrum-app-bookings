@@ -115,7 +115,7 @@ deleted (cancel them). `source` is `Internal` or `Public`.
 | `cancel_booking` | Pending, Confirmed, Waitlisted | `{reason?}` → the booking, `Cancelled`; a freed class seat goes to the waitlist |
 | `complete` | Confirmed, once started | → `Completed` |
 | `mark_no_show` | Pending, Confirmed, once started | → `No Show` |
-| `make_sales_invoice` | Confirmed, Completed, No Show | → `{entity: "SalesInvoice", id, number}`: a draft invoice of the booking's company in its currency, one line `item × seats` at the booked `rate`, no discount (the company's default sales taxes apply). A guest without a customer becomes one (an enabled customer with the guest's email, else a new individual). Refused while a draft or submitted invoice exists; a deleted draft (the link clears) or a cancelled invoice allows a new one. Needs Sales Invoice create permission |
+| `make_sales_invoice` | Confirmed, Completed, No Show | → `{entity: "SalesInvoice", id, number}`: a draft invoice of the booking's company in its currency, one line `item × seats` at the booked `rate`, no discount (the company's default sales taxes apply). A guest without a customer becomes one, as ERP finds a person's (`portal::customer_for`: an enabled customer with the guest's email, else phone digits, that no web shop's guest checkout made, else a new individual). Refused while a draft or submitted invoice exists; a deleted draft (the link clears) or a cancelled invoice allows a new one. Needs Sales Invoice create permission |
 | `guest_link` | not Cancelled | → `{token, url, api, expires_at, note}`: a fresh self-service link to hand to the guest (the fallback without the Mail app) |
 
 ### Waitlists

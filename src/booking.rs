@@ -483,7 +483,10 @@ pub(crate) async fn invoice(hc: &mut HookCtx<'_>, booking: &Doc) -> Result<Value
     let co = company(hc.kernel, hc.ctx, hc.tx, company_id).await?;
     let (customer, new_customer) = match id(booking, "customer") {
         Some(c) => (c, false),
-        None => (customer_for(hc, booking).await?, true),
+        None => {
+            let c = client_for(hc.kernel, hc.ctx, hc.tx, booking).await?;
+            (c.ok_or_else(|| Error::invalid("the booking has neither a customer nor a guest name"))?, true)
+        }
     };
     let tz = calendar::zone(&hc.ctx.schema.timezone).unwrap_or(chrono_tz::Tz::UTC);
     let when = time(booking, "start_time").map(|t| crate::when(t, tz)).unwrap_or_default();
@@ -511,39 +514,18 @@ pub(crate) async fn invoice(hc: &mut HookCtx<'_>, booking: &Doc) -> Result<Value
     Ok(created("SalesInvoice", &inv))
 }
 
-/// The guest's customer for invoicing (made at booking since 0.6; older bookings get one here).
-async fn customer_for(hc: &mut HookCtx<'_>, booking: &Doc) -> Result<Uuid> {
-    client_for(hc.kernel, hc.ctx, hc.tx, booking).await?.ok_or_else(|| Error::invalid("the booking has neither a customer nor a guest name"))
-}
-
-/// The guest's client record, the ERP Customer that invoices, CRM and Helpdesk share: an enabled
-/// one with the guest's email (or, without an email, the same phone digits), else a new individual
-/// customer. `None` without a guest name, or with neither an email nor a phone number.
-///
-/// ERP's customers have no unique email to lean on, so a transaction-scoped advisory lock on the
-/// workspace and address serializes the find-or-create: the same person booking twice, or two
-/// bookings for one address at the same moment, find the one record the first made.
+/// The guest's client record, the ERP Customer that invoices, CRM and Helpdesk share: the one ERP
+/// finds for a person by the guest's email (else their phone's digits) or makes, as the system
+/// (`ferrum_app_erp::portal::customer_for`, which also holds its lock on the address to the end of
+/// the transaction). `None` without a guest name, or with neither an email nor a phone number of 6
+/// to 20 digits: there is nothing to find the guest by.
 pub(crate) async fn client_for(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc) -> Result<Option<Uuid>> {
-    let email = s(doc, "guest_email").map(|e| e.trim().to_lowercase());
-    let digits = s(doc, "guest_phone").map(|p| p.chars().filter(char::is_ascii_digit).collect::<String>()).filter(|d| (6..=20).contains(&d.len()));
-    let (Some(name), Some(key)) = (s(doc, "guest_name"), email.as_ref().map(|e| format!("e:{e}")).or_else(|| digits.as_ref().map(|d| format!("p:{d}")))) else {
+    let (email, phone) = (s(doc, "guest_email").filter(|e| !e.trim().is_empty()), s(doc, "guest_phone"));
+    let digits = phone.map_or(0, |p| p.chars().filter(char::is_ascii_digit).count());
+    let (Some(name), true) = (s(doc, "guest_name"), email.is_some() || (6..=20).contains(&digits)) else {
         return Ok(None);
     };
-    sqlx::query("select pg_advisory_xact_lock(hashtextextended($1, 0))").bind(format!("bookings-client:{}:{key}", ctx.tenant)).execute(&mut **tx).await?;
-    let by = if email.is_some() { "lower(email) = $2" } else { "regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = $2" };
-    let found: Option<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "select id from e_customer where tenant_id = $1 and {by} and not coalesce(disabled, false) order by created_at, id limit 1"
-    )))
-    .bind(ctx.tenant)
-    .bind(email.as_ref().or(digits.as_ref()))
-    .fetch_optional(&mut **tx)
-    .await?;
-    if found.is_some() {
-        return Ok(found);
-    }
-    let input = obj(json!({"customer_name": name, "customer_type": "Individual", "email": email, "phone": s(doc, "guest_phone")}));
-    let c = k.insert_tx(&sys(ctx), tx, "Customer", input).await?;
-    Ok(Some(doc_id(&c)?))
+    Ok(Some(ferrum_app_erp::portal::customer_for(k, &sys(ctx), tx, name, email, phone).await?.0))
 }
 
 /// `guest_link`: a fresh self-service link to hand to the guest (when no email goes out).
