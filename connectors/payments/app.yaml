@@ -2,7 +2,7 @@
 # service's terms when a booking is cancelled. Offered where both are installed.
 id: bookings-payments
 name: Booking Deposits
-version: 0.2.0
+version: 0.3.0
 publisher: cbferrum
 summary: Take a deposit when a guest books a paid service, and refund it by the service's terms when the booking is cancelled
 categories: [sales]
@@ -11,6 +11,6 @@ homepage: https://github.com/CBFerrum/ferrum-app-bookings
 support: https://github.com/CBFerrum/ferrum-app-bookings/issues
 runtime: native
 platform: ">=0.3.2, <0.4"
-requires: {bookings: ">=0.3", commerce: ">=0.7"}
+requires: {bookings: ">=0.3", commerce: ">=0.13"}
 packages: [bookings_payments]
 uninstall: ask

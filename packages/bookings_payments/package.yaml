@@ -1,5 +1,5 @@
 package: bookings_payments
-version: 0.1.0
+version: 0.2.0
 label: Booking Deposits
 description: Deposits for paid bookings through the store's payment methods - asked for when a guest books, the booking confirmed when it is paid, and refunded by the service's terms when the booking is cancelled.
 depends: [bookings, commerce]
