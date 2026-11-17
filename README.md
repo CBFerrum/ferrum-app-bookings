@@ -13,7 +13,7 @@
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-data-336791?style=flat-square&logo=postgresql&logoColor=white)
 ![React](https://img.shields.io/badge/React-TypeScript-087ea4?style=flat-square&logo=react&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-52%20Rust%20%C2%B7%2076%20UI-16a34a?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-51%20Rust%20%C2%B7%2076%20UI-16a34a?style=flat-square)
 
 ### Appointments and classes that book themselves, with no double bookings.
 
@@ -39,11 +39,11 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 |---|---|
 | **Version** | 0.9.1 (Booking Deposits connector 0.3.0) |
 | **Kind** | Its own interface at `/bookings/` for the team, and a public booking page at `/bookings/book/{workspace}`. Records open in the platform's records screens |
-| **What it adds** | 13 entities (6 you work with, 7 that sit inside them), 2 roles, 3 reports, 1 menu module, 2 packages (`bookings`, `bookings_payments`), 1 payments connector, 4 database migrations |
+| **What it adds** | 12 entities (6 you work with, 6 that sit inside them), 2 roles, 3 reports, 1 menu module, 2 packages (`bookings`, `bookings_payments`), 1 payments connector, 1 SQL file |
 | **Depends on** | Ferrum platform `>=0.3.8, <0.4` and [ERP](https://github.com/CBFerrum/ferrum-app-erp) `>=0.1` (installing Bookings installs ERP) |
 | **Works with** | Mail, Chat and Calendar (Comms) for emails, calendar invitations and video meetings, Commerce for deposits, ERP for customers, items and invoices, platform working calendars for holidays |
 | **Languages** | English, Arabic, Hindi (about 380 interface words each, and 250 names each) |
-| **Tests** | 52 Rust tests, 76 interface tests |
+| **Tests** | 51 Rust tests, 76 interface tests |
 | **Licence** | AGPL-3.0-only |
 
 ## 📸 Screenshots
@@ -268,6 +268,8 @@ Reports: Bookings Summary, Bookings Attendance, Bookings Staff Utilization. Ther
 | **REST and MCP** | Every record and action, within each person's permissions | An API token |
 | **Personal-data requests** | Export and erase a guest's booking data | None |
 
+**What the tests exercise.** The tests run Commerce as the real app, with a stand-in payment gateway (a plugin named `fakepay`), so no payment provider is called. Mail's `Communication` is a stand-in record in most tests; the video-meeting test uses Comms' meeting code with a LiveKit address nothing answers, so no meeting server runs. A staff member's outside calendar is served by a stand-in on the test machine, not by Google, Outlook or another calendar service.
+
 ## 📊 How it compares
 
 Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.com (open source).
@@ -336,10 +338,9 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 ### ✅ Recently shipped
 
 - [x] **0.9.1:** Rebuilt on Ferrum-Frontend 06bd1a2: its start through `mountApp`, and no routes to the screens apps no longer have.
-- [x] **0.9.0:** deposits asked for, refunded and cancelled through Commerce's operations on the platform's gate, each receipted as Bookings'; Bookings no longer compiles against Commerce.
-- [x] **0.8.0:** a guest's customer as ERP finds a person's, never a web shop's guest; dated closures and openings only in the working calendars, the old settings field gone.
+- [x] **0.9.0:** deposits asked for, refunded and cancelled through Commerce's operations on the platform's gate, each receipted as Bookings'; Bookings does not compile against Commerce.
+- [x] **0.8.0:** a guest's customer as ERP finds a person's, never a web shop's guest; dated closures and openings only in the working calendars.
 - [x] **0.7.3:** a guest's links and a staff feed are absolute without a server address in the settings: the platform's, through the operator's link host when there is one.
-- [x] **0.7.2:** a date written into the old Closed and Extra Open Dates field at any time is moved into the working calendar at the next upkeep.
 - [x] **0.7.1:** a platform calendar's dated exceptions decide availability, the Outside opening hours mark and the utilization report.
 - [x] **0.7.0:** a video meeting for each booking of a Video service, with the guest's own join link.
 - [x] **0.6.2:** the interface shows Expired and Outside opening hours, with Arabic and Hindi names.
