@@ -375,3 +375,21 @@ pub async fn guest_view(ctx: &Ctx, tx: &mut Tx, b: &Doc) -> Result<Value> {
         "pay_by": pay_by.map(crate::ts),
     }))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+    use std::str::FromStr;
+
+    #[test]
+    fn the_terms_keep_their_share_only_late() {
+        let n = |v: &str| Decimal::from_str(v).unwrap();
+        let start = Utc.with_ymd_and_hms(2026, 11, 20, 10, 0, 0).unwrap();
+        assert_eq!(kept(n("300"), start, start - Duration::hours(49), 48, n("100")), n("0"), "two days ahead: all back");
+        assert_eq!(kept(n("300"), start, start - Duration::hours(48), 48, n("100")), n("0"), "on the dot is in time");
+        assert_eq!(kept(n("300"), start, start - Duration::hours(47), 48, n("100")), n("300"));
+        assert_eq!(kept(n("300"), start, start - Duration::hours(1), 48, n("50")), n("150"));
+        assert_eq!(kept(n("100.01"), start, start, 1, n("50")), n("50.00"), "half of 100.01, to the cent");
+    }
+}
