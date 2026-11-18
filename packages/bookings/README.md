@@ -83,8 +83,12 @@ Administrators can do everything. Staff without a Bookings role see nothing of t
 * Guests (public endpoints) book only offered starts — on the grid from the start of each
   working interval — inside the notice and advance windows. Staff (internal bookings, the
   generic API) may book any minute inside working hours, past or future.
-* "Any staff" (`staff` empty): join an existing class session first, otherwise the staff member
-  with the fewest sessions that local day, then the fewest booked minutes, then a stable order.
+* "Any staff" (`staff` empty): join an existing class session first; otherwise, of the staff free
+  then, the highest `priority` on the service's staff row (0 to 100, default 0); among equal
+  priorities, the fewest sessions that local day per unit of `weight` (1 to 100, default 1), then
+  the fewest booked minutes per unit of weight, then the heavier weight, then a stable order.
+  Compared in whole numbers, so two requests for one time agree. Rows saved before 0.13.0 read as
+  priority 0, weight 1: today's order.
 * Concurrency: every booking, reschedule and waitlist promotion locks its candidate staff rows,
   then their resources, each in id order, before reading the calendar and deciding; seats and
   resource units are counted under those locks.

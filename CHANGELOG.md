@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.0
+
+Needs the same platform as 0.12.0. Database: two fields on Service Staff (`priority`, `weight`). Interface rebuilt.
+
+- **Priorities and weights.** Each row of a service's staff list has a priority (0 to 100) and a weight (1 to 100).
+  When a guest leaves the choice of person to the business, the highest priority free at that time is booked; among
+  equal priorities the day's bookings are shared in proportion to weight, then by booked minutes, then the heavier
+  weight. Rows saved before this release read as priority 0 and weight 1, which is the order of 0.12.0.
+- Not built: collective bookings with several hosts.
+
 ## 0.12.0
 
 Needs the same platform as 0.11.0. Database: one field, `BookingSettings.remind_staff`. Interface rebuilt.

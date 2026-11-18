@@ -638,6 +638,7 @@ mod tests {
             location_type: "In Person".into(),
             location: None,
             staff: vec![],
+            rank: Default::default(),
             resources: vec![],
             questions,
             guest_repeats: 0,

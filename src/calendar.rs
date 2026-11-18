@@ -39,6 +39,8 @@ pub struct ServiceInfo {
     pub location_type: String,
     pub location: Option<String>,
     pub staff: Vec<Uuid>,
+    /// Each staff member's (priority, weight) for this service; missing: (0, 1).
+    pub rank: HashMap<Uuid, (i64, i64)>,
     pub resources: Vec<Uuid>,
     pub questions: Vec<Question>,
     /// Times in a row a guest may book it from the booking page (0 or 1: once).
@@ -123,12 +125,20 @@ pub async fn service(tx: &mut Tx, tenant: Uuid, id: Uuid) -> Result<Option<Servi
     let Some((id, name, active, description, duration, before, after, interval, capacity, price, item, location_type, location, guest_repeats)) = row else {
         return Ok(None);
     };
-    let staff: Vec<Uuid> =
-        sqlx::query_scalar("select staff from e_booking_service__staff where tenant_id = $1 and parent_id = $2 and staff is not null order by idx")
-            .bind(tenant)
-            .bind(id)
-            .fetch_all(&mut **tx)
-            .await?;
+    // Rows saved before priority and weight existed hold null in both: no priority, a weight of 1.
+    let ranked: Vec<(Uuid, i64, i64)> = sqlx::query_as(
+        "select staff, coalesce(priority, 0)::bigint, coalesce(weight, 1)::bigint from e_booking_service__staff \
+         where tenant_id = $1 and parent_id = $2 and staff is not null order by idx",
+    )
+    .bind(tenant)
+    .bind(id)
+    .fetch_all(&mut **tx)
+    .await?;
+    let staff: Vec<Uuid> = ranked.iter().map(|r| r.0).collect();
+    let mut rank = HashMap::new();
+    for (s, priority, weight) in ranked {
+        rank.entry(s).or_insert((priority, weight.max(1)));
+    }
     let resources: Vec<Uuid> =
         sqlx::query_scalar("select resource from e_booking_service__resources where tenant_id = $1 and parent_id = $2 and resource is not null order by idx")
             .bind(tenant)
@@ -191,6 +201,7 @@ pub async fn service(tx: &mut Tx, tenant: Uuid, id: Uuid) -> Result<Option<Servi
         location: location.filter(|l| !l.trim().is_empty()),
         guest_repeats: guest_repeats.unwrap_or(0).max(0),
         staff: dedup(staff),
+        rank,
         resources: dedup(resources),
         questions: questions
             .into_iter()
@@ -438,6 +449,8 @@ pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffI
             time_off: off.iter().filter(|o| o.0 == s.id).map(|o| Span::new(o.1, o.2)).collect(),
             busy: elsewhere.iter().filter(|o| o.0 == s.id).map(|o| Span::new(o.1, o.2)).collect(),
             open: staff_open(tx, tenant, s, &business, range).await?,
+            priority: svc.rank.get(&s.id).map_or(0, |r| r.0),
+            weight: svc.rank.get(&s.id).map_or(1, |r| r.1),
         });
     }
     // In the service's order of preference.

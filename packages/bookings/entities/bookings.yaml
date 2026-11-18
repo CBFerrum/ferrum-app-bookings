@@ -109,6 +109,8 @@
   kind: child
   fields:
     - {name: staff, type: link, to: BookingStaff, required: true, on_delete: cascade, in_list: true}
+    - {name: priority, type: int, default: 0, min: 0, max: 100, in_list: true, description: "When a guest leaves the choice to you: of the staff free at that time, the highest priority is booked. All 0 = no priority"}
+    - {name: weight, type: int, default: 1, min: 1, max: 100, in_list: true, description: "Their share of the day's bookings among staff of the same priority: 2 gets about twice as many as 1"}
 
 - name: BookingServiceResource
   label: Service Resource

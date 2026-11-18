@@ -183,6 +183,9 @@ pub struct Staff {
     pub busy: Vec<Span>,
     /// Open time from working calendars (theirs, the business's), replacing `hours` when set.
     pub open: Option<Vec<Span>>,
+    /// For this service: asked first while free (higher first), and their share of a day among equals.
+    pub priority: i64,
+    pub weight: i64,
 }
 
 impl Staff {
@@ -280,6 +283,9 @@ pub struct Candidate {
     /// Sessions and booked minutes the staff member has that local day (fairness).
     pub day_sessions: usize,
     pub day_minutes: i64,
+    /// The staff member's priority and weight for this service (see [`pick`]).
+    pub priority: i64,
+    pub weight: i64,
 }
 
 /// A bookable start with every staff member who can take it.
@@ -301,10 +307,22 @@ pub struct World {
     pub rules: Rules,
 }
 
-/// The fair choice: join an existing class session first (classes fill up), otherwise the staff
-/// member with the fewest sessions that day, then the fewest booked minutes, then a stable order.
+/// The fair choice: join an existing class session first (classes fill up); otherwise the highest
+/// priority; among equals the fewest sessions that day per unit of weight, then the fewest booked
+/// minutes per unit of weight, then the heavier weight, then a stable order. Shares are compared
+/// cross-multiplied, in whole numbers: every priority 0 and weight 1 is the order of load alone.
 pub fn pick(candidates: &[Candidate]) -> Option<&Candidate> {
-    candidates.iter().min_by_key(|c| (!c.join, c.day_sessions, c.day_minutes, c.staff))
+    // a.x / a.weight against b.x / b.weight.
+    let share = |ax: i64, aw: i64, bx: i64, bw: i64| (ax * bw).cmp(&(bx * aw));
+    candidates.iter().min_by(|a, b| {
+        (!a.join)
+            .cmp(&!b.join)
+            .then(b.priority.cmp(&a.priority))
+            .then(share(a.day_sessions as i64, a.weight, b.day_sessions as i64, b.weight))
+            .then(share(a.day_minutes, a.weight, b.day_minutes, b.weight))
+            .then(b.weight.cmp(&a.weight))
+            .then(a.staff.cmp(&b.staff))
+    })
 }
 
 impl World {
@@ -380,6 +398,8 @@ impl World {
             seats_left: svc.capacity - taken,
             day_sessions: day_load.len(),
             day_minutes: day_load.values().sum(),
+            priority: staff.priority,
+            weight: staff.weight.max(1),
         })
     }
 
@@ -540,7 +560,12 @@ mod tests {
     }
 
     fn staff(n: u128, tz: Tz, hours: Vec<Hours>) -> Staff {
-        Staff { id: uid(n), tz, hours, time_off: vec![], busy: vec![], open: None }
+        Staff { id: uid(n), tz, hours, time_off: vec![], busy: vec![], open: None, priority: 0, weight: 1 }
+    }
+
+    /// A staff member with a priority and a weight for the service.
+    fn ranked(n: u128, tz: Tz, hours: Vec<Hours>, priority: i64, weight: i64) -> Staff {
+        Staff { priority, weight, ..staff(n, tz, hours) }
     }
 
     fn service(minutes: i64, before: i64, after: i64, capacity: i64, interval: i64) -> Service {
@@ -853,6 +878,79 @@ mod tests {
         book(&mut w, 1, "2026-06-01T23:30:00Z", 1, None);
         assert_eq!(w.candidates_at(t("2026-06-01T10:00:00Z"), 1).0[0].day_sessions, 0);
         assert_eq!(w.candidates_at(t("2026-06-02T01:00:00Z"), 1).0[0].day_sessions, 1);
+    }
+
+    #[test]
+    fn a_higher_priority_is_asked_first_while_free() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let h = || every_day("09:00", "17:00");
+        let mut w = world(service(30, 0, 0, 1, 30), vec![staff(1, utc, h()), staff(2, utc, h()), ranked(3, utc, h(), 5, 1)]);
+        book(&mut w, 3, "2026-06-01T09:00:00Z", 1, None);
+        book(&mut w, 3, "2026-06-01T09:30:00Z", 1, None);
+        book(&mut w, 1, "2026-06-01T10:00:00Z", 1, None);
+        let (ok, _) = w.candidates_at(t("2026-06-01T12:00:00Z"), 1);
+        assert_eq!(pick(&ok).map(|c| c.staff), Some(uid(3)), "the most booked, but first while free");
+        book(&mut w, 3, "2026-06-01T12:00:00Z", 1, None);
+        let (ok, _) = w.candidates_at(t("2026-06-01T12:00:00Z"), 1);
+        assert_eq!(pick(&ok).map(|c| c.staff), Some(uid(2)), "busy then: the next by load");
+    }
+
+    #[test]
+    fn weights_share_a_day_in_their_proportion() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let h = || every_day("09:00", "17:00");
+        let mut w = world(service(30, 0, 0, 1, 30), vec![ranked(1, utc, h(), 0, 2), staff(2, utc, h()), staff(3, utc, h())]);
+        let mut count: HashMap<Uuid, usize> = HashMap::new();
+        for hour in 9..17 {
+            let at = format!("2026-06-01T{hour:02}:00:00Z");
+            let (ok, _) = w.candidates_at(t(&at), 1);
+            let who = pick(&ok).unwrap().staff;
+            *count.entry(who).or_default() += 1;
+            book(&mut w, who.as_u128(), &at, 1, None);
+        }
+        assert_eq!((count[&uid(1)], count[&uid(2)], count[&uid(3)]), (4, 2, 2));
+    }
+
+    #[test]
+    fn equal_shares_go_to_the_heavier_weight_first() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let h = || every_day("09:00", "17:00");
+        let w = world(service(30, 0, 0, 1, 30), vec![staff(1, utc, h()), ranked(2, utc, h(), 0, 3)]);
+        let (ok, _) = w.candidates_at(t("2026-06-01T09:00:00Z"), 1);
+        assert_eq!(pick(&ok).map(|c| c.staff), Some(uid(2)));
+    }
+
+    #[test]
+    fn a_class_fills_before_priority_opens_another_session() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let h = || every_day("09:00", "17:00");
+        let mut w = world(service(60, 0, 0, 4, 60), vec![staff(1, utc, h()), ranked(2, utc, h(), 9, 5)]);
+        book(&mut w, 1, "2026-06-01T10:00:00Z", 1, None);
+        let (ok, _) = w.candidates_at(t("2026-06-01T10:00:00Z"), 1);
+        assert_eq!(pick(&ok).map(|c| (c.staff, c.join)), Some((uid(1), true)));
+    }
+
+    #[test]
+    fn the_order_is_total() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let h = || every_day("09:00", "17:00");
+        let mut w = world(
+            service(30, 0, 0, 1, 30),
+            vec![ranked(1, utc, h(), 1, 2), ranked(2, utc, h(), 1, 1), ranked(3, utc, h(), 1, 2), ranked(4, utc, h(), 0, 9), staff(5, utc, h())],
+        );
+        book(&mut w, 1, "2026-06-01T09:00:00Z", 1, None);
+        book(&mut w, 3, "2026-06-01T10:00:00Z", 1, None);
+        let (ok, _) = w.candidates_at(t("2026-06-01T12:00:00Z"), 1);
+        let first = pick(&ok).unwrap().staff;
+        // Every rotation and its reverse: the same person.
+        for r in 0..ok.len() {
+            let mut list = ok.clone();
+            list.rotate_left(r);
+            assert_eq!(pick(&list).unwrap().staff, first);
+            list.reverse();
+            assert_eq!(pick(&list).unwrap().staff, first);
+        }
+        assert_eq!(first, uid(2), "priority 1, fewest per unit of weight (2 has none; 1 and 3 have one per 2)");
     }
 
     #[test]

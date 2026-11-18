@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.12.0-0e7490?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.13.0-0e7490?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -37,13 +37,13 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 
 | | |
 |---|---|
-| **Version** | 0.12.0 (Booking Deposits connector 0.3.0) |
+| **Version** | 0.13.0 (Booking Deposits connector 0.3.0) |
 | **Kind** | Its own interface at `/bookings/` for the team, and a public booking page at `/bookings/book/{workspace}`. Records open in the platform's records screens |
 | **What it adds** | 12 entities (6 you work with, 6 that sit inside them), 2 roles, 3 reports, 1 menu module, 2 packages (`bookings`, `bookings_payments`), 1 payments connector, 1 SQL file |
 | **Depends on** | Ferrum platform `>=0.4.0, <0.5` and [ERP](https://github.com/CBFerrum/ferrum-app-erp) `>=0.1` (installing Bookings installs ERP) |
 | **Works with** | Mail, Chat and Calendar (Comms) for emails, calendar invitations and video meetings, Commerce for deposits, ERP for customers, items and invoices, platform working calendars for holidays |
 | **Languages** | English, Arabic, Hindi (about 380 interface words each, and 250 names each) |
-| **Tests** | 56 Rust tests, 86 interface tests |
+| **Tests** | 62 Rust tests, 86 interface tests |
 | **Licence** | AGPL-3.0-only |
 
 ## 📸 Screenshots
@@ -115,7 +115,7 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 - **Time off.** A person enters their own time off. The record counts the active bookings already inside it, so nobody is surprised.
 - **Outside calendars.** A staff member can give the iCalendar address of a calendar they keep elsewhere (Google, Outlook, iCloud, Nextcloud, Ferrum Comms). It is read every quarter of an hour, and guests are not offered the times it says are busy. Only times are kept. Recurring events, exceptions and moved occurrences are read correctly.
 - **Clash marks.** A booking that an outside calendar later became busy over is marked, the staff member is told, and the guest is offered another time. Keep Despite the Clash leaves it where it is.
-- **Fair choice of "any".** When a guest picks nobody in particular, the booking joins an existing class session first, then the person with the fewest sessions that day, then the fewest booked minutes.
+- **Fair choice of "any".** When a guest picks nobody in particular, the booking joins an existing class session first. Otherwise each person on the service's staff list has a priority and a weight (Service Staff): of those free at that time, the highest priority is booked; among equal priorities, bookings are shared by weight (a weight of 2 gets about twice the day's sessions of a weight of 1), then the fewest booked minutes. Left at 0 and 1, it is the person with the fewest sessions that day.
 - **Rooms and equipment.** A resource (room, equipment, vehicle, other) has a capacity. A booking takes the least loaded free one.
 - **Leavers.** When a person is removed from the workspace they take no more bookings. Their existing bookings stay for a person to move.
 - **Calendar feed per person.** A private, signed feed link (valid a year) puts a person's bookings in any calendar app. A class session is one event with its guests. The link can be reset.
@@ -245,7 +245,7 @@ Everything Bookings adds is ordinary Ferrum metadata and Rust. Its records get l
 | **Staff Time Off** | Time a person cannot be booked | Staff, from, to, reason, conflicting bookings |
 | **Booking Resource** | A room or equipment | Type, capacity, working calendar, active |
 | **Booking Settings** | One per workspace | Public page, manual confirmation, notice, advance, interval, windows, reminders, addresses, business calendar |
-| **Working Hours, Service Staff, Service Resource, Intake Question, Intake Answer, Booking Reminder** | Rows inside the records above | Weekday and times, who, which room, question and type, answer, minutes before |
+| **Working Hours, Service Staff, Service Resource, Intake Question, Intake Answer, Booking Reminder** | Rows inside the records above | Weekday and times, who (with a priority and a weight), which room, question and type, answer, minutes before |
 
 Deposits add fields to Booking Service, Booking Settings and Booking (deposit percent, refund hours, hold minutes, kept percent, payment method, deposit, payment request, refund).
 
@@ -338,7 +338,9 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 
 ### ✅ Recently shipped
 
-- [x] **0.12.0:** a workspace can switch on Remind Staff Too: the booked staff member is reminded at each reminder time, once per appointment or class session.\n- [x] **0.11.0:** every guest email and staff notice is a message template a workspace edits and translates; a guest waiting for a deposit is told to pay, with a link; the guest's language is kept.
+- [x] **0.13.0:** a service's staff rows carry a priority and a weight: a guest who picks nobody gets the highest priority free, and equal priorities share the day by weight.
+- [x] **0.12.0:** a workspace can switch on Remind Staff Too: the booked staff member is reminded at each reminder time, once per appointment or class session.
+- [x] **0.11.0:** every guest email and staff notice is a message template a workspace edits and translates; a guest waiting for a deposit is told to pay, with a link; the guest's language is kept.
 - [x] **0.10.1:** A guest's own booking page asks for the deposit, says until when the time is held and links to the payment page once the gateway has made it.
 - [x] **0.10.0**: Upkeep runs one workspace at a time, on whichever replica is free.
 - [x] **0.9.1:** Rebuilt on Ferrum-Frontend 06bd1a2: its start through `mountApp`, and no routes to the screens apps no longer have.
@@ -378,7 +380,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 **Scheduling**
 - [ ] A class timetable of real sessions, with a title, capacity and instructor each, and a substitute.
 - [ ] Waitlist for one-to-one slots, and waitlist offers with a claim window.
-- [ ] Weighted round robin and priorities, and collective bookings with several hosts.
+- [ ] Collective bookings with several hosts.
 
 ### 🔭 Later
 

@@ -2504,3 +2504,83 @@ fn opener(url: &str) -> ferrum_kernel::vault::Opener {
         ..Default::default()
     }
 }
+
+#[test]
+fn priorities_end_to_end() {
+    run(priorities());
+}
+
+/// A guest who leaves the choice to the business gets the person with the higher priority while they are free;
+/// rows saved before priority and weight existed are placed by load, as before; only a manager sets them.
+async fn priorities() {
+    let t = boot("rank", &[]).await;
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let at = |hhmm: &str| local(ist, day, hhmm);
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let manager = t.user("manager@rank.test", &["Bookings Manager"]).await;
+    t.insert(
+        &manager,
+        "BookingSettings",
+        json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 30, "approval_required": false}),
+    )
+    .await;
+    let one =
+        |name: &str| json!({"display_name": name, "email": format!("{}@rank.test", name.to_lowercase()), "time_zone": "Asia/Kolkata", "working_hours": every});
+    let (ana, raj) = (uid(&t.insert(&manager, "BookingStaff", one("Ana")).await), uid(&t.insert(&manager, "BookingStaff", one("Raj")).await));
+    let svc = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Massage", "duration_minutes": 60, "price": "0", "staff": [{"staff": ana.to_string()}, {"staff": raj.to_string(), "priority": 1}]}),
+        )
+        .await);
+    let book = |hhmm: &'static str| {
+        let t = &t;
+        async move {
+            let v = t
+                .book(json!({"service": svc.to_string(), "staff": "any", "start_time": rfc(at(hhmm)), "name": "Guest", "email": "g@example.test"}))
+                .await
+                .expect("booked");
+            t.find_one("Booking", json!({"number": v["booking"]["number"]})).await["staff"].as_str().unwrap().parse::<Uuid>().unwrap()
+        }
+    };
+
+    // ───────────── the priority person while free, else the next ─────────────
+    assert_eq!(book("10:00").await, raj, "Raj has priority 1");
+    assert_eq!(book("11:00").await, raj, "still free: Raj again, though Ana has nothing that day");
+    t.insert(&manager, "StaffTimeOff", json!({"staff": raj.to_string(), "from_time": rfc(at("12:00")), "to_time": rfc(at("13:00"))})).await;
+    assert_eq!(book("12:00").await, ana, "Raj is off then");
+
+    // ───────────── rows saved before this release: null in both, placed by load as before ─────────────
+    let mut tx = t.k.db.tenant_tx(t.tenant).await.unwrap();
+    sqlx::query("update e_booking_service__staff set priority = null, weight = null where tenant_id = $1 and parent_id = $2")
+        .bind(t.tenant)
+        .bind(svc)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(book("14:00").await, ana, "Ana has one booking that day, Raj two: the least booked");
+
+    // ───────────── only a manager sets them ─────────────
+    let raj_user = t.user("raj@rank.test", &["Bookings User"]).await;
+    let refused =
+        t.k.update(
+            &raj_user,
+            "BookingService",
+            svc,
+            obj(json!({"staff": [{"staff": ana.to_string()}, {"staff": raj.to_string(), "priority": 100, "weight": 9}]})),
+            None,
+        )
+        .await;
+    assert!(refused.is_err(), "a Bookings User cannot");
+    t.update(&manager, "BookingService", svc, json!({"staff": [{"staff": ana.to_string(), "weight": 3}, {"staff": raj.to_string()}]})).await;
+    let rows = t
+        .texts(
+            "select coalesce(priority, -1) || '/' || coalesce(weight, -1) from e_booking_service__staff where tenant_id = $1 and parent_id = $2 order by idx",
+            Some(svc),
+        )
+        .await;
+    assert_eq!(rows, ["0/3", "0/1"], "a new row takes the defaults");
+}
