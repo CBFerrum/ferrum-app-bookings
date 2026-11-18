@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.10.1-0e7490?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.11.0-0e7490?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -37,13 +37,13 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 
 | | |
 |---|---|
-| **Version** | 0.10.1 (Booking Deposits connector 0.3.0) |
+| **Version** | 0.11.0 (Booking Deposits connector 0.3.0) |
 | **Kind** | Its own interface at `/bookings/` for the team, and a public booking page at `/bookings/book/{workspace}`. Records open in the platform's records screens |
 | **What it adds** | 12 entities (6 you work with, 6 that sit inside them), 2 roles, 3 reports, 1 menu module, 2 packages (`bookings`, `bookings_payments`), 1 payments connector, 1 SQL file |
 | **Depends on** | Ferrum platform `>=0.4.0, <0.5` and [ERP](https://github.com/CBFerrum/ferrum-app-erp) `>=0.1` (installing Bookings installs ERP) |
 | **Works with** | Mail, Chat and Calendar (Comms) for emails, calendar invitations and video meetings, Commerce for deposits, ERP for customers, items and invoices, platform working calendars for holidays |
 | **Languages** | English, Arabic, Hindi (about 380 interface words each, and 250 names each) |
-| **Tests** | 51 Rust tests, 85 interface tests |
+| **Tests** | 54 Rust tests, 86 interface tests |
 | **Licence** | AGPL-3.0-only |
 
 ## 📸 Screenshots
@@ -173,10 +173,11 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 ### 🔔 Messages and reminders
 
 - **One notice per change.** Every guest-visible change becomes exactly one notice, claimed in the same transaction that sends it, so nothing is sent twice. A booking made and moved before the next run is announced once, and one cancelled before then is never announced.
-- **Guest emails** (with the Mail app): request received, confirmed, waitlisted, moved, cancelled, and reminders. Each carries a fresh self-service link and a calendar invitation (a request for confirmations and moves, a cancel for cancellations).
+- **Guest emails**: request received, deposit due (with the link to pay it), confirmed, waitlisted, moved, cancelled, released, deposit refunded, and reminders. Each carries a fresh self-service link. With the Mail app it also carries a calendar invitation (a request for confirmations and moves, a cancel for cancellations); without it the email has an Add to calendar link.
+- **Every message is a template.** All sixteen (nine to guests, seven to staff) are message templates an administrator edits, resets and translates. A guest is written to in the language they used on the booking page when the template has it, else the workspace's.
 - **Reminders** before confirmed bookings, at each offset set (for example a day and an hour). A reminder already due when the booking was made or moved is skipped.
 - **Staff notices** in the app: new booking, one to confirm, moved, cancelled, a waitlist seat filled, an outside-calendar clash. A person is not told of their own changes.
-- **Without the Mail app** guests get nothing automatically; staff hand out the Guest Self-Service Link.
+- **Without the Mail app** guests are emailed through the server's own mailer in the same words; only the attached invitation needs the Mail app. A workspace with no mailer at all hands out the Guest Self-Service Link.
 - **Video meetings.** A Video service with no link of its own gets a meeting for each booking in Ferrum Comms once confirmed, hosted by the booked staff member. The guest's join link needs no account and is in the booking, confirmation, reminders and calendar entry. Moving a booking moves its meeting. Cancelling ends it. A meeting that cannot be made never stops a booking.
 
 ### 📊 Reports
@@ -337,6 +338,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 
 ### ✅ Recently shipped
 
+- [x] **0.11.0:** every guest email and staff notice is a message template a workspace edits and translates; a guest waiting for a deposit is told to pay, with a link; the guest's language is kept.
 - [x] **0.10.1:** A guest's own booking page asks for the deposit, says until when the time is held and links to the payment page once the gateway has made it.
 - [x] **0.10.0**: Upkeep runs one workspace at a time, on whichever replica is free.
 - [x] **0.9.1:** Rebuilt on Ferrum-Frontend 06bd1a2: its start through `mountApp`, and no routes to the screens apps no longer have.

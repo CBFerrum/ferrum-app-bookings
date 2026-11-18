@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.0
+
+Needs the same platform as 0.10.1. Database: one field, `Booking.guest_language`. Interface rebuilt.
+
+- **Every message is a template.** The sixteen messages Bookings sends (nine to guests, seven to staff in the app) are
+  message templates of the platform, listed under Settings, Message templates: an administrator edits, resets and
+  translates them. Each default says what the code said; the wording is no longer built in Rust.
+- **A guest waiting for a deposit is told to pay.** The "request received" mail of a booking that waits for its deposit
+  becomes "Deposit due": how much, until when the time is held, and the guest's own booking page as the link to pay. The
+  "released" mail no longer says a deposit paid now confirms the booking when it can no longer be paid, and gives the link
+  only while it can.
+- **Without the Mail app guests are emailed through the server's own mailer** in the same words (the attached calendar
+  invitation still needs the Mail app).
+- **The guest's language is kept.** The booking page sends the language it is shown in; it is stored as
+  `Booking.guest_language` (read-only, erased with the guest) and the guest's messages come in it when the template has
+  it. A badly written tag is dropped, never a refusal.
+
 ## 0.10.1
 
 Needs the same platform as 0.10.0. No database change. Interface, and one field added to the guest view.

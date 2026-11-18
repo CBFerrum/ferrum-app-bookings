@@ -200,6 +200,7 @@
     - {name: guest_email, type: email}
     - {name: guest_phone, type: phone}
     - {name: guest_time_zone, type: data, max_length: 64, description: "IANA zone the guest sees times in (default: the workspace's)"}
+    - {name: guest_language, type: data, max_length: 20, read_only: true, no_copy: true, description: "The language the guest used on the booking page (en, hi, pt-BR): their messages come in it when the template has it"}
     - {name: answers, type: table, of: BookingAnswer, label: Intake Answers}
     - {name: notes, type: text, max_length: 5000}
     - {name: location_type, type: data, read_only: true}
@@ -261,7 +262,7 @@
         - {name: reason, type: text, label: Reason, description: The guests see it}
   form:
     - {label: Booking, fields: [service, service_name, staff, staff_name, start_time, end_time, seats, status, source, join_waitlist, resource]}
-    - {label: Guest, fields: [customer, guest_name, guest_email, guest_phone, guest_time_zone, notes]}
+    - {label: Guest, fields: [customer, guest_name, guest_email, guest_phone, guest_time_zone, guest_language, notes]}
     - {label: Intake Answers, collapsible: true, fields: [answers]}
     - {label: Location, collapsible: true, fields: [location_type, location]}
     - {label: Billing, collapsible: true, fields: [company, item, rate, amount, sales_invoice]}

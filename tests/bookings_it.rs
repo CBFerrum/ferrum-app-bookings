@@ -224,6 +224,11 @@ fn messages(e: &Error) -> String {
     }
 }
 
+/// A rendered mail with the template engine's escaped slashes (`&#x2f;`) written as slashes: what a mail reader shows.
+fn shown(html: &str) -> String {
+    html.replace("&#x2f;", "/")
+}
+
 fn token_in(content: &str) -> String {
     let at = content.find("token=").expect("a self-service link") + 6;
     content[at..at + 43].to_string()
@@ -1519,6 +1524,23 @@ fn set_report_sources() {
 }
 
 async fn boot(slug: &str, extra: &[&str]) -> T {
+    boot_with(slug, extra, None).await
+}
+
+/// What the server's own mailer was asked to send.
+#[derive(Default)]
+struct Sent(std::sync::Mutex<Vec<(String, String, String)>>);
+
+#[async_trait::async_trait]
+impl ferrum_kernel::Mailer for Sent {
+    async fn send(&self, to: &str, subject: &str, html: &str) -> Result<(), Error> {
+        self.0.lock().unwrap().push((to.into(), subject.into(), html.into()));
+        Ok(())
+    }
+}
+
+/// [`boot`], with the server's mailer when given.
+async fn boot_with(slug: &str, extra: &[&str], mailer: Option<Arc<dyn ferrum_kernel::Mailer>>) -> T {
     let url = std::env::var("FERRUM_BOOKINGS_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_bookings_test".into());
     let db = Db::connect(DbConfig { url: url.clone(), max_connections: 24, ..Default::default() }).await.expect("connect");
     sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
@@ -1560,7 +1582,7 @@ async fn boot(slug: &str, extra: &[&str]) -> T {
     hooks.app("bookings", &bookings_packages, ferrum_app_bookings::register);
     hooks.own("bookings", &bookings_packages);
     set_report_sources();
-    let k = Kernel::boot(db, catalog, hooks, KernelSettings::default(), None).await.expect("boot");
+    let k = Kernel::boot(db, catalog, hooks, KernelSettings::default(), mailer).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("partitions");
     let mut installed = vec!["bookings".to_string()];
     installed.extend(extra.iter().map(|p| if *p == "comms_app" { "comms" } else { p }.to_string()));
@@ -1898,6 +1920,16 @@ async fn unpaid_deposits() {
     assert_eq!(status(ann).await, "Expired");
     let mails = subjects("ann@example.test").await;
     assert_eq!(mails.iter().filter(|s| s.starts_with("Booking released")).count(), 1, "told once: {mails:?}");
+    // A booking waiting for a deposit is told to pay, with the guest's own page as the link, not the gateway's.
+    let ann_mails = t.mails_to("ann@example.test").await;
+    let first_mail = &shown(ann_mails[0]["content"].as_str().unwrap());
+    assert!(ann_mails[0]["subject"].as_str().unwrap().starts_with("Deposit due: Peel"), "{mails:?}");
+    assert!(
+        first_mail.contains("300.00 INR") && first_mail.contains("Pay the deposit") && first_mail.contains("/manage/") && !first_mail.contains("pay.test"),
+        "{first_mail}"
+    );
+    let released = ann_mails.iter().find(|m| m["subject"].as_str().unwrap().starts_with("Booking released")).unwrap();
+    assert!(shown(released["content"].as_str().unwrap()).contains("Pay the deposit"), "still payable: it is offered");
     pay(ann).await.expect("still payable: its request lasts 30 minutes");
     assert_eq!(status(ann).await, "Confirmed", "the time was still free");
     t.maintain(soon).await;
@@ -1947,6 +1979,10 @@ async fn unpaid_deposits() {
     let request = t.get("PaymentRequest", b["bpay_payment_request"].as_str().unwrap().parse().unwrap()).await;
     let invoice = t.get("SalesInvoice", b["sales_invoice"].as_str().unwrap().parse().unwrap()).await;
     assert_eq!((request["status"].clone(), invoice["docstatus"].clone()), (json!("Cancelled"), json!(2)), "nothing more can be paid: both cancelled");
+    t.maintain(Utc::now() + Duration::minutes(31)).await;
+    let eve_mails = t.mails_to("eve@example.test").await;
+    let gone = eve_mails.iter().find(|m| m["subject"].as_str().unwrap().starts_with("Booking released")).expect("told");
+    assert!(!gone["content"].as_str().unwrap().contains("Pay the deposit"), "it can no longer be paid: no link");
 
     // ───────────── a race: the hold running out, another guest, and the late payment at once ─────────────
     let fay = book(peel, "16:00", "fay@example.test").await.unwrap();
@@ -1963,6 +1999,143 @@ async fn unpaid_deposits() {
     if f["status"] == json!("Expired") && paid.is_ok() {
         assert_eq!(dec_of(&f["bpay_kept"]), "0", "Fay paid but lost the time: refunded");
     }
+}
+
+/// One staff member, one service, public bookings confirmed at once: what the wording tests share.
+async fn wording_setup(t: &T, service: Value) -> (Uuid, Ctx, Ctx) {
+    let a = t.admin.clone();
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let manager = t.user("manager@wording.test", &["Bookings Manager"]).await;
+    t.insert(
+        &manager,
+        "BookingSettings",
+        json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 30, "approval_required": false,
+               "cancellation_window_hours": 0, "reschedule_window_hours": 0}),
+    )
+    .await;
+    let mira = t
+        .insert(&manager, "BookingStaff", json!({"display_name": "Mira", "email": "mira@wording.test", "time_zone": "Asia/Kolkata", "working_hours": every}))
+        .await;
+    let mut svc = json!({"service_name": "Facial", "duration_minutes": 60, "staff": [{"staff": sid(&mira)}]});
+    svc.as_object_mut().unwrap().extend(service.as_object().unwrap().clone());
+    let facial = uid(&t.insert(&manager, "BookingService", svc).await);
+    let mira_user = t.user("mira@wording.test", &["Bookings User"]).await;
+    let _ = a;
+    (facial, manager, mira_user)
+}
+
+#[test]
+fn wording_end_to_end() {
+    run(wording());
+}
+
+/// Every message is a template a workspace edits; guests are written to in their language; what they typed is escaped.
+async fn wording() {
+    let t = boot("wording", &["comms"]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let at = |hhmm: &str| local(ist, day, hhmm);
+    let (facial, manager, _mira) =
+        wording_setup(&t, json!({"price": "0", "location_type": "Video", "location_details": "https://meet.example.test/x?a=1&b=2"})).await;
+    let book = |hhmm: &'static str, name: &'static str, email: &'static str, extra: Value| {
+        let t = &t;
+        async move {
+            let mut body = json!({"service": facial.to_string(), "start_time": rfc(at(hhmm)), "name": name, "email": email});
+            body.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            let v = t.book(body).await.expect("booked");
+            uid(&t.find_one("Booking", json!({"number": v["booking"]["number"]})).await)
+        }
+    };
+
+    // ───────────── the defaults: each one is a template the platform accepts and can render ─────────────
+    let defaults: Vec<ferrum_meta::MessageDef> = a.schema.messages.iter().filter(|m| m.key.starts_with("bookings.")).cloned().collect();
+    assert_eq!(defaults.len(), 16, "nine to guests, seven to staff: {:?}", defaults.iter().map(|m| m.key.clone()).collect::<Vec<_>>());
+    let first = book("10:00", "<script>alert(1)</script>", "asha@example.test", json!({})).await;
+    for def in &defaults {
+        t.k.save_message_template(&a, def).await.unwrap_or_else(|e| panic!("{} is refused: {e:?}", def.key));
+        t.k.reset_message_template(&a, &def.key).await.unwrap();
+        let channel = if def.channels.iter().any(|c| c == "email") { "email" } else { "inapp" };
+        let p = t.k.preview_message(&a, &json!(def.key), channel, None, Some(first)).await.unwrap_or_else(|e| panic!("{} does not render: {e:?}", def.key));
+        assert!(!p["message"].to_string().contains("{{"), "{}: {p}", def.key);
+    }
+    let preview = t.k.preview_message(&a, &json!("bookings.guest_confirmed"), "email", None, Some(first)).await.unwrap();
+    let html = preview["message"]["html"].as_str().unwrap();
+    assert!(html.contains("Facial") && html.contains("Mira") && html.contains("BKG-"), "{html}");
+
+    // ───────────── what guests typed is escaped, and a cancelled booking carries no links ─────────────
+    t.maintain(Utc::now()).await;
+    let mails = t.mails_to("asha@example.test").await;
+    assert_eq!(mails.len(), 1);
+    let content = &shown(mails[0]["content"].as_str().unwrap());
+    assert!(content.contains("&lt;script&gt;") && !content.contains("<script>"), "{content}");
+    assert!(content.contains("Video: https://meet.example.test/x?a=1&amp;b=2"), "{content}");
+    assert!(mails[0]["subject"].as_str().unwrap().starts_with("Booking confirmed: Facial, "));
+    t.act(&manager, "Booking", first, "cancel_booking", json!({"reason": "Sick & sorry"})).await;
+    t.maintain(Utc::now()).await;
+    let mails = t.mails_to("asha@example.test").await;
+    let cancelled = &shown(mails.last().unwrap()["content"].as_str().unwrap());
+    assert!(mails.last().unwrap()["subject"].as_str().unwrap().starts_with("Booking cancelled:"));
+    assert!(cancelled.contains("Sick &amp; sorry") && !cancelled.contains("href="), "{cancelled}");
+
+    // ───────────── a workspace's wording is used, and a reset brings the default back ─────────────
+    let mut own = serde_json::to_value(defaults.iter().find(|m| m.key == "bookings.guest_confirmed").unwrap()).unwrap();
+    own["languages"]["en"]["email"]["subject"] = json!("Seen you in: {{ doc.service_name }}");
+    t.k.save_message_template(&a, &serde_json::from_value(own.clone()).unwrap()).await.unwrap();
+    book("11:00", "Ben", "ben@example.test", json!({})).await;
+    t.maintain(Utc::now()).await;
+    assert_eq!(t.mails_to("ben@example.test").await[0]["subject"], json!("Seen you in: Facial"));
+    t.k.reset_message_template(&a, "bookings.guest_confirmed").await.unwrap();
+    book("12:00", "Cy", "cy@example.test", json!({})).await;
+    t.maintain(Utc::now()).await;
+    assert!(t.mails_to("cy@example.test").await[0]["subject"].as_str().unwrap().starts_with("Booking confirmed: Facial"));
+
+    // ───────────── a guest gets the language they used on the booking page, when the template has it ─────────────
+    own["languages"]["hi"] = json!({"email": {"subject": "पुष्टि: {{ doc.service_name }}", "body": "<p>नमस्ते</p>"}});
+    t.k.save_message_template(&a, &serde_json::from_value(own).unwrap()).await.unwrap();
+    let hi = book("13:00", "Di", "di@example.test", json!({"language": "hi"})).await;
+    let fr = book("14:00", "Eve", "eve@example.test", json!({"language": "fr"})).await;
+    let odd = book("15:00", "Fay", "fay@example.test", json!({"language": "x y<z"})).await;
+    t.maintain(Utc::now()).await;
+    assert!(t.mails_to("di@example.test").await[0]["subject"].as_str().unwrap().starts_with("पुष्टि: Facial"));
+    assert_eq!(t.mails_to("eve@example.test").await[0]["subject"], json!("Seen you in: Facial"), "no French: the English the workspace wrote");
+    assert_eq!(t.get("Booking", hi).await["guest_language"], json!("hi"));
+    assert_eq!(t.get("Booking", fr).await["guest_language"], json!("fr"));
+    assert!(t.get("Booking", odd).await["guest_language"].is_null(), "an odd tag is not kept, and does not stop the booking");
+    t.k.reset_message_template(&a, "bookings.guest_confirmed").await.unwrap();
+
+    // ───────────── a staff member who is nobody's user cannot be told, and that is not an error ─────────────
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let ghost = t
+        .insert(&manager, "BookingStaff", json!({"display_name": "Ghost", "email": "nobody@wording.test", "time_zone": "Asia/Kolkata", "working_hours": every}))
+        .await;
+    t.update(&manager, "BookingService", facial, json!({"staff": [{"staff": sid(&ghost)}]})).await;
+    book("16:00", "Gus", "gus@example.test", json!({})).await;
+    t.maintain(Utc::now()).await;
+    assert_eq!(t.mails_to("gus@example.test").await.len(), 1);
+}
+
+#[test]
+fn wording_without_the_mail_app_end_to_end() {
+    run(wording_without_the_mail_app());
+}
+
+/// Without the Mail app the server's own mailer sends the same words, through the platform's message log.
+async fn wording_without_the_mail_app() {
+    let sent = Arc::new(Sent::default());
+    let t = boot_with("plain", &[], Some(sent.clone())).await;
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let (facial, _manager, _mira) = wording_setup(&t, json!({"price": "0"})).await;
+    t.book(json!({"service": facial.to_string(), "start_time": rfc(local(ist, day, "10:00")), "name": "Guest", "email": "pat@example.test"})).await.unwrap();
+    t.maintain(Utc::now()).await;
+    let rows =
+        t.texts("select template || '/' || channel from message_send where tenant_id = $1 and recipient = 'pat@example.test' and $2::uuid is null", None).await;
+    assert_eq!(rows, ["bookings.guest_confirmed/email"]);
+    t.k.dispatch_outbox_once().await.unwrap();
+    let mails = sent.0.lock().unwrap().clone();
+    assert_eq!(mails.len(), 1, "{mails:?}");
+    assert!(mails[0].0 == "pat@example.test" && mails[0].1.starts_with("Booking confirmed: Facial"), "{mails:?}");
 }
 
 #[test]

@@ -89,6 +89,10 @@ describe("the form", () => {
     expect(bookBody({ service: service(), start: "x", form: { ...form, seats: 5 }, zone: "UTC" }).seats).toBe(1);
   });
 
+  it("carries the language the page is shown in", () => {
+    expect(bookBody({ service: service(), start: "x", form, zone: "UTC", language: "hi" }).language).toBe("hi");
+  });
+
   it("asks for a series only where the service offers one, never for a waitlist, and no longer than it allows", () => {
     const weekly = { ...form, every: "week", times: 5 };
     expect(bookBody({ service: service({ repeats: 3 }), start: "x", form: weekly, zone: "UTC" })).toMatchObject({ repeat_every: "week", repeat_count: 3 });
