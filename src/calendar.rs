@@ -47,6 +47,8 @@ pub struct ServiceInfo {
     pub guest_repeats: i64,
     /// Its own booking rules; empty ones are Booking Settings' (see `Settings::for_service`).
     pub rules: ServiceRules,
+    /// A class offered only at its scheduled sessions.
+    pub sessions_only: bool,
 }
 
 /// A service's own booking rules, each `None` (or empty) when it follows Booking Settings.
@@ -74,6 +76,7 @@ impl ServiceInfo {
             after: Duration::minutes(self.after),
             capacity: self.capacity,
             interval: self.interval.map(Duration::minutes).unwrap_or(st.interval),
+            sessions_only: self.sessions_only,
         }
     }
 }
@@ -152,15 +155,16 @@ pub async fn service(tx: &mut Tx, tenant: Uuid, id: Uuid) -> Result<Option<Servi
     .bind(id)
     .fetch_all(&mut **tx)
     .await?;
-    let (min_notice_minutes, max_advance_days, cancellation_window_hours, reschedule_window_hours, approval): (
+    let (min_notice_minutes, max_advance_days, cancellation_window_hours, reschedule_window_hours, approval, sessions_only): (
         Option<i64>,
         Option<i64>,
         Option<i64>,
         Option<i64>,
         Option<String>,
+        bool,
     ) = sqlx::query_as(
-        "select min_notice_minutes, max_advance_days, cancellation_window_hours, reschedule_window_hours, approval_required \
-         from e_booking_service where tenant_id = $1 and id = $2",
+        "select min_notice_minutes, max_advance_days, cancellation_window_hours, reschedule_window_hours, approval_required, \
+         coalesce(sessions_only, false) from e_booking_service where tenant_id = $1 and id = $2",
     )
     .bind(tenant)
     .bind(id)
@@ -186,6 +190,7 @@ pub async fn service(tx: &mut Tx, tenant: Uuid, id: Uuid) -> Result<Option<Servi
     };
     Ok(Some(ServiceInfo {
         rules,
+        sessions_only,
         id,
         name,
         active,
@@ -388,6 +393,8 @@ pub async fn lock_resources(tx: &mut Tx, tenant: Uuid, ids: &[Uuid]) -> Result<(
     Ok(())
 }
 
+type SessionRow = (String, Uuid, Uuid, Instant, Instant, Instant, Instant, Option<i64>, Option<Uuid>);
+
 type BookedRow = (Uuid, Uuid, Uuid, Option<Uuid>, Instant, Instant, Instant, Instant, String, Option<i64>);
 
 /// The engine's view of `svc` for `staff` around `around`: their time off and every active
@@ -439,6 +446,18 @@ pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffI
     .bind(exclude.unwrap_or_default())
     .fetch_all(&mut **tx)
     .await?;
+    // Scheduled sessions of every service: they hold their teacher's time and their room.
+    let sessions: Vec<SessionRow> = sqlx::query_as(
+        "select session_key, staff, service, start_time, end_time, block_start, block_end, capacity, resource from e_booking_session \
+         where tenant_id = $1 and status = 'Scheduled' and block_end > $3 and block_start < $4 and (staff = any($2) or resource = any($5))",
+    )
+    .bind(tenant)
+    .bind(&staff_ids)
+    .bind(from)
+    .bind(to)
+    .bind(&svc.resources)
+    .fetch_all(&mut **tx)
+    .await?;
     let business = business_open(tx, tenant, st, range).await?;
     let mut working = Vec::new();
     for s in staff.iter().filter(|s| s.active) {
@@ -480,5 +499,17 @@ pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffI
             })
             .collect(),
         rules: Default::default(),
+        sessions: sessions
+            .into_iter()
+            .map(|(key, staff, service, start, end, block_start, block_end, capacity, resource)| engine::Declared {
+                key,
+                staff,
+                service,
+                span: Span::new(start, end),
+                block: Span::new(block_start, block_end),
+                capacity: capacity.filter(|c| *c > 0),
+                resource,
+            })
+            .collect(),
     })
 }

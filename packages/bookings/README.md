@@ -63,9 +63,24 @@ Administrators can do everything. Staff without a Bookings role see nothing of t
    | `capacity` (Seats) | 1 = one-to-one; more = a class with that many seats per session |
    | `price`, `item` | Per seat in the company currency; an `item` is required when the price is above 0 |
    | `location_type`, `location_details` | In Person / Video / Phone; video links and phone numbers are shown to booked guests only |
-   | `staff` | Rows `{staff}` — who provides it (at least one) |
+   | `sessions_only` (Only Scheduled Sessions) | A class is offered only at its scheduled Class Sessions (step 6). Off (default): any free grid time opens a session, and scheduled sessions are offered as well |
+   | `staff` | Rows `{staff, priority, weight}` — who provides it (at least one); see "Any staff" below |
    | `resources` | Rows `{resource}` — each booking needs one of them with a free unit (empty = none) |
    | `questions` | Intake questions `{question, answer_type: Text / Long Text / Number / Yes/No / Choice, options (one per line, for Choice), required}` |
+
+6. **Class Sessions** (`BookingSession`, numbered `SES-{YYYY}-{seq:5}`; Bookings Manager creates,
+   changes and deletes, Bookings User reads): one dated session of a group class scheduled before
+   anyone books it, with `service` (a class: more than one seat), `staff` (who gives the service,
+   active), `start_time`, optional `capacity` (its own seats, 1–1000; empty = the service's) and
+   optional `resource` (one of the service's rooms, active; empty = a free room is taken when the
+   first seat is booked). Scheduling refuses a teacher who is not free then (outside hours, time
+   off: a field error on `start_time`; another booking or session in the way, buffers included:
+   409), and a room with no free unit (409). A scheduled session holds its teacher's time and its
+   room from then on, with nobody booked: no other booking or session can take them. Its key is
+   `s/{id}`, shared by every seat booked into it. Afterwards only `capacity` changes by an edit,
+   never below the seats taken; the time, teacher, room and status change only through the
+   session's actions. It is deleted only while nothing is booked or waitlisted in it. Seats booked
+   before at the same time (an ad hoc session) are not taken over: scheduling there is refused.
 
 ## How availability works
 
@@ -77,7 +92,11 @@ Administrators can do everything. Staff without a Bookings role see nothing of t
   it with an exclusion constraint (`bookings_no_double_booking`). Buffers may reach outside
   working hours.
 * Seats of a class session (same service, staff member and start) share one block; a session is
-  full at `capacity` seats. Existing sessions are offered at their own start even off the grid.
+  full at `capacity` seats — a scheduled session's own when it has them. Existing and scheduled
+  sessions are offered at their own start even off the grid; a class with Only Scheduled Sessions
+  offers nothing else ("no session is scheduled then").
+* A scheduled Class Session is busy time for its teacher for every booking that is not one of its
+  seats, and counts on its room while empty.
 * A resource hosts at most `capacity` sessions at any instant; joining a class uses the
   session's resource. The least loaded eligible resource is taken.
 * Guests (public endpoints) book only offered starts — on the grid from the start of each
@@ -242,4 +261,7 @@ busy), purge guest tokens of bookings over for 30 days and claims of bookings ov
 
 Besides the entity tables: `bookings_token` and `bookings_notice` (row-level security like every
 table), the exclusion constraint `bookings_no_double_booking` and the check
-`bookings_active_is_scheduled` on `e_booking` (`sql/001_bookings.sql`).
+`bookings_active_is_scheduled` on `e_booking` (`sql/001_bookings.sql`); the exclusion constraint
+`bookings_sessions_do_not_overlap`, the check `bookings_session_is_scheduled` and the unique key
+`bookings_session_key` on `e_booking_session` (`sql/002_sessions.sql`). A booking and a session
+cannot share one constraint: both lock the teacher's `e_booking_staff` row first.

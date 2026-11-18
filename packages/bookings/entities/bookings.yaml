@@ -143,6 +143,7 @@
     - {name: slot_interval_minutes, type: int, label: Slot Interval (Minutes), min: 5, max: 1440, description: "Empty = Booking Settings"}
     - {name: capacity, type: int, label: Seats, default: 1, required: true, min: 1, max: 1000, in_list: true, description: "1 = one-to-one appointment; more = a group class with this many seats per session"}
     - {name: price, type: currency, default: 0, min: "0", in_list: true, description: "Per seat, in the company currency"}
+    - {name: sessions_only, type: check, label: Only Scheduled Sessions, description: "A group class is offered only at the sessions you schedule (Class Sessions). Off: any free time in working hours opens a session, and scheduled sessions are offered as well"}
     - {name: guest_repeat_max, type: int, label: Guests May Book It Up To, default: 0, min: 0, max: 52, description: "Times in a row a guest may book it on the booking page, every week, 2 weeks, 4 weeks or month, when it is free: 0 or 1 is once"}
     - {name: item, type: link, to: Item, required_if: "doc.price > 0.0", description: "Item bookings are invoiced as (a service item)"}
     - {name: location_type, type: select, options: [In Person, Video, Phone], default: In Person, required: true, in_list: true}
@@ -161,12 +162,43 @@
     - {name: find_slots, label: Find Free Slots, permission: read, hidden: true}
   form:
     - {label: Service, fields: [service_name, active, description, location_type, location_details]}
-    - {label: Time, fields: [duration_minutes, buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, capacity, guest_repeat_max]}
+    - {label: Time, fields: [duration_minutes, buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, capacity, sessions_only, guest_repeat_max]}
     - {label: Price, fields: [price, item]}
     - {label: Staff and Resources, fields: [staff, resources]}
     - {label: Intake Questions, collapsible: true, fields: [questions]}
     - {label: Rules, collapsible: true, fields: [min_notice_minutes, max_advance_days, cancellation_window_hours, reschedule_window_hours, approval_required, reminders]}
   list: {columns: [service_name, duration_minutes, capacity, price, location_type, active], sort: service_name asc}
+
+- name: BookingSession
+  label: Class Session
+  kind: document
+  module: bookings
+  title_field: service_name
+  numbering: {template: "SES-{YYYY}-{seq:5}"}
+  search_fields: [service_name, staff_name]
+  owner_fields: [staff_email]
+  description: "One dated session of a group class, scheduled before anyone books it: its teacher, its seats and its room. It holds the teacher's time from the moment it is scheduled."
+  fields:
+    - {name: service, type: link, to: BookingService, required: true, in_filter: true}
+    - {name: service_name, type: data, read_only: true, in_list: true}
+    - {name: staff, type: link, to: BookingStaff, required: true, in_filter: true}
+    - {name: staff_name, type: data, read_only: true, in_list: true}
+    - {name: staff_email, type: email, read_only: true, hidden: true}
+    - {name: start_time, type: datetime, required: true, in_list: true, in_filter: true}
+    - {name: end_time, type: datetime, read_only: true}
+    - {name: capacity, type: int, label: Seats, min: 1, max: 1000, in_list: true, description: "Empty = the service's seats"}
+    - {name: resource, type: link, to: BookingResource, in_filter: true, description: "The room it is held in. Empty: one of the service's free rooms is taken when the first seat is booked"}
+    - {name: status, type: select, options: [Scheduled, Cancelled], default: Scheduled, read_only: true, in_list: true, in_filter: true}
+    - {name: series, type: data, read_only: true, no_copy: true, in_filter: true, description: "Shared by sessions repeated together"}
+    - {name: cancellation_reason, type: text, read_only: true, no_copy: true}
+    - {name: block_start, type: datetime, read_only: true, hidden: true, no_copy: true}
+    - {name: block_end, type: datetime, read_only: true, hidden: true, no_copy: true}
+    - {name: session_key, type: data, read_only: true, hidden: true, no_copy: true}
+  indexes: [[staff, start_time], [service, start_time], [status, start_time]]
+  form:
+    - {label: Session, fields: [service, staff, start_time, end_time, capacity, resource, status]}
+    - {label: History, collapsible: true, fields: [series, cancellation_reason]}
+  list: {columns: [number, start_time, service_name, staff_name, capacity, status], sort: start_time desc}
 
 - name: BookingAnswer
   label: Intake Answer

@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.14.0
+
+Needs the same platform as 0.13.0. Database: a new entity, Class Session (`e_booking_session`), and
+`sql/002_sessions.sql` (its overlap and key constraints); one field on Booking Service, `sessions_only`. Interface
+rebuilt.
+
+- **Class sessions scheduled ahead.** A manager schedules a dated session of a class (service, teacher, start, its own
+  seats, its room) before anyone books it. From then on it holds its teacher's time and its room: no appointment or
+  other session can take them, and two sessions of one teacher cannot overlap (the database refuses it too). Its
+  seats share its own key, `s/{id}`. Guests are offered it like any time, even off the grid.
+- **Only Scheduled Sessions**, a switch on a class: offered only at its scheduled sessions. Off (the default) the class
+  keeps opening a session at any free time, as before.
+- A session's seats can be changed but never below the seats taken; its time, teacher and room do not change by an
+  edit; it is deleted only while nothing is booked in it. Bookings Managers schedule; Bookings Users read.
+- Not built yet: cancelling, moving and repeating a session as one thing, and unbooked sessions on the schedule.
+
 ## 0.13.0
 
 Needs the same platform as 0.12.0. Database: two fields on Service Staff (`priority`, `weight`). Interface rebuilt.

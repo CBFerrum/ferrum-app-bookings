@@ -2584,3 +2584,164 @@ async fn priorities() {
         .await;
     assert_eq!(rows, ["0/3", "0/1"], "a new row takes the defaults");
 }
+
+#[test]
+fn class_sessions_end_to_end() {
+    run(class_sessions());
+}
+
+/// The field a refusal names.
+fn refused_field(e: &Error) -> String {
+    match e {
+        Error::Validation(list) => list.first().map(|f| f.field.clone()).unwrap_or_default(),
+        other => format!("not a field error: {other:?}"),
+    }
+}
+
+/// A class session scheduled before anyone books it: it holds its teacher's time and its room, is what
+/// guests are offered, keeps its own seats, and nothing is double-booked when requests race.
+async fn class_sessions() {
+    let t = boot("yoga", &[]).await;
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let at = |hhmm: &str| local(ist, day, hhmm);
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let manager = t.user("manager@yoga.test", &["Bookings Manager"]).await;
+    t.insert(
+        &manager,
+        "BookingSettings",
+        json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60, "approval_required": false}),
+    )
+    .await;
+    let person =
+        |name: &str| json!({"display_name": name, "email": format!("{}@yoga.test", name.to_lowercase()), "time_zone": "Asia/Kolkata", "working_hours": every});
+    let asha = uid(&t.insert(&manager, "BookingStaff", person("Asha")).await);
+    let ben = uid(&t.insert(&manager, "BookingStaff", person("Ben")).await);
+    let cara = uid(&t.insert(&manager, "BookingStaff", person("Cara")).await);
+    let studio = uid(&t.insert(&manager, "BookingResource", json!({"resource_name": "Studio 1", "capacity": 1})).await);
+    let yoga = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Yoga", "duration_minutes": 60, "capacity": 10, "price": "0", "sessions_only": true,
+                   "staff": [{"staff": asha.to_string()}, {"staff": ben.to_string()}], "resources": [{"resource": studio.to_string()}]}),
+        )
+        .await);
+    let facial = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Facial", "duration_minutes": 60, "price": "0", "staff": [{"staff": asha.to_string()}, {"staff": ben.to_string()}]}),
+        )
+        .await);
+    let schedule = |who: Uuid, start: DateTime<Utc>, extra: Value| {
+        let (t, manager) = (&t, &manager);
+        async move {
+            let mut v = json!({"service": yoga.to_string(), "staff": who.to_string(), "start_time": rfc(start)});
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            t.k.insert(manager, "BookingSession", obj(v)).await
+        }
+    };
+
+    // ───────────── a session is scheduled, offered and booked ─────────────
+    let ses = schedule(asha, at("17:00"), json!({"capacity": 3, "resource": studio.to_string()})).await.expect("scheduled");
+    let key = ses["session_key"].as_str().unwrap().to_string();
+    assert_eq!(key, format!("s/{}", uid(&ses).simple()));
+    assert_eq!((ses["status"].clone(), ses["staff_name"].clone(), ses["service_name"].clone()), (json!("Scheduled"), json!("Asha"), json!("Yoga")));
+    assert_eq!(ses["end_time"], json!(rfc(at("18:00"))));
+    let slots = t.get_pub(&format!("/slots?service={yoga}&from={day}&to={day}&time_zone=Asia/Kolkata")).await;
+    let offered: Vec<(String, i64)> = slots["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|d| d["slots"].as_array().unwrap().iter())
+        .map(|s| (s["time"].as_str().unwrap().to_string(), s["seats_left"].as_i64().unwrap()))
+        .collect();
+    assert_eq!(offered, [("17:00".to_string(), 3)], "only the scheduled session, with its own seats");
+    let guest =
+        |n: &str| json!({"service": yoga.to_string(), "start_time": rfc(at("17:00")), "name": n, "email": format!("{}@example.test", n.to_lowercase())});
+    for n in ["Ann", "Bo"] {
+        let v = t.book(guest(n)).await.unwrap();
+        let b = t.find_one("Booking", json!({"number": v["booking"]["number"]})).await;
+        assert_eq!(
+            (b["session_key"].as_str().unwrap(), b["staff"].clone(), b["resource"].clone()),
+            (key.as_str(), json!(asha.to_string()), json!(studio.to_string()))
+        );
+    }
+    let refused = t.post_pub("/book", json!({"service": yoga.to_string(), "start_time": rfc(at("10:00")), "name": "Cy", "email": "cy@example.test"})).await;
+    assert!(refused.is_err(), "no session at 10:00: {refused:?}");
+
+    // ───────────── a scheduled session holds its teacher's time against other bookings ─────────────
+    let over = t
+        .k
+        .insert(&manager, "Booking", obj(json!({"service": facial.to_string(), "staff": asha.to_string(), "start_time": rfc(at("16:30")), "guest_name": "X"})))
+        .await
+        .unwrap_err();
+    assert!(matches!(over, Error::Conflict(_)), "{over:?}");
+
+    // ───────────── two requests race to schedule and to book the same time ─────────────
+    for round in 0..10i64 {
+        let start = local(ist, day + Duration::days(1 + round / 8), &format!("{:02}:00", 9 + round % 8));
+        let booking = t.k.insert(
+            &manager,
+            "Booking",
+            obj(json!({"service": facial.to_string(), "staff": ben.to_string(), "start_time": rfc(start), "guest_name": "Racer"})),
+        );
+        let (session, booking) = tokio::join!(schedule(ben, start, json!({})), booking);
+        assert_eq!(session.is_ok() as u8 + booking.is_ok() as u8, 1, "round {round}: exactly one ({session:?}, {booking:?})");
+    }
+
+    // ───────────── two sessions of one teacher cannot overlap ─────────────
+    let clash = schedule(asha, at("16:30"), json!({})).await.unwrap_err();
+    assert!(matches!(clash, Error::Conflict(_)), "{clash:?}");
+    let other = schedule(asha, at("11:00"), json!({})).await.expect("another time");
+    let mut tx = t.k.db.tenant_tx(t.tenant).await.unwrap();
+    let direct = sqlx::query("update e_booking_session set block_start = $3, block_end = $4 where tenant_id = $1 and id = $2")
+        .bind(t.tenant)
+        .bind(uid(&other))
+        .bind(at("17:30"))
+        .bind(at("18:30"))
+        .execute(&mut *tx)
+        .await;
+    assert!(direct.unwrap_err().to_string().contains("bookings_sessions_do_not_overlap"), "the database refuses it too");
+    drop(tx);
+
+    // ───────────── outside hours, on time off, not a class, not their service ─────────────
+    assert_eq!(refused_field(&schedule(asha, at("17:30"), json!({})).await.unwrap_err()), "start_time", "ends after 18:00");
+    t.insert(&manager, "StaffTimeOff", json!({"staff": asha.to_string(), "from_time": rfc(at("13:00")), "to_time": rfc(at("14:00"))})).await;
+    assert_eq!(refused_field(&schedule(asha, at("13:00"), json!({})).await.unwrap_err()), "start_time", "time off");
+    let not_class =
+        t.k.insert(&manager, "BookingSession", obj(json!({"service": facial.to_string(), "staff": asha.to_string(), "start_time": rfc(at("15:00"))}))).await;
+    assert_eq!(refused_field(&not_class.unwrap_err()), "service");
+    assert_eq!(refused_field(&schedule(cara, at("15:00"), json!({})).await.unwrap_err()), "staff", "Cara does not give Yoga");
+
+    // ───────────── seats, deletion and edits ─────────────
+    let sid_ = uid(&ses);
+    let low = t.k.update(&manager, "BookingSession", sid_, obj(json!({"capacity": 1})), None).await.unwrap_err();
+    assert_eq!(refused_field(&low), "capacity", "two seats are taken");
+    t.update(&manager, "BookingSession", sid_, json!({"capacity": 2})).await;
+    assert!(t.k.delete(&manager, "BookingSession", sid_, None).await.is_err(), "it has bookings");
+    let moved = t.k.update(&manager, "BookingSession", sid_, obj(json!({"start_time": rfc(at("15:00"))})), None).await;
+    assert!(moved.is_err(), "the time changes only by moving it");
+    let teacher = t.k.update(&manager, "BookingSession", sid_, obj(json!({"staff": ben.to_string()})), None).await;
+    assert!(teacher.is_err(), "the teacher too");
+    t.k.delete(&manager, "BookingSession", uid(&other), None).await.expect("an empty session can be deleted");
+
+    // ───────────── the last seat is not sold twice ─────────────
+    t.update(&manager, "BookingSession", sid_, json!({"capacity": 3})).await;
+    let (x, y) = tokio::join!(t.site("POST", "/book", Some(guest("Dee"))), t.site("POST", "/book", Some(guest("Eli"))));
+    assert_eq!([&x, &y].iter().filter(|r| r.as_ref().is_ok_and(|r| r.0 == 201)).count(), 1, "one of two gets the last seat: {x:?} {y:?}");
+    let mut late = guest("Fay");
+    late["waitlist"] = json!(true);
+    t.book(late).await.unwrap();
+    assert_eq!(t.find_one("Booking", json!({"guest_email": "fay@example.test"})).await["status"], json!("Waitlisted"));
+    assert_eq!(t.scalar("select coalesce(sum(seats), 0)::bigint from e_booking where tenant_id = $1 and session_key = (select session_key from e_booking_session where id = $2) and status = 'Confirmed'", Some(sid_)).await, 3);
+
+    // ───────────── only a manager schedules ─────────────
+    let ben_user = t.user("ben@yoga.test", &["Bookings User"]).await;
+    let asked =
+        t.k.insert(&ben_user, "BookingSession", obj(json!({"service": yoga.to_string(), "staff": ben.to_string(), "start_time": rfc(at("09:00"))}))).await;
+    assert!(matches!(asked, Err(Error::Forbidden(_))), "{asked:?}");
+    assert!(t.k.update(&ben_user, "BookingSession", sid_, obj(json!({"capacity": 9})), None).await.is_err());
+    assert!(t.k.delete(&ben_user, "BookingSession", sid_, None).await.is_err());
+}

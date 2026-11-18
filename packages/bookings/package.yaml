@@ -9,7 +9,7 @@ modules:
     label: Bookings
     icon: calendar-clock
     order: 48
-    items: [Booking, BookingService, BookingStaff, StaffTimeOff, BookingResource, BookingSettings,
+    items: [Booking, BookingSession, BookingService, BookingStaff, StaffTimeOff, BookingResource, BookingSettings,
             report:bookings_summary, report:bookings_attendance, report:bookings_staff_utilization]
 
 # What a personal-data request exports and erases for a guest (their email): who booked and what
@@ -22,6 +22,7 @@ roles:
     permissions:
       - {entity: Booking, read: true, write: true, create: true, delete: true, export: true, import: true}
       - {entity: BookingService, read: true, write: true, create: true, delete: true, export: true, import: true}
+      - {entity: BookingSession, read: true, write: true, create: true, delete: true, export: true}
       - {entity: BookingStaff, read: true, write: true, create: true, delete: true, export: true}
       - {entity: StaffTimeOff, read: true, write: true, create: true, delete: true, export: true}
       - {entity: BookingResource, read: true, write: true, create: true, delete: true}
@@ -35,6 +36,7 @@ roles:
     description: A staff member taking appointments — sees and works their own bookings (assigned to them or made by them) and enters their own time off.
     permissions:
       - {entity: Booking, read: true, write: true, create: true, if_owner: true}
+      - {entity: BookingSession, read: true}
       - {entity: BookingService, read: true}
       - {entity: BookingStaff, read: true}
       - {entity: StaffTimeOff, read: true, write: true, create: true, delete: true, if_owner: true}

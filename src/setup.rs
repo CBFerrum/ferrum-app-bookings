@@ -151,7 +151,7 @@ impl DocHook for StaffHook {
         if old.get("email") == doc.get("email") && old.get("display_name") == doc.get("display_name") {
             return Ok(());
         }
-        for table in ["e_booking", "e_staff_time_off"] {
+        for table in ["e_booking", "e_staff_time_off", "e_booking_session"] {
             sqlx::query(sqlx::AssertSqlSafe(format!("update {table} set staff_email = $3, staff_name = $4 where tenant_id = $1 and staff = $2")))
                 .bind(hc.ctx.tenant)
                 .bind(doc_id(doc)?)

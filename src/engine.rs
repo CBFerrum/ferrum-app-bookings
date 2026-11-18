@@ -227,6 +227,23 @@ pub struct Service {
     /// Seats per session: 1 = one-to-one.
     pub capacity: i64,
     pub interval: Duration,
+    /// A class offered only at its scheduled sessions (no session opens at a free grid time).
+    pub sessions_only: bool,
+}
+
+/// A class session scheduled before anyone books it (`BookingSession`): it holds its teacher's time,
+/// and its room when it names one, whether or not a seat is booked.
+#[derive(Debug, Clone)]
+pub struct Declared {
+    /// Its own key (`s/{id}`), shared by every seat booked into it.
+    pub key: String,
+    pub staff: Uuid,
+    pub service: Uuid,
+    pub span: Span,
+    pub block: Span,
+    /// Its own seats; `None`: the service's.
+    pub capacity: Option<i64>,
+    pub resource: Option<Uuid>,
 }
 
 /// Limits on starts: notice and advance windows (public bookings), and whether a start must be a
@@ -251,6 +268,8 @@ pub enum Why {
     Elsewhere,
     Full,
     NoResource,
+    /// The class is offered only at scheduled sessions, and none is at that time.
+    NoSession,
 }
 
 impl Why {
@@ -266,6 +285,7 @@ impl Why {
             Why::Elsewhere => "busy in their own calendar",
             Why::Full => "the class is full",
             Why::NoResource => "no room or equipment is free then",
+            Why::NoSession => "no session is scheduled then",
         }
     }
 }
@@ -305,6 +325,8 @@ pub struct World {
     pub resources: Vec<Resource>,
     pub booked: Vec<Booked>,
     pub rules: Rules,
+    /// Scheduled class sessions of any service that hold these staff members' time or these resources.
+    pub sessions: Vec<Declared>,
 }
 
 /// The fair choice: join an existing class session first (classes fill up); otherwise the highest
@@ -330,10 +352,58 @@ impl World {
         self.service.capacity > 1
     }
 
+    /// The scheduled session of this world's service with `staff` starting at `start`.
+    fn declared(&self, staff: Uuid, start: Instant) -> Option<&Declared> {
+        self.sessions.iter().find(|d| d.service == self.service.id && d.staff == staff && d.span.start == start)
+    }
+
     /// The key every seat of one class session shares (the exclusion constraint lets equal keys
-    /// overlap).
+    /// overlap): a scheduled session's own, else one made of service, staff and start.
     pub fn session_key(&self, staff: Uuid, start: Instant) -> String {
-        format!("{}/{}/{}", self.service.id.simple(), staff.simple(), start.timestamp())
+        match self.declared(staff, start) {
+            Some(d) => d.key.clone(),
+            None => format!("{}/{}/{}", self.service.id.simple(), staff.simple(), start.timestamp()),
+        }
+    }
+
+    /// Whether `staff` is free for this service at `start`: inside working time, not on time off, no
+    /// booking or scheduled session of another key in the way (`key`: the session the time is for),
+    /// not busy in their own calendar. Seats, rooms and the booking rules are [`World::check`]'s.
+    pub fn free_at(&self, staff: Uuid, start: Instant, key: Option<&str>) -> Result<(), Why> {
+        let s = self.staff.iter().find(|s| s.id == staff).ok_or(Why::OutsideHours)?;
+        let around = Span::new(start - Duration::days(1), start + self.service.duration + Duration::days(1));
+        self.free(s, &s.spans(around), &self.mine(staff), start, key)
+    }
+
+    fn free(&self, staff: &Staff, spans: &[Span], mine: &[&Booked], start: Instant, key: Option<&str>) -> Result<(), Why> {
+        let svc = &self.service;
+        let appt = Span::new(start, start + svc.duration);
+        if !spans.iter().any(|w| w.contains(&appt)) {
+            return Err(Why::OutsideHours);
+        }
+        if staff.time_off.iter().any(|t| t.overlaps(&appt)) {
+            return Err(Why::TimeOff);
+        }
+        let block = Span::new(start - svc.before, appt.end + svc.after);
+        let other = |k: &str| key != Some(k);
+        if mine.iter().any(|b| b.block.overlaps(&block) && other(&b.session))
+            || self.sessions.iter().any(|d| d.staff == staff.id && d.block.overlaps(&block) && other(&d.key))
+        {
+            return Err(Why::Busy);
+        }
+        if staff.busy.iter().any(|b| b.overlaps(&block)) {
+            return Err(Why::Elsewhere);
+        }
+        Ok(())
+    }
+
+    /// Whether `room` is open for `appt` with a unit free throughout `block`, not counting the session `except`.
+    pub fn room_free(&self, room: Uuid, appt: Span, block: Span, except: Option<&str>) -> bool {
+        match self.resources.iter().find(|r| r.id == room) {
+            Some(r) => r.open.as_ref().is_none_or(|o| o.iter().any(|w| w.contains(&appt))) && self.load(room, block, except) < r.capacity,
+            // ponytail: no longer one of the service's rooms; the session has held it since it was scheduled.
+            None => true,
+        }
     }
 
     fn mine(&self, staff: Uuid) -> Vec<&Booked> {
@@ -343,7 +413,9 @@ impl World {
     /// Whether `staff` (with working time `spans` and bookings `mine`) can take `seats` at `start`.
     fn check(&self, staff: &Staff, spans: &[Span], mine: &[&Booked], start: Instant, seats: i64) -> Result<Candidate, Why> {
         let svc = &self.service;
-        if seats < 1 || seats > svc.capacity {
+        let declared = self.declared(staff.id, start);
+        let capacity = declared.and_then(|d| d.capacity).unwrap_or(svc.capacity);
+        if seats < 1 || seats > capacity {
             return Err(Why::TooManySeats);
         }
         if self.rules.earliest.is_some_and(|e| start < e) {
@@ -360,26 +432,26 @@ impl World {
             None => vec![],
         };
         let join = !session.is_empty();
+        if self.group() && svc.sessions_only && declared.is_none() && !join {
+            return Err(Why::NoSession);
+        }
         let step = svc.interval.num_seconds().max(60);
-        if self.rules.on_grid && !join && (start - work.start).num_seconds() % step != 0 {
+        if self.rules.on_grid && !join && declared.is_none() && (start - work.start).num_seconds() % step != 0 {
             return Err(Why::OffGrid);
         }
-        if staff.time_off.iter().any(|t| t.overlaps(&appt)) {
-            return Err(Why::TimeOff);
-        }
+        self.free(staff, spans, mine, start, key.as_deref())?;
         let block = Span::new(start - svc.before, appt.end + svc.after);
-        if mine.iter().any(|b| b.block.overlaps(&block) && key.as_ref() != Some(&b.session)) {
-            return Err(Why::Busy);
-        }
-        if staff.busy.iter().any(|b| b.overlaps(&block)) {
-            return Err(Why::Elsewhere);
-        }
         let taken: i64 = session.iter().map(|b| b.seats).sum();
-        if taken + seats > svc.capacity {
+        if taken + seats > capacity {
             return Err(Why::Full);
         }
         let resource = if join {
             session.iter().find_map(|b| b.resource)
+        } else if let Some(room) = declared.and_then(|d| d.resource) {
+            if !self.room_free(room, appt, block, key.as_deref()) {
+                return Err(Why::NoResource);
+            }
+            Some(room)
         } else if self.resources.is_empty() {
             None
         } else {
@@ -390,12 +462,15 @@ impl World {
         for b in mine.iter().filter(|b| day.holds(b.span.start)) {
             day_load.insert(&b.session, b.span.minutes());
         }
+        for d in self.sessions.iter().filter(|d| d.staff == staff.id && day.holds(d.span.start)) {
+            day_load.entry(&d.key).or_insert(d.span.minutes());
+        }
         Ok(Candidate {
             staff: staff.id,
             resource,
             session: key,
             join,
-            seats_left: svc.capacity - taken,
+            seats_left: capacity - taken,
             day_sessions: day_load.len(),
             day_minutes: day_load.values().sum(),
             priority: staff.priority,
@@ -403,17 +478,28 @@ impl World {
         })
     }
 
-    /// Sessions using `resource` at the busiest instant of `window`.
+    /// Sessions using `resource` at the busiest instant of `window`, scheduled ones with nobody booked included.
     pub fn resource_load(&self, resource: Uuid, window: Span) -> i64 {
+        self.load(resource, window, None)
+    }
+
+    fn load(&self, resource: Uuid, window: Span, except: Option<&str>) -> i64 {
         let mut sessions: HashMap<&str, Span> = HashMap::new();
-        for b in self.booked.iter().filter(|b| b.resource == Some(resource) && b.block.overlaps(&window)) {
+        let held = self
+            .booked
+            .iter()
+            .filter(|b| b.resource == Some(resource))
+            .map(|b| (b.session.as_str(), b.block))
+            .chain(self.sessions.iter().filter(|d| d.resource == Some(resource)).map(|d| (d.key.as_str(), d.block)))
+            .filter(|(key, block)| block.overlaps(&window) && except != Some(*key));
+        for (key, block) in held {
             sessions
-                .entry(&b.session)
+                .entry(key)
                 .and_modify(|s| {
-                    s.start = s.start.min(b.block.start);
-                    s.end = s.end.max(b.block.end);
+                    s.start = s.start.min(block.start);
+                    s.end = s.end.max(block.end);
                 })
-                .or_insert(b.block);
+                .or_insert(block);
         }
         let mut events: Vec<(Instant, i64)> = sessions
             .values()
@@ -466,7 +552,8 @@ impl World {
             let spans = s.spans(window);
             let mine = self.mine(s.id);
             let mut starts = Vec::new();
-            for w in &spans {
+            // A class offered only at its scheduled sessions opens none at a grid time.
+            for w in spans.iter().filter(|_| !(self.group() && svc.sessions_only)) {
                 let mut t = w.start;
                 while t + svc.duration <= w.end {
                     if window.holds(t) {
@@ -481,6 +568,7 @@ impl World {
                         .filter(|b| b.service == svc.id && window.holds(b.span.start) && b.session == self.session_key(s.id, b.span.start))
                         .map(|b| b.span.start),
                 );
+                starts.extend(self.sessions.iter().filter(|d| d.service == svc.id && d.staff == s.id && window.holds(d.span.start)).map(|d| d.span.start));
             }
             starts.sort();
             starts.dedup();
@@ -515,7 +603,7 @@ impl World {
                 if self.check(s, &spans, &mine, start, seats) == Err(Why::Full) {
                     let key = self.session_key(s.id, start);
                     let taken: i64 = mine.iter().filter(|b| b.session == key).map(|b| b.seats).sum();
-                    out.push((start, s.id, (self.service.capacity - taken).max(0)));
+                    out.push((start, s.id, (self.capacity_at(s.id, start) - taken).max(0)));
                 }
             }
         }
@@ -533,8 +621,14 @@ impl World {
             let key = self.session_key(s.id, start);
             let rows: Vec<&Booked> = self.booked.iter().filter(|b| b.session == key).collect();
             let taken: i64 = rows.iter().map(|b| b.seats).sum();
-            (taken > 0 && taken + seats > self.service.capacity).then(|| (s.id, rows.iter().find_map(|b| b.resource), key))
+            let room = rows.iter().find_map(|b| b.resource).or_else(|| self.declared(s.id, start).and_then(|d| d.resource));
+            (taken > 0 && taken + seats > self.capacity_at(s.id, start)).then_some((s.id, room, key))
         })
+    }
+
+    /// Seats of the session `staff` holds at `start`: a scheduled session's own, else the service's.
+    fn capacity_at(&self, staff: Uuid, start: Instant) -> i64 {
+        self.declared(staff, start).and_then(|d| d.capacity).unwrap_or(self.service.capacity)
     }
 }
 
@@ -576,11 +670,29 @@ mod tests {
             after: Duration::minutes(after),
             capacity,
             interval: Duration::minutes(interval),
+            sessions_only: false,
         }
     }
 
     fn world(svc: Service, staff: Vec<Staff>) -> World {
-        World { service: svc, staff, resources: vec![], booked: vec![], rules: Rules::default() }
+        World { service: svc, staff, resources: vec![], booked: vec![], rules: Rules::default(), sessions: vec![] }
+    }
+
+    /// A session scheduled the way `BookingSession` schedules one; its key.
+    fn declare(w: &mut World, staff: u128, start: &str, capacity: Option<i64>, resource: Option<u128>) -> String {
+        let s = t(start);
+        let svc = w.service.clone();
+        let key = format!("s/{}", Uuid::now_v7().simple());
+        w.sessions.push(Declared {
+            key: key.clone(),
+            staff: uid(staff),
+            service: svc.id,
+            span: Span::new(s, s + svc.duration),
+            block: Span::new(s - svc.before, s + svc.duration + svc.after),
+            capacity,
+            resource: resource.map(uid),
+        });
+        key
     }
 
     /// A booking made the way the engine would make it.
@@ -951,6 +1063,115 @@ mod tests {
             assert_eq!(pick(&list).unwrap().staff, first);
         }
         assert_eq!(first, uid(2), "priority 1, fewest per unit of weight (2 has none; 1 and 3 have one per 2)");
+    }
+
+    #[test]
+    fn only_scheduled_sessions_are_offered_when_the_class_says_so() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let mut svc = service(60, 0, 0, 10, 60);
+        svc.sessions_only = true;
+        let mut w = world(svc, vec![staff(1, utc, every_day("09:00", "17:00"))]);
+        declare(&mut w, 1, "2026-06-01T10:30:00Z", None, None);
+        let day = local_day(utc, d(2026, 6, 1));
+        assert_eq!(starts(&w.slots(day, 1)), ["2026-06-01T10:30Z"], "the session, though off the grid; no grid time");
+        assert_eq!(why(&w, "2026-06-01T13:00:00Z"), [Why::NoSession]);
+        w.rules.on_grid = true;
+        assert!(w.candidates_at(t("2026-06-01T10:30:00Z"), 1).1.is_empty(), "a session is never off the grid");
+    }
+
+    #[test]
+    fn a_scheduled_session_is_offered_beside_the_grid() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let mut w = world(service(60, 0, 0, 10, 60), vec![staff(1, utc, every_day("09:00", "14:00"))]);
+        declare(&mut w, 1, "2026-06-01T10:30:00Z", None, None);
+        let day = local_day(utc, d(2026, 6, 1));
+        // 10:00 and 11:00 would open other sessions over the scheduled one.
+        assert_eq!(starts(&w.slots(day, 1)), ["2026-06-01T09:00Z", "2026-06-01T10:30Z", "2026-06-01T12:00Z", "2026-06-01T13:00Z"]);
+    }
+
+    #[test]
+    fn a_scheduled_session_holds_its_teachers_time() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let mut w = world(service(30, 0, 15, 1, 30), vec![staff(1, utc, every_day("09:00", "17:00"))]);
+        let at = t("2026-06-01T10:00:00Z");
+        // A yoga class of another service, 10:00 to 11:00, nobody booked yet.
+        w.sessions.push(Declared {
+            key: "s/yoga".into(),
+            staff: uid(1),
+            service: uid(901),
+            span: Span::new(at, at + Duration::hours(1)),
+            block: Span::new(at, at + Duration::hours(1)),
+            capacity: None,
+            resource: None,
+        });
+        assert_eq!(why(&w, "2026-06-01T09:30:00Z"), [Why::Busy], "its buffer after reaches 10:15");
+        assert_eq!(why(&w, "2026-06-01T10:30:00Z"), [Why::Busy]);
+        assert!(why(&w, "2026-06-01T09:15:00Z").is_empty(), "ends at 10:00 with its buffer: touching is free");
+        assert!(why(&w, "2026-06-01T11:00:00Z").is_empty());
+        assert_eq!(w.free_at(uid(1), t("2026-06-01T10:30:00Z"), None), Err(Why::Busy));
+        assert_eq!(w.free_at(uid(1), t("2026-06-01T11:00:00Z"), None), Ok(()));
+        assert_eq!(w.free_at(uid(1), t("2026-06-01T08:00:00Z"), None), Err(Why::OutsideHours));
+    }
+
+    #[test]
+    fn a_sessions_own_seats_decide() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let mut w = world(service(60, 0, 0, 10, 60), vec![staff(1, utc, every_day("09:00", "17:00"))]);
+        declare(&mut w, 1, "2026-06-01T10:00:00Z", Some(3), None);
+        let left = |w: &World| w.candidates_at(t("2026-06-01T10:00:00Z"), 1).0.first().map(|c| c.seats_left);
+        assert_eq!(left(&w), Some(3));
+        book(&mut w, 1, "2026-06-01T10:00:00Z", 1, None);
+        assert_eq!(left(&w), Some(2));
+        book(&mut w, 1, "2026-06-01T10:00:00Z", 2, None);
+        assert_eq!(why(&w, "2026-06-01T10:00:00Z"), [Why::Full], "the fourth seat of three");
+        declare(&mut w, 1, "2026-06-01T12:00:00Z", Some(12), None);
+        assert_eq!(w.candidates_at(t("2026-06-01T12:00:00Z"), 12).0.len(), 1, "twelve on a service of ten");
+        assert_eq!(w.candidates_at(t("2026-06-01T12:00:00Z"), 13).1, [(uid(1), Why::TooManySeats)]);
+    }
+
+    #[test]
+    fn a_sessions_room_is_the_one_it_names() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let h = || every_day("09:00", "17:00");
+        let mut w = world(service(60, 0, 0, 10, 60), vec![staff(1, utc, h()), staff(2, utc, h())]);
+        w.resources = vec![Resource { id: uid(61), capacity: 1, open: None }, Resource { id: uid(62), capacity: 1, open: None }];
+        declare(&mut w, 1, "2026-06-01T10:00:00Z", None, Some(62));
+        let (ok, _) = w.candidates_at(t("2026-06-01T10:00:00Z"), 1);
+        assert_eq!(ok.iter().find(|c| c.staff == uid(1)).map(|c| c.resource), Some(Some(uid(62))), "its own room, not the least loaded");
+        let window = Span::new(t("2026-06-01T10:00:00Z"), t("2026-06-01T11:00:00Z"));
+        assert_eq!(w.resource_load(uid(62), window), 1, "held while nobody has booked");
+        assert_eq!(ok.iter().find(|c| c.staff == uid(2)).map(|c| c.resource), Some(Some(uid(61))), "another session takes the other room");
+        // Room 61 taken by another staff member's session at that time: a session naming it cannot fill.
+        book(&mut w, 2, "2026-06-01T12:00:00Z", 1, Some(61));
+        declare(&mut w, 1, "2026-06-01T12:00:00Z", None, Some(61));
+        assert_eq!(why(&w, "2026-06-01T12:00:00Z"), [Why::NoResource]);
+    }
+
+    #[test]
+    fn the_key_of_a_scheduled_session_is_its_own() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let mut w = world(service(60, 0, 0, 10, 60), vec![staff(1, utc, every_day("09:00", "17:00"))]);
+        let key = declare(&mut w, 1, "2026-06-01T10:00:00Z", None, None);
+        assert_eq!(w.session_key(uid(1), t("2026-06-01T10:00:00Z")), key);
+        let (ok, _) = w.candidates_at(t("2026-06-01T10:00:00Z"), 1);
+        assert_eq!((ok[0].session.clone(), ok[0].join), (Some(key.clone()), false));
+        book(&mut w, 1, "2026-06-01T10:00:00Z", 1, None);
+        assert_eq!(w.booked[0].session, key);
+        let (ok, _) = w.candidates_at(t("2026-06-01T10:00:00Z"), 1);
+        assert_eq!((ok[0].session.clone(), ok[0].join, ok[0].day_sessions), (Some(key), true, 1));
+        assert_ne!(w.session_key(uid(1), t("2026-06-01T12:00:00Z")), w.session_key(uid(1), t("2026-06-01T10:00:00Z")));
+    }
+
+    #[test]
+    fn a_full_scheduled_session_can_be_waitlisted() {
+        let utc: Tz = "UTC".parse().unwrap();
+        let mut w = world(service(60, 0, 0, 10, 60), vec![staff(1, utc, every_day("09:00", "17:00"))]);
+        w.resources = vec![Resource { id: uid(61), capacity: 1, open: None }];
+        let key = declare(&mut w, 1, "2026-06-01T10:00:00Z", Some(2), Some(61));
+        book(&mut w, 1, "2026-06-01T10:00:00Z", 2, Some(61));
+        assert_eq!(w.full_session(t("2026-06-01T10:00:00Z"), 1), Some((uid(1), Some(uid(61)), key)));
+        let day = local_day(utc, d(2026, 6, 1));
+        assert_eq!(w.full_sessions(day, 1), [(t("2026-06-01T10:00:00Z"), uid(1), 0)]);
     }
 
     #[test]

@@ -255,6 +255,7 @@ mod tests {
             questions: vec![],
             guest_repeats: 0,
             rules,
+            sessions_only: false,
         };
         let same = ws.for_service(&svc(ServiceRules::default()));
         assert_eq!(

@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.13.0-0e7490?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.14.0-0e7490?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -37,13 +37,13 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 
 | | |
 |---|---|
-| **Version** | 0.13.0 (Booking Deposits connector 0.3.0) |
+| **Version** | 0.14.0 (Booking Deposits connector 0.3.0) |
 | **Kind** | Its own interface at `/bookings/` for the team, and a public booking page at `/bookings/book/{workspace}`. Records open in the platform's records screens |
-| **What it adds** | 12 entities (6 you work with, 6 that sit inside them), 2 roles, 3 reports, 1 menu module, 2 packages (`bookings`, `bookings_payments`), 1 payments connector, 1 SQL file |
+| **What it adds** | 13 entities (7 you work with, 6 that sit inside them), 2 roles, 3 reports, 1 menu module, 2 packages (`bookings`, `bookings_payments`), 1 payments connector, 2 SQL files |
 | **Depends on** | Ferrum platform `>=0.4.0, <0.5` and [ERP](https://github.com/CBFerrum/ferrum-app-erp) `>=0.1` (installing Bookings installs ERP) |
 | **Works with** | Mail, Chat and Calendar (Comms) for emails, calendar invitations and video meetings, Commerce for deposits, ERP for customers, items and invoices, platform working calendars for holidays |
 | **Languages** | English, Arabic, Hindi (about 380 interface words each, and 250 names each) |
-| **Tests** | 62 Rust tests, 86 interface tests |
+| **Tests** | 70 Rust tests, 86 interface tests |
 | **Licence** | AGPL-3.0-only |
 
 ## 📸 Screenshots
@@ -100,6 +100,7 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 ### 🗓️ Services and classes
 
 - **Appointments and group classes.** A service is one seat (an appointment) or many seats per session (a class). Seats are set per service, from 1 to 1000.
+- **Class sessions scheduled ahead.** A manager schedules a dated session of a class ("Yoga, Monday 18:00, with Asha, 12 seats, Studio 1") before anyone books it. It holds its teacher's time and its room from that moment, has its own seats, and is what guests are offered. A class can be set to be offered only at its scheduled sessions; otherwise any free time in working hours still opens one.
 - **Time and buffers.** Duration from 5 minutes to 24 hours, a buffer kept free before and another after each booking, and a slot interval that decides which start times are offered. Each service may override the workspace's interval.
 - **Price and item.** A price per seat in the company currency. A priced service names the ERP item it is invoiced as.
 - **Where it happens.** In person, by video or by phone, with an address, link or number that only a booked guest sees.
@@ -240,7 +241,8 @@ Everything Bookings adds is ordinary Ferrum metadata and Rust. Its records get l
 | Entity | What it is | Key fields or states |
 |---|---|---|
 | **Booking** | An appointment or a seat in a class | Service, staff, start and end, seats, status, source (Internal or Public), series, resource, customer, guest details, intake answers, amount, sales invoice, clash marks |
-| **Booking Service** | What guests book | Duration, buffers, interval, seats, price and item, location, staff, resources, intake questions, rules |
+| **Class Session** | A dated session of a class, scheduled before anyone books it | Service, teacher, start and end, its own seats, room, Scheduled or Cancelled, series |
+| **Booking Service** | What guests book | Duration, buffers, interval, seats, only scheduled sessions, price and item, location, staff, resources, intake questions, rules |
 | **Booking Staff** | Someone guests book | Display name, email, IANA time zone, working hours, working calendar, outside calendar address, bio |
 | **Staff Time Off** | Time a person cannot be booked | Staff, from, to, reason, conflicting bookings |
 | **Booking Resource** | A room or equipment | Type, capacity, working calendar, active |
@@ -310,7 +312,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 | Zapier and Make connectors | ❌ | ✅ | ✅ | 🟡 | ✅ | ✅ |
 | API and webhooks | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-<sub>¹ Cal.com has an open core with commercial enterprise features. ² Included in some Microsoft 365 plans. ³ Through integrations or exports, not one data set. ⁴ A class is a service with seats; a session exists once its first seat is booked, and any time inside working hours is offered. ⁵ Free services only. A paid series is booked one at a time. ⁶ Needs Commerce and a payment gateway plugin; refunds are approved by a person. ⁷ Needs the Mail app. ⁸ Bookings reach a calendar by a signed feed, and busy times are read from an iCalendar address every 15 minutes. ⁹ Meetings are made in Ferrum Comms, not Zoom, Meet or Teams.</sub>
+<sub>¹ Cal.com has an open core with commercial enterprise features. ² Included in some Microsoft 365 plans. ³ Through integrations or exports, not one data set. ⁴ Sessions are scheduled ahead as records with their own seats, teacher and room; cancelling, moving and repeating one as a whole, and seeing unbooked ones on the schedule, are not built yet. ⁵ Free services only. A paid series is booked one at a time. ⁶ Needs Commerce and a payment gateway plugin; refunds are approved by a person. ⁷ Needs the Mail app. ⁸ Bookings reach a calendar by a signed feed, and busy times are read from an iCalendar address every 15 minutes. ⁹ Meetings are made in Ferrum Comms, not Zoom, Meet or Teams.</sub>
 
 ### 🏆 Where Bookings stands out
 
@@ -338,6 +340,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 
 ### ✅ Recently shipped
 
+- [x] **0.14.0:** a class session is a record, scheduled before anyone books it, holding its teacher's time and room; a class can be offered only at its scheduled sessions.
 - [x] **0.13.0:** a service's staff rows carry a priority and a weight: a guest who picks nobody gets the highest priority free, and equal priorities share the day by weight.
 - [x] **0.12.0:** a workspace can switch on Remind Staff Too: the booked staff member is reminded at each reminder time, once per appointment or class session.
 - [x] **0.11.0:** every guest email and staff notice is a message template a workspace edits and translates; a guest waiting for a deposit is told to pay, with a link; the guest's language is kept.

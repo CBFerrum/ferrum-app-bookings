@@ -643,6 +643,7 @@ mod tests {
             questions,
             guest_repeats: 0,
             rules: Default::default(),
+            sessions_only: false,
         }
     }
 
