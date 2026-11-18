@@ -5,12 +5,12 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarPlus, CircleCheck, Hourglass, CalendarX, Mail } from "lucide-react";
-import { type ReactNode, useEffect, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router";
 import { errorMessage, t, isolate } from "@ferrum/client";
 import { Alert, Badge, Button, Dialog, Field, toast, useShellTitle, placed } from "@ferrum/kit";
 import { clockText, dayOf, dayText, whenText, zoneText } from "../zone";
-import { calendarLinks, type GuestBooking, isLink, isTaken, priceText } from "./booking";
+import { calendarLinks, depositDue, type GuestBooking, isLink, isTaken, payLink, pollEvery, priceText } from "./booking";
 import { ClockSwitch, Closed, Frame, Loading, useDisplay } from "./Frame";
 import { Pop } from "../Pop";
 import { Picker } from "./Picker";
@@ -200,6 +200,8 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
   const [mode, setMode] = useState<"view" | "move">("view");
   const [cancelling, setCancelling] = useState(false);
   const key = ["gb-mine", tenant, token];
+  // The payment page appears a moment after booking, and the payment arrives later still: ask again while either is awaited.
+  const opened = useRef(Date.now());
   const q = useQuery({
     queryKey: key,
     queryFn: ({ signal }) => site.mine(tenant, token, signal).then((r) => r.booking),
@@ -208,6 +210,7 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
     staleTime: state?.booking ? 30_000 : 0,
     retry: false,
     refetchOnWindowFocus: true,
+    refetchInterval: (query) => pollEvery(query.state.data, Date.now() - opened.current),
   });
   const b = q.data;
   // The price is written in the business's currency, which the booking itself does not carry.
@@ -223,13 +226,16 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
   if (q.error) return <Frame><Closed error={q.error} what="link" home={home} onRetry={() => void q.refetch()} /></Frame>;
   if (!b) return <Frame><Loading label={t("Finding your booking")} /></Frame>;
 
-  const head = HEAD[b.status];
+  const due = depositDue(b);
+  const link = payLink(b);
+  const head = due && b.status === "Pending" ? { ...HEAD.Pending, title: t("Pay the deposit to confirm") } : HEAD[b.status];
   const fresh = !!state?.fresh && (b.status === "Confirmed" || b.status === "Pending" || b.status === "Waitlisted");
   const start = Date.parse(b.start_time);
   const end = Date.parse(b.end_time);
   const active = b.status === "Confirmed" || b.status === "Pending";
   const until = (iso?: string | null) => (iso ? `${dayText(dayOf(Date.parse(iso), b.time_zone), { weekday: "short", day: "numeric", month: "short" })}, ${clockText(Date.parse(iso), b.time_zone, hour12)}` : "");
   const update = (next: GuestBooking) => qc.setQueryData(key, next);
+  const amount = b.deposit ? isolate(priceText(b.deposit.amount, b.deposit.currency)) : "";
 
   if (mode === "move") {
     return (
@@ -273,13 +279,25 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
                 </ul>
               </div>
             )}
-            {b.status === "Pending" && !fresh && <p className="muted">{t("The business will confirm it by email. The time is held for you meanwhile.")}</p>}
+            {b.status === "Pending" && due && (
+              <p className="muted">
+                {b.deposit?.pay_by
+                  ? t("A deposit of {amount} confirms this booking. The time is held for you until {time}.", { amount, time: isolate(until(b.deposit.pay_by)) })
+                  : t("A deposit of {amount} confirms this booking. The time is held for you meanwhile.", { amount })}
+              </p>
+            )}
+            {b.status === "Pending" && !due && !fresh && <p className="muted">{t("The business will confirm it by email. The time is held for you meanwhile.")}</p>}
             {b.status === "Waitlisted" && (
               <p className="muted">
                 {(b.waitlist_position ? t("You are number {waitlist_position} in line. We will email you if a seat becomes free.", { waitlist_position: b.waitlist_position }) : t("We will email you if a seat becomes free."))}
               </p>
             )}
-            {b.status === "Expired" && <p className="muted">{t("Its deposit was not paid in time, so its time was released.")}</p>}
+            {b.status === "Expired" && (
+              <p className="muted">
+                {t("Its deposit was not paid in time, so its time was released.")}
+                {due && <> {t("If you pay the deposit now, the booking is confirmed when the time is still free. If it is taken, the deposit is refunded.")}</>}
+              </p>
+            )}
             {b.status === "Cancelled" && b.cancellation_reason && <p className="muted">{t("Reason given: {cancellation_reason}", { cancellation_reason: b.cancellation_reason })}</p>}
           </div>
         </header>
@@ -332,6 +350,12 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
                 <dd>{isolate(priceText(b.amount, catalog.data?.currency ?? null))}</dd>
               </div>
             )}
+            {b.deposit?.status === "Paid" && (
+              <div>
+                <dt>{t("Deposit paid")}</dt>
+                <dd>{amount}</dd>
+              </div>
+            )}
             <div>
               <dt>{t("Booked by")}</dt>
               <dd>
@@ -357,6 +381,26 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
           </dl>
         </div>
 
+        {b.deposit?.status === "Failed" && (b.status === "Pending" || b.status === "Expired") && (
+          <Alert tone="error">{t("The payment did not go through. Please get in touch with the business.")}</Alert>
+        )}
+        {due && (
+          <div className="gb-deposit">
+            {link ? (
+              <a className="btn btn-primary btn-md" href={link}>
+                {t("Pay the deposit")} {amount}
+              </a>
+            ) : Date.now() - opened.current < 60_000 ? (
+              <p role="status" aria-live="polite" className="muted">
+                {t("Preparing the payment page…")}
+              </p>
+            ) : (
+              <p role="status" aria-live="polite" className="muted">
+                {t("The payment page is taking longer than usual. Keep this page open, or come back later with the link in your email.")}
+              </p>
+            )}
+          </div>
+        )}
         {active && b.clash && (
           <p className="gb-windows" role="status">
             {t("Your host is no longer free at this time.")}{" "}

@@ -679,6 +679,12 @@
   gap: 0.5rem;
 }
 
+.gb-deposit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 .gb-menu .pop-body {
   min-width: 17rem;
 }

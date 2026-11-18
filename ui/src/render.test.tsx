@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import type { Bk } from "./board";
 import type { Meta } from "./data";
 import { BookPage } from "./guest/Book";
-import type { Catalog, GuestBooking } from "./guest/booking";
+import type { Catalog, Deposit, GuestBooking } from "./guest/booking";
 import { ManagePage } from "./guest/Manage";
 import { MonthGrid, Times } from "./guest/Picker";
 import { NewBooking } from "./NewBooking";
@@ -179,6 +179,51 @@ describe("a guest's own booking", () => {
 
   it("waits for the business to confirm a pending booking", () => {
     expect(show(booking({ status: "Pending" }))).toContain("Waiting for confirmation");
+  });
+
+  describe("with a deposit", () => {
+    const deposit = (status: Deposit["status"], payment_url: string | null = "https://pay.test/s/1"): Deposit => ({ amount: "300.00", currency: "INR", status, payment_url, kept: null, pay_by: null });
+
+    it("asks for the deposit and links to the payment page while it is due", () => {
+      const html = show(booking({ status: "Pending", deposit: deposit("Initiated") }));
+      expect(html).toContain("Pay the deposit");
+      expect(html).toContain('href="https://pay.test/s/1"');
+      expect(html).toContain("300");
+      expect(html).not.toContain("Waiting for confirmation");
+      expect(html).not.toContain("The business will confirm it by email");
+    });
+
+    it("says the payment page is being prepared", () => {
+      const html = show(booking({ status: "Pending", deposit: deposit("Initiated", null) }));
+      expect(html).toContain("Preparing the payment page");
+      expect(html).not.toContain('href="https://pay');
+    });
+
+    it("never links to an address that is not https", () => {
+      for (const bad of ["javascript:alert(1)", "http://x.test"]) {
+        const html = show(booking({ status: "Pending", deposit: deposit("Initiated", bad) }));
+        expect(html).not.toContain(`href="${bad}"`);
+        expect(html).toContain("Preparing the payment page");
+      }
+    });
+
+    it("still offers the payment after the time was released", () => {
+      const html = show(booking({ status: "Expired", can_cancel: false, can_reschedule: false, location: null, deposit: deposit("Initiated") }));
+      expect(html).toContain("This booking expired");
+      expect(html).toContain("If you pay the deposit now");
+      expect(html).toContain('href="https://pay.test/s/1"');
+    });
+
+    it("shows a paid deposit", () => {
+      const html = show(booking({ status: "Confirmed", deposit: deposit("Paid", null) }));
+      expect(html).toContain("Deposit paid");
+      expect(html).not.toContain("Pay the deposit");
+    });
+
+    it("says when the payment did not go through", () => {
+      const html = show(booking({ status: "Pending", deposit: deposit("Failed", null) }));
+      expect(html).toContain("The payment did not go through");
+    });
   });
 
   it("tells a guest on a waitlist their place", () => {
