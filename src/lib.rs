@@ -82,40 +82,28 @@ pub fn reports() -> Vec<Arc<dyn ReportSource>> {
     vec![Arc::new(reports::BookingReports)]
 }
 
-/// Periodic upkeep: every minute, on one replica at a time (advisory lock); must be idempotent and cheap.
-pub async fn maintenance(k: &Kernel) -> Result<()> {
-    maintenance_at(k, Utc::now()).await
+/// Periodic upkeep of one workspace: the platform runs it about once a minute, on whichever replica is free; it must be
+/// idempotent and cheap.
+pub async fn maintenance(k: &Kernel, tenant: Uuid) -> Result<()> {
+    maintenance_at(k, tenant, Utc::now()).await
 }
 
-/// [`maintenance`] as of `now` (tests move the clock): per tenant with bookings, send change
-/// notices and due reminders, close waitlists of started classes, fill freed class seats, purge
-/// expired guest links and read staff members' outside calendars whose turn has come. A failing tenant is logged and does not stop the others; the first
-/// error is returned.
-pub async fn maintenance_at(k: &Kernel, now: Instant) -> Result<()> {
-    let mut tx = k.db.system_tx().await?;
-    let tenants: Vec<Uuid> = sqlx::query_scalar("select id from tenant where status = 'active' order by id").fetch_all(&mut *tx).await?;
-    tx.commit().await?;
+/// [`maintenance`] as of `now` (tests move the clock): send change notices and due reminders, close waitlists of
+/// started classes, fill freed class seats, purge expired guest links and read staff members' outside calendars whose
+/// turn has come. A failing step is logged and does not stop the other; the first error is returned.
+pub async fn maintenance_at(k: &Kernel, tenant: Uuid, now: Instant) -> Result<()> {
+    let schema = k.registry.schema(tenant).await?;
     let mut first_error: Option<Error> = None;
-    for tenant in tenants {
-        let schema = match k.registry.schema(tenant).await {
-            Ok(s) if s.packages.iter().any(|p| p == "bookings") => s,
-            Ok(_) => continue,
-            Err(e) => {
-                first_error.get_or_insert(e);
-                continue;
-            }
-        };
-        match notify::run(k, tenant, schema.clone(), now).await {
-            Ok(round) if round != notify::Round::default() => tracing::info!(%tenant, ?round, "bookings maintenance"),
-            Ok(_) => {}
-            Err(e) => {
-                first_error.get_or_insert(e);
-            }
-        }
-        if let Err(e) = outside::read_due(k, tenant, schema, now).await {
-            tracing::warn!(%tenant, "outside calendars: {e}");
+    match notify::run(k, tenant, schema.clone(), now).await {
+        Ok(round) if round != notify::Round::default() => tracing::info!(%tenant, ?round, "bookings maintenance"),
+        Ok(_) => {}
+        Err(e) => {
             first_error.get_or_insert(e);
         }
+    }
+    if let Err(e) = outside::read_due(k, tenant, schema, now).await {
+        tracing::warn!(%tenant, "outside calendars: {e}");
+        first_error.get_or_insert(e);
     }
     first_error.map_or(Ok(()), Err)
 }

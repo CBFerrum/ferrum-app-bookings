@@ -165,7 +165,7 @@ impl T {
         self.k.load_ctx(self.tenant, ctx.user, None, "it".into()).await.expect("ctx")
     }
     async fn maintain(&self, now: DateTime<Utc>) {
-        ferrum_app_bookings::maintenance_at(&self.k, now).await.expect("maintenance");
+        ferrum_app_bookings::maintenance_at(&self.k, self.tenant, now).await.expect("maintenance");
     }
     async fn notes(&self, user: &Ctx) -> Vec<String> {
         self.texts("select title from notification where tenant_id = $1 and user_id = $2 order by created_at, id", Some(user.user)).await
@@ -264,7 +264,6 @@ async fn scenario() {
     let settings = KernelSettings { webhooks_allow_private: true, ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("partitions");
-    ferrum_app_erp::maintenance(&k).await.expect("partitions");
     let tenant = k
         .create_tenant(NewTenant {
             slug: "spa".into(),
@@ -1275,7 +1274,6 @@ async fn deposits() {
     set_report_sources();
     let k = Kernel::boot(db, catalog, hooks, KernelSettings::default(), None).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("partitions");
-    ferrum_app_erp::maintenance(&k).await.expect("partitions");
     let tenant = k
         .create_tenant(NewTenant {
             slug: "glow".into(),
@@ -1553,7 +1551,6 @@ async fn boot(slug: &str, extra: &[&str]) -> T {
     set_report_sources();
     let k = Kernel::boot(db, catalog, hooks, KernelSettings::default(), None).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("partitions");
-    ferrum_app_erp::maintenance(&k).await.expect("partitions");
     let mut installed = vec!["bookings".to_string()];
     installed.extend(extra.iter().map(|p| if *p == "comms_app" { "comms" } else { p }.to_string()));
     let tenant = k
