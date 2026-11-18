@@ -2050,7 +2050,7 @@ async fn wording() {
 
     // ───────────── the defaults: each one is a template the platform accepts and can render ─────────────
     let defaults: Vec<ferrum_meta::MessageDef> = a.schema.messages.iter().filter(|m| m.key.starts_with("bookings.")).cloned().collect();
-    assert_eq!(defaults.len(), 16, "nine to guests, seven to staff: {:?}", defaults.iter().map(|m| m.key.clone()).collect::<Vec<_>>());
+    assert_eq!(defaults.len(), 17, "nine to guests, eight to staff: {:?}", defaults.iter().map(|m| m.key.clone()).collect::<Vec<_>>());
     let first = book("10:00", "<script>alert(1)</script>", "asha@example.test", json!({})).await;
     for def in &defaults {
         t.k.save_message_template(&a, def).await.unwrap_or_else(|e| panic!("{} is refused: {e:?}", def.key));
@@ -2113,6 +2113,98 @@ async fn wording() {
     book("16:00", "Gus", "gus@example.test", json!({})).await;
     t.maintain(Utc::now()).await;
     assert_eq!(t.mails_to("gus@example.test").await.len(), 1);
+}
+
+#[test]
+fn staff_reminders_end_to_end() {
+    run(staff_reminders());
+}
+
+/// A workspace that switches it on reminds the booked staff member too: once per offset, once for a whole class.
+async fn staff_reminders() {
+    let t = boot("remind", &[]).await;
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(4);
+    let at = |hhmm: &str| local(ist, day, hhmm);
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let manager = t.user("manager@remind.test", &["Bookings Manager"]).await;
+    let settings = uid(&t
+        .insert(
+            &manager,
+            "BookingSettings",
+            json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 30, "approval_required": false,
+                   "reminders": [{"minutes_before": 1440}, {"minutes_before": 60}]}),
+        )
+        .await);
+    let mira = t
+        .insert(&manager, "BookingStaff", json!({"display_name": "Mira", "email": "mira@remind.test", "time_zone": "Asia/Kolkata", "working_hours": every}))
+        .await;
+    let mira_user = t.user("mira@remind.test", &["Bookings User"]).await;
+    let one =
+        |name: &str, capacity: i64| json!({"service_name": name, "duration_minutes": 60, "capacity": capacity, "price": "0", "staff": [{"staff": sid(&mira)}]});
+    let facial = uid(&t.insert(&manager, "BookingService", one("Facial", 1)).await);
+    let yoga = uid(&t.insert(&manager, "BookingService", one("Yoga", 4)).await);
+    let book = |svc: Uuid, hhmm: &'static str, name: &'static str, email: &'static str| {
+        let t = &t;
+        async move {
+            let v = t.book(json!({"service": svc.to_string(), "start_time": rfc(at(hhmm)), "name": name, "email": email})).await.expect("booked");
+            uid(&t.find_one("Booking", json!({"number": v["booking"]["number"]})).await)
+        }
+    };
+    let titled = |title: &'static str| {
+        let t = &t;
+        async move { t.scalar(&format!("select count(*) from notification where tenant_id = $1 and title = '{title}' and $2::uuid is null"), None).await }
+    };
+
+    // ───────────── off unless the workspace says so ─────────────
+    let liam = book(facial, "10:00", "Liam Park", "liam@example.test").await;
+    t.maintain(Utc::now()).await;
+    let before = t.notes(&mira_user).await;
+    t.maintain(at("10:00") - Duration::minutes(1439)).await;
+    assert_eq!(t.notes(&mira_user).await, before, "the setting is empty: the guest is reminded, the staff member is not");
+    assert_eq!(t.scalar("select count(*) from bookings_notice where tenant_id = $1 and booking_id = $2 and key like 'staff:%'", Some(liam)).await, 0);
+
+    // ───────────── only a manager switches it on ─────────────
+    let refused = t.k.update(&mira_user, "BookingSettings", settings, obj(json!({"remind_staff": true})), None).await;
+    assert!(refused.is_err(), "a Bookings User cannot");
+    t.update(&manager, "BookingSettings", settings, json!({"remind_staff": true})).await;
+
+    // ───────────── once per offset ─────────────
+    let maya = book(facial, "13:00", "Maya Rao", "maya@example.test").await;
+    t.maintain(Utc::now()).await;
+    t.maintain(at("13:00") - Duration::minutes(1439)).await;
+    t.maintain(at("13:00") - Duration::minutes(1439)).await;
+    assert_eq!(titled("Coming up: Facial with Maya Rao").await, 1, "the day before, once");
+    t.maintain(at("13:00") - Duration::minutes(30)).await;
+    t.maintain(at("13:00") - Duration::minutes(10)).await;
+    assert_eq!(titled("Coming up: Facial with Maya Rao").await, 2, "a day before and an hour before, once each");
+
+    // ───────────── a moved booking is reminded at its new time ─────────────
+    t.act(&manager, "Booking", maya, "reschedule", json!({"start_time": rfc(at("16:00"))})).await;
+    t.maintain(at("16:00") - Duration::minutes(1439)).await;
+    assert_eq!(titled("Coming up: Facial with Maya Rao").await, 3);
+
+    // ───────────── a class is one reminder ─────────────
+    let ann = book(yoga, "11:00", "Ann", "ann@example.test").await;
+    let bo = book(yoga, "11:00", "Bo", "bo@example.test").await;
+    t.maintain(Utc::now()).await;
+    t.maintain(at("11:00") - Duration::minutes(1439)).await;
+    t.maintain(at("11:00") - Duration::minutes(1439)).await;
+    let yoga_notes: Vec<String> = t.notes(&mira_user).await.into_iter().filter(|n| n.starts_with("Coming up: Yoga")).collect();
+    assert_eq!(yoga_notes, ["Coming up: Yoga (2 booked)"], "one for the session, not one per seat");
+    let mut claims = t
+        .texts(
+            "select channel from bookings_notice where tenant_id = $1 and key like 'staff:1440@%' and booking_id in (select id from e_booking where tenant_id = $1 and service = $2) order by channel",
+            Some(yoga),
+        )
+        .await;
+    claims.sort();
+    assert_eq!(claims, ["in_app", "skipped"], "one told, the other recorded as skipped: {ann} {bo}");
+
+    // ───────────── the person who made the booking is still reminded ─────────────
+    t.insert(&mira_user, "Booking", json!({"service": facial.to_string(), "staff": sid(&mira), "start_time": rfc(at("15:00")), "guest_name": "Zed"})).await;
+    t.maintain(at("15:00") - Duration::minutes(1439)).await;
+    assert!(t.notes(&mira_user).await.contains(&"Coming up: Facial with Zed".to_string()), "she made it herself and still gets the reminder");
 }
 
 #[test]

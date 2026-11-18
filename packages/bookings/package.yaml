@@ -229,3 +229,14 @@ messages:
         inapp:
           title: "Deposit not paid, time released: {{ doc.service_name }} with {% if doc.guest_name %}{{ doc.guest_name }}{% else %}a guest{% endif %}"
           text: "{{ values.when }} · {{ doc.number }}"
+  - key: bookings.staff_reminder
+    label: "To staff: a booking is coming up"
+    entity: Booking
+    category: operational
+    channels: [inapp]
+    values: [when, class, seats]
+    languages:
+      en:
+        inapp:
+          title: "{% if values.class %}Coming up: {{ doc.service_name }} ({{ values.seats }} booked){% else %}Coming up: {{ doc.service_name }} with {% if doc.guest_name %}{{ doc.guest_name }}{% else %}a guest{% endif %}{% endif %}"
+          text: "{{ values.when }} · {{ doc.number }}"

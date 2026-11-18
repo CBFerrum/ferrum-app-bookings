@@ -51,6 +51,8 @@ pub enum StaffNote {
     Clash,
     /// A booking's deposit was not paid in time: the time is free again.
     Expired,
+    /// A confirmed booking, or class session, is coming up.
+    Reminder,
 }
 
 /// The messages for a change notice, from the booking's current state and whether anything was
@@ -161,6 +163,7 @@ fn staff_template(note: StaffNote) -> &'static str {
         StaffNote::SeatFilled => "bookings.staff_seat_filled",
         StaffNote::Clash => "bookings.staff_clash",
         StaffNote::Expired => "bookings.staff_expired",
+        StaffNote::Reminder => "bookings.staff_reminder",
     }
 }
 
@@ -276,7 +279,8 @@ pub(crate) async fn tell_staff(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, note
         .fetch_optional(&mut **tx)
         .await?;
     let Some(user) = user else { return Ok(false) };
-    if id(b, "updated_by") == Some(user) {
+    // A reminder goes to the person who made the booking too: they still want to be reminded.
+    if note != StaffNote::Reminder && id(b, "updated_by") == Some(user) {
         return Ok(false);
     }
     let zone: Option<String> = match id(b, "staff") {
@@ -290,13 +294,26 @@ pub(crate) async fn tell_staff(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, note
     };
     let tz = zone.as_deref().and_then(calendar::zone).unwrap_or(Tz::UTC);
     let at = time(b, "start_time").map(|t| when(t, tz)).unwrap_or_default();
+    let mut values = json!({"when": at});
+    if note == StaffNote::Reminder {
+        // A class session is one reminder, however many are booked: its seats are what its teacher sees.
+        let session = s(b, "session_key");
+        let seats: i64 =
+            sqlx::query_scalar("select coalesce(sum(seats), 0)::bigint from e_booking where tenant_id = $1 and session_key = $2 and status = 'Confirmed'")
+                .bind(tenant)
+                .bind(session)
+                .fetch_one(&mut **tx)
+                .await?;
+        values["class"] = json!(session != s(b, "id"));
+        values["seats"] = json!(seats);
+    }
     let m = Message {
         template: staff_template(note).into(),
         entity: Some("Booking".into()),
         record: id(b, "id"),
         to: vec![Recipient::user(user)],
         channels: vec!["inapp".into()],
-        values: json!({"when": at}).as_object().cloned().unwrap_or_default(),
+        values: values.as_object().cloned().unwrap_or_default(),
         ..Default::default()
     };
     Ok(messages::send(k, tx, ctx, &m).await?.iter().any(|x| x.state == "delivered"))
@@ -356,10 +373,10 @@ async fn remind_one(k: &Kernel, ctx: &Ctx, bid: Uuid, start: Instant, due: &[i64
     due.sort_unstable();
     let key = |m: i64| format!("{m}@{}", start.timestamp());
     let mut sent = 0;
+    let st = settings::load(&mut tx, ctx.tenant).await?;
     if let Some(nearest) = due.first().copied()
         && claim(&mut tx, ctx.tenant, bid, "reminder", &key(nearest), "pending").await?
     {
-        let st = settings::load(&mut tx, ctx.tenant).await?;
         let channels: &[&str] = if email_guest(k, ctx, &mut tx, &b, Guest::Reminder, &st).await? { &["email"] } else { &[] };
         set_channel(&mut tx, ctx.tenant, bid, "reminder", &key(nearest), channels).await?;
         sent = channels.len();
@@ -367,7 +384,48 @@ async fn remind_one(k: &Kernel, ctx: &Ctx, bid: Uuid, start: Instant, due: &[i64
     for m in due.iter().skip(1) {
         claim(&mut tx, ctx.tenant, bid, "reminder", &key(*m), "skipped").await?;
     }
+    if st.remind_staff
+        && let Some(staff) = id(&b, "staff")
+    {
+        sent += remind_staff(k, ctx, &mut tx, &b, staff, start, &due).await?;
+    }
     tx.commit().await?;
+    Ok(sent)
+}
+
+/// The claim key of a staff reminder: its offset and the start it is for (a moved booking is reminded again).
+fn staff_key(minutes: i64, start: Instant) -> String {
+    format!("staff:{minutes}@{}", start.timestamp())
+}
+
+/// Reminds the booked staff member, once per appointment or class session, offset and start. The staff row is
+/// locked while we look for another booking of the session that was already counted, so two rounds cannot both
+/// find none. `due` is sorted, nearest first; the further-out offsets are claimed as skipped, as for the guest.
+async fn remind_staff(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, staff: Uuid, start: Instant, due: &[i64]) -> Result<usize> {
+    let (Some(&nearest), Some(bid)) = (due.first(), id(b, "id")) else { return Ok(0) };
+    calendar::lock_staff(tx, ctx.tenant, &[staff]).await?;
+    let key = staff_key(nearest, start);
+    let told: bool = sqlx::query_scalar(
+        "select exists (select 1 from bookings_notice n join e_booking o on o.tenant_id = n.tenant_id and o.id = n.booking_id \
+         where n.tenant_id = $1 and n.kind = 'reminder' and n.key = $2 and o.session_key = $3 and o.id <> $4)",
+    )
+    .bind(ctx.tenant)
+    .bind(&key)
+    .bind(s(b, "session_key"))
+    .bind(bid)
+    .fetch_one(&mut **tx)
+    .await?;
+    let mut sent = 0;
+    if told {
+        claim(tx, ctx.tenant, bid, "reminder", &key, "skipped").await?;
+    } else if claim(tx, ctx.tenant, bid, "reminder", &key, "pending").await? {
+        let channels: &[&str] = if tell_staff(k, ctx, tx, b, StaffNote::Reminder).await? { &["in_app"] } else { &[] };
+        set_channel(tx, ctx.tenant, bid, "reminder", &key, channels).await?;
+        sent = channels.len();
+    }
+    for m in due.iter().skip(1) {
+        claim(tx, ctx.tenant, bid, "reminder", &staff_key(*m, start), "skipped").await?;
+    }
     Ok(sent)
 }
 
@@ -642,6 +700,15 @@ mod tests {
         assert_eq!(template_for(G::Requested, true), "bookings.guest_deposit_due");
         assert!(all.iter().filter(|g| **g != G::Requested).all(|g| template_for(*g, true) == template_for(*g, false)), "only a request asks for the deposit");
         assert_eq!(deposit_text(&json!({"amount": "300", "currency": "INR"})), "300.00 INR");
+    }
+
+    #[test]
+    fn a_staff_reminder_is_claimed_by_offset_and_start() {
+        let start = "2026-11-02T04:30:00Z".parse::<Instant>().unwrap();
+        assert_eq!(staff_key(60, start), format!("staff:60@{}", start.timestamp()));
+        assert_ne!(staff_key(60, start), staff_key(1440, start));
+        assert_ne!(staff_key(60, start), staff_key(60, start + Duration::minutes(30)), "a moved booking is reminded again");
+        assert_eq!(staff_template(StaffNote::Reminder), "bookings.staff_reminder");
     }
 
     #[test]

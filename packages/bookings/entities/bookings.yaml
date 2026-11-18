@@ -19,13 +19,14 @@
     - {name: cancellation_window_hours, type: int, label: Guests Cancel Up To (Hours Before), default: 24, min: 0, max: 8760, description: "0 = until the start"}
     - {name: reschedule_window_hours, type: int, label: Guests Reschedule Up To (Hours Before), default: 24, min: 0, max: 8760, description: "0 = until the start"}
     - {name: reminders, type: table, of: BookingReminder, description: "Reminders before each confirmed booking; a reminder already due when the booking was made or moved is skipped"}
+    - {name: remind_staff, type: check, label: Remind Staff Too, description: "At each reminder time the booked staff member gets a notice in the app as well: once for an appointment, once for a class session"}
     - {name: public_url, type: url, label: Server Address, description: "Address this server is reached at from the internet (e.g. https://erp.example.com), for links in emails and calendar feed URLs"}
     - {name: manage_page_url, type: url, label: Self-Service Page, description: "Your booking page's address; guest links become <address>?token=<token>. Empty: links point at this app's endpoints"}
     - {name: calendar, type: data, max_length: 64, label: Business Calendar, description: "A working calendar (Admin, Calendars): nobody is booked outside its open time, so its holidays close every service. Empty: staff hours alone decide"}
     - {name: signing_secret, type: secret, label: Link Signing Secret, description: "HMAC key signing staff calendar feed links; created on first use. Replacing it retires every feed link handed out"}
   form:
     - {label: Booking Page, fields: [public_page, approval_required, company, min_notice_minutes, max_advance_days, slot_interval_minutes]}
-    - {label: Guest Self-Service, fields: [cancellation_window_hours, reschedule_window_hours, reminders]}
+    - {label: Guest Self-Service, fields: [cancellation_window_hours, reschedule_window_hours, reminders, remind_staff]}
     - {label: Opening Days, fields: [calendar]}
     - {label: Links, collapsible: true, fields: [public_url, manage_page_url, signing_secret]}
 

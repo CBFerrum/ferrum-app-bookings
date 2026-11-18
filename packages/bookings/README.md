@@ -204,6 +204,12 @@ announced).
   `POST /book`); it is kept as `Booking.guest_language` (erased with the guest) and the guest's
   messages come in it when the template has it, else in the workspace's language. A badly written
   tag is dropped and never refuses a booking.
+* **Staff reminders**: with `remind_staff` (Booking Settings, "Remind Staff Too", off until a
+  manager switches it on) the booked staff member gets an in-app notice (`bookings.staff_reminder`)
+  at each reminder time: once per appointment, once per class session ("Coming up: Yoga (4
+  booked)"), at the same offsets as the guest's, also when they made the booking themselves. A
+  moved booking is reminded again at its new time. A staff member's mailbox gets it if they chose
+  that for their notices.
 * **Reminders** (Confirmed bookings, at each `reminders` offset): skipped when already due when
   the booking was made or moved; when several are due at once (maintenance was down) only the
   nearest is sent and the others are claimed as skipped.

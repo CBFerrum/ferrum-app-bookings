@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.12.0
+
+Needs the same platform as 0.11.0. Database: one field, `BookingSettings.remind_staff`. Interface rebuilt.
+
+- **Staff are reminded too.** A new setting, Remind Staff Too (Booking Settings, Guest Self-Service), off until a manager
+  switches it on. When on, the booked staff member gets an in-app notice at each reminder time: once for an appointment,
+  once for a whole class session, at the same offsets as the guest's and also when they made the booking themselves. A
+  moved booking is reminded again at its new time. A new message template, `bookings.staff_reminder`.
+- Not changed: when several offsets are due in one round only the nearest goes (the others are recorded as skipped).
+
 ## 0.11.0
 
 Needs the same platform as 0.10.1. Database: one field, `Booking.guest_language`. Interface rebuilt.
