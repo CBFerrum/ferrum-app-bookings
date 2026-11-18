@@ -145,7 +145,7 @@ answer the same 404. `POST`s are limited to 30 per 10 minutes per address and wo
 |---|---|---|
 | `GET /services` | — | `{time_zone, currency, services: [{id, name, description, duration_minutes, seats, price, location_type, location (in person only), staff: [{id, name, bio}], questions: [{question, type, options, required}]}]}` — active services with active staff |
 | `GET /slots` | `service` (required), `from`, `to` (dates in the zone; default the next 7 days, at most 62), `time_zone` (IANA; default the workspace's), `staff`, `seats`, `waitlist` (1: list full classes too, marked `full: true` with `seats_left` what is free, so a page can offer their waitlist) | `{service: {id, name, duration_minutes, seats}, time_zone, from, to, days: [{date, slots: [{start, end, time ("HH:MM" in the zone), seats_left, staff: [{id, name}]}]}]}`. 404 for an unknown or inactive service; 422 for bad parameters |
-| `POST /book` | `{service, start_time, staff? (id or "any"), seats?, name, email, phone?, time_zone?, notes?, answers? ({question: answer} or [{question, answer}]), waitlist?, website}` | `201 {booking: View, token}`. `website` is a honeypot: when filled the answer is `201 {"status": "received"}` and nothing is booked. Answers are checked against the questions (required ones present, numbers, Yes/No, one of the choices, nothing unknown). 422 with field errors, 409 when taken, 404 unknown service |
+| `POST /book` | `{service, start_time, staff? (id or "any"), seats?, name, email, phone?, time_zone?, language?, notes?, answers? ({question: answer} or [{question, answer}]), waitlist?, website}` | `201 {booking: View, token}`. `website` is a honeypot: when filled the answer is `201 {"status": "received"}` and nothing is booked. Answers are checked against the questions (required ones present, numbers, Yes/No, one of the choices, nothing unknown). 422 with field errors, 409 when taken, 404 unknown service |
 | `GET /manage/{token}` | — | `{booking: View}` |
 | `GET /manage/{token}/slots` | `from`, `to`, `time_zone`, `staff` | Like `/slots` for the booking's service and seats; its own time does not block |
 | `POST /manage/{token}/reschedule` | `{start_time, staff?, seats?}` | `{booking: View}`; guest rules (grid, notice, advance) and the reschedule window; 409 when taken |
@@ -178,17 +178,38 @@ nothing is ever sent twice. The first notice describes the booking as it is then
 made and moved before maintenance ran is announced once; one cancelled before that is never
 announced).
 
-* **Guests**, by email when the Mail app (`comms`) is installed and the booking has an email: a
-  `Communication` (Email, Sent, referencing the booking) with a fresh self-service link and an
-  `.ics` link — booking request received (Pending), confirmed, waitlisted, moved, cancelled, and
-  reminders. Confirmations and moves carry a calendar invitation (METHOD:REQUEST, SEQUENCE =
-  notice version), cancellations a METHOD:CANCEL. Without the Mail app guests get nothing
-  automatically: staff hand out `guest_link`s.
+* **Guests**, by email when the booking has an address. With the Mail app (`comms`) installed a
+  `Communication` (Email, Sent, referencing the booking); without it the server's own mailer sends
+  the same words through the platform's message log (`message_send`). Each mail has a fresh
+  self-service link and an `.ics` link — booking request received (Pending), deposit due (with
+  Booking Deposits: how much, until when the time is held, and the guest's own page as the link
+  to pay), confirmed, waitlisted, moved, cancelled, released (its deposit was not paid in time;
+  the pay link is left out once the deposit can no longer be paid), deposit refunded, and
+  reminders. With the Mail app, confirmations and moves carry a calendar invitation
+  (METHOD:REQUEST, SEQUENCE = notice version), cancellations a METHOD:CANCEL; the platform's
+  mailer sends no calendar part, so without the Mail app the mail has the link only. A workspace
+  with neither a mailer nor the Mail app hands out `guest_link`s.
   A Video service with no link of its own (Location details empty) gets a meeting per booking
   when Comms 0.14.0 and a meeting server are there: the guest's join link is the booking's
   location, so every notice and the invitation carry it (see `src/video.rs`).
-* **Staff**, in-app: new booking, to confirm, moved, cancelled, waitlist seat filled — unless
-  they made the change themselves.
+* **Staff**, in-app: new booking, to confirm, moved, cancelled, waitlist seat filled, deposit not
+  paid, an outside-calendar clash — unless they made the change themselves.
+* **Wording.** Every message is a message template of the platform, edited, reset and translated
+  under Settings, Message templates. Guests: `bookings.guest_requested`, `guest_deposit_due`,
+  `guest_confirmed`, `guest_waitlisted`, `guest_rescheduled`, `guest_cancelled`, `guest_reminder`,
+  `guest_expired`, `guest_refunded`. Staff: `bookings.staff_new`, `staff_awaits_confirmation`,
+  `staff_rescheduled`, `staff_cancelled`, `staff_seat_filled`, `staff_clash`, `staff_expired`.
+  Times arrive in the template as text in the guest's or staff member's zone (`values.when`,
+  `values.until`). The booking page sends the language it is shown in (`language`, optional, in
+  `POST /book`); it is kept as `Booking.guest_language` (erased with the guest) and the guest's
+  messages come in it when the template has it, else in the workspace's language. A badly written
+  tag is dropped and never refuses a booking.
+* **Staff reminders**: with `remind_staff` (Booking Settings, "Remind Staff Too", off until a
+  manager switches it on) the booked staff member gets an in-app notice (`bookings.staff_reminder`)
+  at each reminder time: once per appointment, once per class session ("Coming up: Yoga (4
+  booked)"), at the same offsets as the guest's, also when they made the booking themselves. A
+  moved booking is reminded again at its new time. A staff member's mailbox gets it if they chose
+  that for their notices.
 * **Reminders** (Confirmed bookings, at each `reminders` offset): skipped when already due when
   the booking was made or moved; when several are due at once (maintenance was down) only the
   nearest is sent and the others are claimed as skipped.

@@ -324,7 +324,7 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
     if (hasErrors(found)) return firstProblem();
     setBusy(true);
     try {
-      const out = await site.book(tenant, bookBody({ service, start: at, staff: staff ?? undefined, form: values, zone, waitlist, website: trap }));
+      const out = await site.book(tenant, bookBody({ service, start: at, staff: staff ?? undefined, form: values, zone, waitlist, website: trap, language: bootstrap()?.locale.language }));
       // That time is no longer free for the next guest, whatever the lists on screen last said.
       void qc.invalidateQueries({ queryKey: ["gb-slots"] });
       if ("status" in out) setReceived(true);

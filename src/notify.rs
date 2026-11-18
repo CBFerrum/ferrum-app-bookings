@@ -16,9 +16,10 @@ use crate::{Instant, int, obj, time, token, when};
 use chrono::{Duration, Utc};
 use chrono_tz::Tz;
 use ferrum_domain::util::{id, s};
+use ferrum_kernel::messages::{self, Message, Recipient};
 use ferrum_kernel::{Ctx, Doc, Error, Kernel, Result, Tx, with_retry};
 use ferrum_meta::Schema;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -50,6 +51,8 @@ pub enum StaffNote {
     Clash,
     /// A booking's deposit was not paid in time: the time is free again.
     Expired,
+    /// A confirmed booking, or class session, is coming up.
+    Reminder,
 }
 
 /// The messages for a change notice, from the booking's current state and whether anything was
@@ -108,10 +111,6 @@ async fn set_channel(tx: &mut Tx, tenant: Uuid, booking: Uuid, kind: &str, key: 
     Ok(())
 }
 
-pub fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
-}
-
 /// The guest's zone (or the workspace's).
 pub fn guest_zone(b: &Doc, ctx: &Ctx) -> Tz {
     s(b, "guest_time_zone").and_then(calendar::zone).or_else(|| calendar::zone(&ctx.schema.timezone)).unwrap_or(Tz::UTC)
@@ -139,68 +138,39 @@ pub fn booking_event(b: &Doc, summary: String, status: &'static str) -> Option<E
     })
 }
 
-/// Subject and HTML body of a guest email.
-pub fn compose(kind: Guest, b: &Doc, tz: Tz, manage: &str, ics_url: &str) -> (String, String) {
-    let service = s(b, "service_name").unwrap_or("Booking");
-    let at = time(b, "start_time").map(|t| when(t, tz)).unwrap_or_default();
-    let (subject, lead) = match kind {
-        Guest::Requested => (format!("Booking request received: {service}, {at}"), "We have your booking request and will confirm it shortly."),
-        Guest::Confirmed => (format!("Booking confirmed: {service}, {at}"), "Your booking is confirmed."),
-        Guest::Waitlisted => {
-            (format!("On the waitlist: {service}, {at}"), "The class is full, so you are on its waitlist. We will write as soon as a seat frees up.")
-        }
-        Guest::Rescheduled => (format!("Booking moved: {service}, {at}"), "Your booking has a new time."),
-        Guest::Cancelled => (format!("Booking cancelled: {service}, {at}"), "Your booking is cancelled."),
-        Guest::Reminder => (format!("Reminder: {service}, {at}"), "This is a reminder of your booking."),
-        Guest::Expired => (
-            format!("Booking released: {service}, {at}"),
-            "The deposit for this booking was not paid in time, so its time was released. A deposit paid now confirms it if the time is still free, and is refunded if not.",
-        ),
-        Guest::Refunded => (
-            format!("Deposit refunded: {service}, {at}"),
-            "Your deposit arrived after the booking's time was released, and the time has since been booked. Your deposit is being refunded.",
-        ),
-    };
-    let closed = matches!(kind, Guest::Cancelled | Guest::Expired | Guest::Refunded);
-    let row = |label: &str, value: &str| format!("<tr><td style=\"padding:2px 12px 2px 0;color:#57606a\">{label}</td><td>{}</td></tr>", html_escape(value));
-    let mut rows = vec![row("What", service), row("When", &at)];
-    if let Some(end) = time(b, "end_time") {
-        rows.push(row("Until", &end.with_timezone(&tz).format("%H:%M").to_string()));
+/// The template a guest's message is written from; a booking waiting for its deposit is asked for it.
+pub(crate) fn template_for(kind: Guest, deposit_due: bool) -> &'static str {
+    match kind {
+        Guest::Requested if deposit_due => "bookings.guest_deposit_due",
+        Guest::Requested => "bookings.guest_requested",
+        Guest::Confirmed => "bookings.guest_confirmed",
+        Guest::Waitlisted => "bookings.guest_waitlisted",
+        Guest::Rescheduled => "bookings.guest_rescheduled",
+        Guest::Cancelled => "bookings.guest_cancelled",
+        Guest::Reminder => "bookings.guest_reminder",
+        Guest::Expired => "bookings.guest_expired",
+        Guest::Refunded => "bookings.guest_refunded",
     }
-    if let Some(staff) = s(b, "staff_name") {
-        rows.push(row("With", staff));
+}
+
+/// The template a staff notice is written from.
+fn staff_template(note: StaffNote) -> &'static str {
+    match note {
+        StaffNote::New => "bookings.staff_new",
+        StaffNote::AwaitsConfirmation => "bookings.staff_awaits_confirmation",
+        StaffNote::Rescheduled => "bookings.staff_rescheduled",
+        StaffNote::Cancelled => "bookings.staff_cancelled",
+        StaffNote::SeatFilled => "bookings.staff_seat_filled",
+        StaffNote::Clash => "bookings.staff_clash",
+        StaffNote::Expired => "bookings.staff_expired",
+        StaffNote::Reminder => "bookings.staff_reminder",
     }
-    if !closed {
-        let place = match (s(b, "location_type"), s(b, "location")) {
-            (Some(kind), Some(l)) => format!("{kind}: {l}"),
-            (Some(kind), None) => kind.to_string(),
-            (None, Some(l)) => l.to_string(),
-            (None, None) => String::new(),
-        };
-        if !place.is_empty() {
-            rows.push(row("Where", &place));
-        }
-    }
-    if int(b, "seats") > 1 {
-        rows.push(row("Seats", &int(b, "seats").to_string()));
-    }
-    rows.push(row("Reference", s(b, "number").unwrap_or_default()));
-    if kind == Guest::Cancelled
-        && let Some(reason) = s(b, "cancellation_reason")
-    {
-        rows.push(row("Reason", reason));
-    }
-    let links = if closed {
-        String::new()
-    } else {
-        format!("<p><a href=\"{}\">View, reschedule or cancel</a> &middot; <a href=\"{}\">Add to calendar</a></p>", html_escape(manage), html_escape(ics_url))
-    };
-    let html = format!(
-        "<p>Hello {},</p><p>{lead}</p><table style=\"border-collapse:collapse\">{}</table>{links}",
-        html_escape(s(b, "guest_name").unwrap_or("there")),
-        rows.join("")
-    );
-    (subject, html)
+}
+
+/// The deposit as a guest's message says it: "300.00 INR".
+fn deposit_text(deposit: &Value) -> String {
+    let amount = deposit["amount"].as_str().and_then(|a| a.parse::<rust_decimal::Decimal>().ok()).map(|a| format!("{:.2}", a)).unwrap_or_default();
+    format!("{amount} {}", deposit["currency"].as_str().unwrap_or_default()).trim().to_string()
 }
 
 /// Emails the guest with a fresh self-service link: through the Mail app when it is installed
@@ -220,10 +190,45 @@ async fn email_guest(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, kind: Guest, s
     let token = token::mint(tx, ctx.tenant, bid).await?;
     let manage = st.manage_link(&root, &token);
     let ics_url = st.absolute(&format!("{root}/manage/{token}/booking.ics"));
-    let (subject, html) = compose(kind, b, guest_zone(b, ctx), &manage, &ics_url);
+    let tz = guest_zone(b, ctx);
+    let deposit = if ctx.schema.packages.iter().any(|p| p == crate::payments::PACKAGE) { crate::payments::guest_view(ctx, tx, b).await? } else { Value::Null };
+    let payable = deposit["status"] == "Initiated";
+    let template = template_for(kind, payable);
+    let mut values = json!({
+        "when": time(b, "start_time").map(|t| when(t, tz)).unwrap_or_default(),
+        "until": time(b, "end_time").map(|t| t.with_timezone(&tz).format("%H:%M").to_string()).unwrap_or_default(),
+        "manage_link": manage,
+        "calendar_link": ics_url,
+    });
+    if matches!(template, "bookings.guest_deposit_due" | "bookings.guest_expired") {
+        // The guest's own page is the way to pay: the gateway's address may not exist yet, and stops working.
+        values["deposit"] = json!(deposit_text(&deposit));
+        values["pay_by"] =
+            json!(deposit["pay_by"].as_str().and_then(|t| ferrum_kernel::value::parse_datetime(t).ok()).map(|t| when(t, tz)).unwrap_or_default());
+        values["pay_link"] = json!(if payable { manage.as_str() } else { "" });
+    }
+    let m = Message {
+        template: template.into(),
+        entity: Some("Booking".into()),
+        record: Some(bid),
+        to: vec![Recipient {
+            email: Some(to.to_string()),
+            language: s(b, "guest_language").map(str::to_string),
+            time_zone: s(b, "guest_time_zone").map(str::to_string),
+            ..Default::default()
+        }],
+        channels: vec!["email".into()],
+        values: values.as_object().cloned().unwrap_or_default(),
+        ..Default::default()
+    };
     if !via_mail_app {
-        return match k.queue_mail(tx, ctx.tenant, to, &subject, &html).await {
-            Ok(()) => Ok(true),
+        return match messages::send(k, tx, ctx, &m).await {
+            Ok(sent) => {
+                if let Some(skipped) = sent.iter().find(|x| x.state == "skipped") {
+                    tracing::warn!(booking = %bid, "guest email not sent: {:?}", skipped.reason);
+                }
+                Ok(sent.iter().any(|x| x.channel == "email" && x.state == "queued"))
+            }
             Err(Error::Validation(e)) => {
                 tracing::warn!(booking = %bid, "guest email not sent: {e:?}");
                 Ok(false)
@@ -231,6 +236,18 @@ async fn email_guest(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, kind: Guest, s
             Err(e) => Err(e),
         };
     }
+    let rendered = match messages::render_for(k, tx, ctx, &m, "email").await {
+        Ok(r) => r,
+        Err(Error::Forbidden(e)) => {
+            tracing::warn!(booking = %bid, "guest email not sent: {e}");
+            return Ok(false);
+        }
+        Err(Error::Validation(e)) => {
+            tracing::warn!(booking = %bid, "guest email not sent: {e:?}");
+            return Ok(false);
+        }
+        Err(e) => return Err(e),
+    };
     let summary = format!("{} with {}", s(b, "service_name").unwrap_or("Booking"), s(b, "staff_name").unwrap_or("us"));
     let invite = match kind {
         Guest::Confirmed | Guest::Rescheduled => booking_event(b, summary, "CONFIRMED").map(|e| ics::calendar(Some("REQUEST"), None, &[e])),
@@ -241,8 +258,9 @@ async fn email_guest(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, kind: Guest, s
         "channel": "Email",
         "direction": "Sent",
         "recipients": to,
-        "subject": subject,
-        "content": html,
+        "subject": rendered.subject,
+        // The engine writes a slash as `&#x2f;`: the same in HTML, and what the stored mail always said.
+        "content": rendered.html.map(|h| h.replace("&#x2f;", "/")),
         "reference_entity": "Booking",
         "reference_id": bid.to_string(),
         "ics": invite,
@@ -251,8 +269,9 @@ async fn email_guest(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, kind: Guest, s
     Ok(true)
 }
 
-/// Tells the staff member in-app — unless they made the change themselves.
-pub(crate) async fn tell_staff(tx: &mut Tx, tenant: Uuid, b: &Doc, note: StaffNote) -> Result<bool> {
+/// Tells the staff member in-app, in the words of the notice's template: unless they made the change themselves.
+pub(crate) async fn tell_staff(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, note: StaffNote) -> Result<bool> {
+    let tenant = ctx.tenant;
     let Some(email) = s(b, "staff_email") else { return Ok(false) };
     let user: Option<Uuid> = sqlx::query_scalar("select id from app_user where tenant_id = $1 and lower(email::text) = lower($2) and is_active")
         .bind(tenant)
@@ -260,7 +279,8 @@ pub(crate) async fn tell_staff(tx: &mut Tx, tenant: Uuid, b: &Doc, note: StaffNo
         .fetch_optional(&mut **tx)
         .await?;
     let Some(user) = user else { return Ok(false) };
-    if id(b, "updated_by") == Some(user) {
+    // A reminder goes to the person who made the booking too: they still want to be reminded.
+    if note != StaffNote::Reminder && id(b, "updated_by") == Some(user) {
         return Ok(false);
     }
     let zone: Option<String> = match id(b, "staff") {
@@ -273,29 +293,30 @@ pub(crate) async fn tell_staff(tx: &mut Tx, tenant: Uuid, b: &Doc, note: StaffNo
         None => None,
     };
     let tz = zone.as_deref().and_then(calendar::zone).unwrap_or(Tz::UTC);
-    let service = s(b, "service_name").unwrap_or("Booking");
-    let guest = s(b, "guest_name").unwrap_or("a guest");
     let at = time(b, "start_time").map(|t| when(t, tz)).unwrap_or_default();
-    let title = match note {
-        StaffNote::New => format!("New booking: {service} with {guest}"),
-        StaffNote::AwaitsConfirmation => format!("To confirm: {service} with {guest}"),
-        StaffNote::Rescheduled => format!("Booking moved: {service} with {guest}"),
-        StaffNote::Cancelled => format!("Booking cancelled: {service} with {guest}"),
-        StaffNote::SeatFilled => format!("Waitlist seat filled: {service} with {guest}"),
-        StaffNote::Clash => format!("Clashes with your calendar: {service} with {guest}"),
-        StaffNote::Expired => format!("Deposit not paid, time released: {service} with {guest}"),
+    let mut values = json!({"when": at});
+    if note == StaffNote::Reminder {
+        // A class session is one reminder, however many are booked: its seats are what its teacher sees.
+        let session = s(b, "session_key");
+        let seats: i64 =
+            sqlx::query_scalar("select coalesce(sum(seats), 0)::bigint from e_booking where tenant_id = $1 and session_key = $2 and status = 'Confirmed'")
+                .bind(tenant)
+                .bind(session)
+                .fetch_one(&mut **tx)
+                .await?;
+        values["class"] = json!(session != s(b, "id"));
+        values["seats"] = json!(seats);
+    }
+    let m = Message {
+        template: staff_template(note).into(),
+        entity: Some("Booking".into()),
+        record: id(b, "id"),
+        to: vec![Recipient::user(user)],
+        channels: vec!["inapp".into()],
+        values: values.as_object().cloned().unwrap_or_default(),
+        ..Default::default()
     };
-    let mut body = format!("{at} · {}", s(b, "number").unwrap_or_default());
-    if note == StaffNote::Cancelled
-        && let Some(reason) = s(b, "cancellation_reason")
-    {
-        body.push_str(&format!(" · {reason}"));
-    }
-    if note == StaffNote::Clash {
-        body.push_str(" · your outside calendar is busy then: reschedule it, or keep it");
-    }
-    ferrum_kernel::notify::send(tx, tenant, user, &title, Some(&body), Some("Booking"), id(b, "id")).await?;
-    Ok(true)
+    Ok(messages::send(k, tx, ctx, &m).await?.iter().any(|x| x.state == "delivered"))
 }
 
 /// One change notice per notice version.
@@ -323,7 +344,7 @@ async fn change_one(k: &Kernel, ctx: &Ctx, bid: Uuid) -> Result<usize> {
             channels.push("email");
         }
         if let Some(n) = staff
-            && tell_staff(&mut tx, ctx.tenant, &b, n).await?
+            && tell_staff(k, ctx, &mut tx, &b, n).await?
         {
             channels.push("in_app");
         }
@@ -352,10 +373,10 @@ async fn remind_one(k: &Kernel, ctx: &Ctx, bid: Uuid, start: Instant, due: &[i64
     due.sort_unstable();
     let key = |m: i64| format!("{m}@{}", start.timestamp());
     let mut sent = 0;
+    let st = settings::load(&mut tx, ctx.tenant).await?;
     if let Some(nearest) = due.first().copied()
         && claim(&mut tx, ctx.tenant, bid, "reminder", &key(nearest), "pending").await?
     {
-        let st = settings::load(&mut tx, ctx.tenant).await?;
         let channels: &[&str] = if email_guest(k, ctx, &mut tx, &b, Guest::Reminder, &st).await? { &["email"] } else { &[] };
         set_channel(&mut tx, ctx.tenant, bid, "reminder", &key(nearest), channels).await?;
         sent = channels.len();
@@ -363,7 +384,48 @@ async fn remind_one(k: &Kernel, ctx: &Ctx, bid: Uuid, start: Instant, due: &[i64
     for m in due.iter().skip(1) {
         claim(&mut tx, ctx.tenant, bid, "reminder", &key(*m), "skipped").await?;
     }
+    if st.remind_staff
+        && let Some(staff) = id(&b, "staff")
+    {
+        sent += remind_staff(k, ctx, &mut tx, &b, staff, start, &due).await?;
+    }
     tx.commit().await?;
+    Ok(sent)
+}
+
+/// The claim key of a staff reminder: its offset and the start it is for (a moved booking is reminded again).
+fn staff_key(minutes: i64, start: Instant) -> String {
+    format!("staff:{minutes}@{}", start.timestamp())
+}
+
+/// Reminds the booked staff member, once per appointment or class session, offset and start. The staff row is
+/// locked while we look for another booking of the session that was already counted, so two rounds cannot both
+/// find none. `due` is sorted, nearest first; the further-out offsets are claimed as skipped, as for the guest.
+async fn remind_staff(k: &Kernel, ctx: &Ctx, tx: &mut Tx, b: &Doc, staff: Uuid, start: Instant, due: &[i64]) -> Result<usize> {
+    let (Some(&nearest), Some(bid)) = (due.first(), id(b, "id")) else { return Ok(0) };
+    calendar::lock_staff(tx, ctx.tenant, &[staff]).await?;
+    let key = staff_key(nearest, start);
+    let told: bool = sqlx::query_scalar(
+        "select exists (select 1 from bookings_notice n join e_booking o on o.tenant_id = n.tenant_id and o.id = n.booking_id \
+         where n.tenant_id = $1 and n.kind = 'reminder' and n.key = $2 and o.session_key = $3 and o.id <> $4)",
+    )
+    .bind(ctx.tenant)
+    .bind(&key)
+    .bind(s(b, "session_key"))
+    .bind(bid)
+    .fetch_one(&mut **tx)
+    .await?;
+    let mut sent = 0;
+    if told {
+        claim(tx, ctx.tenant, bid, "reminder", &key, "skipped").await?;
+    } else if claim(tx, ctx.tenant, bid, "reminder", &key, "pending").await? {
+        let channels: &[&str] = if tell_staff(k, ctx, tx, b, StaffNote::Reminder).await? { &["in_app"] } else { &[] };
+        set_channel(tx, ctx.tenant, bid, "reminder", &key, channels).await?;
+        sent = channels.len();
+    }
+    for m in due.iter().skip(1) {
+        claim(tx, ctx.tenant, bid, "reminder", &staff_key(*m, start), "skipped").await?;
+    }
     Ok(sent)
 }
 
@@ -629,21 +691,33 @@ mod tests {
     }
 
     #[test]
-    fn guest_emails_escape_what_guests_typed() {
+    fn each_kind_has_its_template_and_a_deposit_changes_the_first() {
+        use Guest as G;
+        let all = [G::Requested, G::Confirmed, G::Waitlisted, G::Rescheduled, G::Cancelled, G::Reminder, G::Expired, G::Refunded];
+        let keys: Vec<&str> = all.iter().map(|g| template_for(*g, false)).collect();
+        assert_eq!(keys.len(), 8);
+        assert!(keys.iter().all(|k| k.starts_with("bookings.guest_")));
+        assert_eq!(template_for(G::Requested, true), "bookings.guest_deposit_due");
+        assert!(all.iter().filter(|g| **g != G::Requested).all(|g| template_for(*g, true) == template_for(*g, false)), "only a request asks for the deposit");
+        assert_eq!(deposit_text(&json!({"amount": "300", "currency": "INR"})), "300.00 INR");
+    }
+
+    #[test]
+    fn a_staff_reminder_is_claimed_by_offset_and_start() {
+        let start = "2026-11-02T04:30:00Z".parse::<Instant>().unwrap();
+        assert_eq!(staff_key(60, start), format!("staff:60@{}", start.timestamp()));
+        assert_ne!(staff_key(60, start), staff_key(1440, start));
+        assert_ne!(staff_key(60, start), staff_key(60, start + Duration::minutes(30)), "a moved booking is reminded again");
+        assert_eq!(staff_template(StaffNote::Reminder), "bookings.staff_reminder");
+    }
+
+    #[test]
+    fn a_booking_is_a_calendar_event() {
         let b = obj(json!({
             "id": "0192d3c4-0000-7000-8000-000000000001", "number": "BKG-2026-00007", "service_name": "Massage", "staff_name": "Asha",
-            "guest_name": "<script>alert(1)</script>", "start_time": "2026-11-02T04:30:00.000Z", "end_time": "2026-11-02T05:30:00.000Z",
-            "location_type": "Video", "location": "https://meet.example.test/x?a=1&b=2", "seats": 2, "cancellation_reason": "Sick & sorry",
+            "start_time": "2026-11-02T04:30:00.000Z", "end_time": "2026-11-02T05:30:00.000Z",
+            "location_type": "Video", "location": "https://meet.example.test/x?a=1&b=2",
         }));
-        let kolkata: Tz = "Asia/Kolkata".parse().unwrap();
-        let (subject, html) = compose(Guest::Confirmed, &b, kolkata, "https://spa.test/m?token=t&x=1", "/ics");
-        assert_eq!(subject, "Booking confirmed: Massage, Mon 2 Nov 2026, 10:00 (Asia/Kolkata)");
-        assert!(!html.contains("<script>") && html.contains("&lt;script&gt;"));
-        assert!(html.contains("Video: https://meet.example.test/x?a=1&amp;b=2"));
-        assert!(html.contains("href=\"https://spa.test/m?token=t&amp;x=1\""));
-        assert!(html.contains(">11:00<") && html.contains(">2<") && html.contains("BKG-2026-00007"));
-        let (_, cancelled) = compose(Guest::Cancelled, &b, kolkata, "m", "i");
-        assert!(cancelled.contains("Sick &amp; sorry") && !cancelled.contains("href="), "no self-service links on a cancelled booking");
         let event = booking_event(&b, "Massage with Asha".into(), "CONFIRMED").unwrap();
         assert_eq!(event.uid, "0192d3c4-0000-7000-8000-000000000001@bookings.ferrum");
         assert!(event.description.unwrap().contains("Video: https://meet.example.test"));

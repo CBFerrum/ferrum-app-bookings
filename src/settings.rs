@@ -29,6 +29,8 @@ pub struct Settings {
     pub manage_page_url: Option<String>,
     /// The business's working calendar (Admin → Calendars): nobody is booked outside its open time.
     pub calendar: Option<String>,
+    /// At each reminder time the booked staff member is reminded too (once for a class session).
+    pub remind_staff: bool,
 }
 
 type Row = (Uuid, Option<Uuid>, bool, bool, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<String>, Option<String>);
@@ -56,10 +58,14 @@ pub async fn load(tx: &mut Tx, tenant: Uuid) -> Result<Settings> {
     };
     reminders.sort_unstable_by(|a, b| b.cmp(a));
     reminders.dedup();
-    let calendar: Option<String> = if id.is_nil() {
-        None
+    let (calendar, remind_staff): (Option<String>, bool) = if id.is_nil() {
+        (None, false)
     } else {
-        sqlx::query_scalar("select calendar from e_booking_settings where tenant_id = $1 and id = $2").bind(tenant).bind(id).fetch_one(&mut **tx).await?
+        sqlx::query_as("select calendar, coalesce(remind_staff, false) from e_booking_settings where tenant_id = $1 and id = $2")
+            .bind(tenant)
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?
     };
     let url = |v: Option<String>| v.map(|u| u.trim().trim_end_matches('/').to_string()).filter(|u| !u.is_empty());
     Ok(Settings {
@@ -76,6 +82,7 @@ pub async fn load(tx: &mut Tx, tenant: Uuid) -> Result<Settings> {
         public_url: url(public_url),
         manage_page_url: url(manage),
         calendar: calendar.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()),
+        remind_staff,
     })
 }
 
@@ -220,6 +227,7 @@ mod tests {
             page_url: url.map(str::to_string),
             manage_page_url: page.map(str::to_string),
             calendar: None,
+            remind_staff: false,
         }
     }
 

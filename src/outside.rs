@@ -327,7 +327,7 @@ async fn clashes(k: &Kernel, ctx: &Ctx, tx: &mut ferrum_kernel::Tx, staff: Uuid,
         k.set_values_tx(ctx, tx, "Booking", booking, v.as_object().cloned().unwrap_or_default()).await?;
         if busy {
             let b = k.get_tx(ctx, tx, "Booking", booking, false).await?;
-            crate::notify::tell_staff(tx, ctx.tenant, &b, crate::notify::StaffNote::Clash).await?;
+            crate::notify::tell_staff(k, ctx, tx, &b, crate::notify::StaffNote::Clash).await?;
         }
     }
     Ok(())

@@ -227,7 +227,7 @@ export function serverErrors(error: unknown, questions: Question[]): FormErrors 
 export const isTaken = (error: unknown) => error instanceof ApiError && (error.status === 409 || error.fields.some((f) => f.field === "start_time"));
 
 /** The request `POST /book` takes. */
-export function bookBody(o: { service: Service; start: string; staff?: string; form: Form; zone: string; waitlist?: boolean; website?: string }) {
+export function bookBody(o: { service: Service; start: string; staff?: string; form: Form; zone: string; waitlist?: boolean; website?: string; language?: string }) {
   const { service, form } = o;
   return {
     service: service.id,
@@ -239,6 +239,8 @@ export function bookBody(o: { service: Service; start: string; staff?: string; f
     phone: form.phone.trim() || null,
     notes: form.notes.trim() || null,
     time_zone: o.zone,
+    // The language the page is shown in: the guest's messages come in it when the business has written them so.
+    language: o.language,
     waitlist: o.waitlist || undefined,
     answers: service.questions.filter((q) => (form.answers[q.question] ?? "").trim()).map((q) => ({ question: q.question, answer: form.answers[q.question].trim() })),
     // A field people never see: only a program fills it in.

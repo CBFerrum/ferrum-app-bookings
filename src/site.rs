@@ -261,6 +261,13 @@ fn answers(svc: &ServiceInfo, raw: Option<&Value>) -> Result<Vec<Value>> {
     if errors.is_empty() { Ok(out) } else { Err(Error::Validation(errors)) }
 }
 
+/// A language tag as a person writes one (`en`, `hi`, `pt-BR`): letters and digits in short parts split by hyphens.
+fn language_tag(l: &str) -> bool {
+    let mut parts = l.split('-');
+    parts.next().is_some_and(|p| (2..=3).contains(&p.len()) && p.chars().all(|c| c.is_ascii_alphabetic()))
+        && parts.all(|p| (2..=8).contains(&p.len()) && p.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
 /// `POST /book`: a guest's booking. Returns it with its self-service token.
 async fn book(k: &Kernel, ctx: &Ctx, body: &Map<String, Value>) -> Result<(u16, Value)> {
     // A form field people never see: whatever fills it is a bot, answered like a person.
@@ -273,6 +280,8 @@ async fn book(k: &Kernel, ctx: &Ctx, body: &Map<String, Value>) -> Result<(u16, 
     let phone = text(body, "phone", 40, &mut errors);
     let notes = text(body, "notes", 2000, &mut errors);
     let zone = text(body, "time_zone", 64, &mut errors);
+    // The language the page was shown in: a tag from a browser that is odd is dropped, never a refusal.
+    let language = text(body, "language", 20, &mut errors).filter(|l| language_tag(l));
     let start = text(body, "start_time", 64, &mut errors);
     if name.is_none() {
         errors.push(FieldError::new("name", "is required"));
@@ -349,6 +358,7 @@ async fn book(k: &Kernel, ctx: &Ctx, body: &Map<String, Value>) -> Result<(u16, 
             "guest_email": email,
             "guest_phone": phone,
             "guest_time_zone": zone.clone().unwrap_or_else(|| ctx.schema.timezone.clone()),
+            "guest_language": language,
             "notes": notes,
             "answers": rows,
         }));

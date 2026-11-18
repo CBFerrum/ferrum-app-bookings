@@ -60,10 +60,11 @@ pub fn same_local_time(first: Instant, tz: Tz, date: NaiveDate) -> Instant {
 
 /// The fields of a booking its occurrences carry over; the engine fills in the rest.
 fn occurrence(booking: &Doc, series: Uuid, start: Instant) -> Doc {
-    let mut next: Doc = ["service", "staff", "seats", "customer", "guest_name", "guest_email", "guest_phone", "guest_time_zone", "notes", "company"]
-        .iter()
-        .filter_map(|f| booking.get(*f).filter(|v| !v.is_null()).map(|v| (f.to_string(), v.clone())))
-        .collect();
+    let mut next: Doc =
+        ["service", "staff", "seats", "customer", "guest_name", "guest_email", "guest_phone", "guest_time_zone", "guest_language", "notes", "company"]
+            .iter()
+            .filter_map(|f| booking.get(*f).filter(|v| !v.is_null()).map(|v| (f.to_string(), v.clone())))
+            .collect();
     next.insert("series".into(), json!(series));
     next.insert("start_time".into(), json!(ts(start)));
     next
