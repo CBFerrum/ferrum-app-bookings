@@ -1346,12 +1346,12 @@ async fn deposits() {
         async move {
             let v = t.book(json!({"service": facial.to_string(), "start_time": rfc(at(hhmm)), "name": "Guest", "email": email})).await.expect("booked");
             let number = v["booking"]["number"].as_str().unwrap().to_string();
-            (uid(&t.find_one("Booking", json!({"number": number})).await), v["booking"].clone())
+            (uid(&t.find_one("Booking", json!({"number": number})).await), v["booking"].clone(), v["token"].as_str().unwrap().to_string())
         }
     };
 
     // ───────────── a guest books: the booking waits for its deposit ─────────────
-    let (first, view) = book("10:00", "asha@example.test").await;
+    let (first, view, token) = book("10:00", "asha@example.test").await;
     assert_eq!((view["status"].clone(), view["deposit"]["status"].clone()), (json!("Pending"), json!("Initiated")));
     assert_eq!(dec_of(&view["deposit"]["amount"]), "300", "30% of 1,000");
     let b = t.get("Booking", first).await;
@@ -1359,8 +1359,19 @@ async fn deposits() {
     assert_eq!((invoice["docstatus"].clone(), dec_of(&invoice["grand_total"])), (json!(1), "1000".to_string()), "invoiced at once");
     let request: Uuid = b["bpay_payment_request"].as_str().unwrap().parse().unwrap();
     let (first_invoice, first_request, first_number) = (uid(&invoice), request, b["number"].as_str().unwrap().to_string());
+    // The guest's page: no payment address yet, held until the request expires; then the gateway's address; then paid.
+    let pending = t.get("PaymentRequest", request).await;
+    assert_eq!((view["deposit"]["payment_url"].clone(), view["deposit"]["pay_by"].clone()), (Value::Null, pending["expires_at"].clone()), "{view}");
+    t.act(&fakepay, "PaymentRequest", request, "set_gateway_details", json!({"payment_url": "https://pay.test/s/1"})).await;
+    let page = t.get_pub(&format!("/manage/{token}")).await;
+    assert_eq!(page["booking"]["deposit"]["payment_url"], json!("https://pay.test/s/1"));
     t.act(&fakepay, "PaymentRequest", request, "mark_paid", json!({"amount": "300", "currency": "INR", "gateway_reference": "pi_1"})).await;
     assert_eq!(t.get("Booking", first).await["status"], json!("Confirmed"), "paying the deposit confirms it");
+    let page = t.get_pub(&format!("/manage/{token}")).await;
+    assert_eq!(
+        (page["booking"]["deposit"]["status"].clone(), page["booking"]["deposit"]["payment_url"].clone(), page["booking"]["deposit"]["pay_by"].clone()),
+        (json!("Paid"), Value::Null, Value::Null)
+    );
     assert_eq!(dec_of(&t.get("SalesInvoice", uid(&invoice)).await["outstanding_amount"]), "700", "the rest is paid on the day");
 
     // ───────────── cancelled three days ahead: all 300 back ─────────────
@@ -1384,7 +1395,7 @@ async fn deposits() {
 
     // ───────────── cancelled within the two days: the deposit is kept ─────────────
     t.update(&manager, "BookingService", facial, json!({"bpay_refund_hours": 100})).await;
-    let (second, _) = book("12:00", "ben@example.test").await;
+    let (second, _, _) = book("12:00", "ben@example.test").await;
     let b = t.get("Booking", second).await;
     let request: Uuid = b["bpay_payment_request"].as_str().unwrap().parse().unwrap();
     t.act(&fakepay, "PaymentRequest", request, "mark_paid", json!({"amount": "300", "currency": "INR", "gateway_reference": "pi_2"})).await;
@@ -1395,7 +1406,7 @@ async fn deposits() {
     assert_eq!(dec_of(&invoice["outstanding_amount"]), "0", "credited for the 700 not kept");
 
     // ───────────── cancelled before paying: nothing was taken ─────────────
-    let (third, _) = book("14:00", "omar@example.test").await;
+    let (third, _, _) = book("14:00", "omar@example.test").await;
     let b = t.get("Booking", third).await;
     t.act(&manager, "Booking", third, "cancel_booking", json!({})).await;
     let request = t.get("PaymentRequest", b["bpay_payment_request"].as_str().unwrap().parse().unwrap()).await;
@@ -1469,7 +1480,7 @@ async fn deposits() {
     // ───────────── Booking Deposits disabled: no deposit, and Bookings may not ask for one ─────────────
     t.k.disable_packages(&t.admin, &["bookings_payments".to_string()]).await.expect("disabled");
     let before = counts().await;
-    let (fourth, view) = book("16:00", "nia@example.test").await;
+    let (fourth, view, _) = book("16:00", "nia@example.test").await;
     assert_eq!((view["status"].clone(), view["deposit"].clone()), (json!("Confirmed"), Value::Null), "confirmed without a deposit, as before it was installed");
     let b = t.get("Booking", fourth).await;
     assert_eq!((b["sales_invoice"].clone(), b.get("bpay_payment_request").cloned().unwrap_or_default()), (Value::Null, Value::Null));
@@ -1906,6 +1917,25 @@ async fn unpaid_deposits() {
     assert_eq!(refunds.len(), 1, "refunded exactly once");
     assert_eq!((dec_of(&refunds[0]["amount"]), dec_of(&b["bpay_kept"])), ("300".to_string(), "0".to_string()), "all of it");
     assert!(subjects("cat@example.test").await.last().unwrap().starts_with("Deposit refunded"));
+
+    // ───────────── the guest's page: the hold is the earlier limit; once released, the request's own expiry ─────────────
+    let gil = t.book(json!({"service": peel.to_string(), "start_time": rfc(at("09:00")), "name": "Guest", "email": "gil@example.test"})).await.unwrap();
+    let (gil_page, gil_id) =
+        (format!("/manage/{}", gil["token"].as_str().unwrap()), uid(&t.find_one("Booking", json!({"number": gil["booking"]["number"]})).await));
+    let when = |v: &Value| DateTime::parse_from_rfc3339(v.as_str().expect("a time")).unwrap().with_timezone(&Utc);
+    let b = t.get("Booking", gil_id).await;
+    let request_id: Uuid = b["bpay_payment_request"].as_str().unwrap().parse().unwrap();
+    let request = t.get("PaymentRequest", request_id).await;
+    let page = t.get_pub(&gil_page).await["booking"]["deposit"].clone();
+    assert_eq!(when(&page["pay_by"]), when(&b["created_at"]) + Duration::minutes(15), "the 15-minute hold ends before the request's 30");
+    assert!(when(&page["pay_by"]) < when(&request["expires_at"]));
+    t.act(&fakepay, "PaymentRequest", request_id, "set_gateway_details", json!({"payment_url": "https://pay.test/s/2"})).await;
+    t.maintain(soon).await;
+    assert_eq!(status(gil_id).await, "Expired");
+    let page = t.get_pub(&gil_page).await["booking"].clone();
+    assert_eq!(page["status"], json!("Expired"));
+    assert_eq!(page["deposit"]["payment_url"], json!("https://pay.test/s/2"), "still payable");
+    assert_eq!(when(&page["deposit"]["pay_by"]), when(&request["expires_at"]), "the request's own expiry now");
 
     // ───────────── no hold set: the time is kept until the deposit request expires ─────────────
     let eve = book(facial, "14:00", "eve@example.test").await.unwrap();

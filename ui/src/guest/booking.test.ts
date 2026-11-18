@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@ferrum/client";
-import { bookBody, calendarLinks, check, durationText, firstDay, hasErrors, isLink, isTaken, onlyPerson, openDays, priceText, serverErrors, whereText, type Question, type Service, type Slots } from "./booking";
+import { bookBody, calendarLinks, check, depositDue, durationText, firstDay, hasErrors, isLink, isTaken, onlyPerson, openDays, payLink, pollEvery, priceText, serverErrors, whereText, type GuestBooking, type Question, type Service, type Slots } from "./booking";
 
 const questions: Question[] = [
   { question: "Any allergies?", type: "Yes/No", options: [], required: true },
@@ -142,5 +142,35 @@ describe("the guest's calendar", () => {
 
   it("leaves out what it does not have", () => {
     expect(calendarLinks({ title: "x", start, end: start + 1000 }).google).not.toContain("location");
+  });
+});
+
+describe("a deposit that is due", () => {
+  const deposit = (status: string, url: string | null = "https://pay.test/s/1") => ({ amount: "300.00", currency: "INR", status, payment_url: url, kept: null, pay_by: null });
+  const b = (status: string, d: ReturnType<typeof deposit> | null | undefined) => ({ status, deposit: d }) as unknown as GuestBooking;
+
+  it("is due while the request waits and the booking is held or expired", () => {
+    expect(depositDue(b("Pending", deposit("Initiated")))).toBe(true);
+    expect(depositDue(b("Expired", deposit("Initiated")))).toBe(true);
+    expect(depositDue(b("Pending", deposit("Paid")))).toBe(false);
+    expect(depositDue(b("Confirmed", deposit("Initiated")))).toBe(false);
+    expect(depositDue(b("Pending", null))).toBe(false);
+    expect(depositDue(b("Pending", undefined))).toBe(false);
+  });
+
+  it("links only to an https address", () => {
+    expect(payLink(b("Pending", deposit("Initiated")))).toBe("https://pay.test/s/1");
+    for (const bad of ["http://x.test", "javascript:alert(1)", "https://x.test/a b", "", null]) expect(payLink(b("Pending", deposit("Initiated", bad)))).toBeNull();
+    expect(payLink(b("Pending", deposit("Paid")))).toBeNull();
+  });
+
+  it("asks again until the payment page exists, then until the payment arrives, then stops", () => {
+    const wait = b("Pending", deposit("Initiated", null));
+    expect(pollEvery(wait, 0)).toBe(3000);
+    expect(pollEvery(wait, 59_999)).toBe(3000);
+    expect(pollEvery(wait, 60_000)).toBe(15_000);
+    expect(pollEvery(b("Pending", deposit("Initiated")), 0)).toBe(15_000);
+    expect(pollEvery(b("Confirmed", deposit("Paid")), 0)).toBe(false);
+    expect(pollEvery(undefined, 0)).toBe(false);
   });
 });

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.1
+
+Needs the same platform as 0.10.0. No database change. Interface, and one field added to the guest view.
+
+- **A guest can reach the payment step of a deposit.** The guest's own booking page says how much is due, until when the
+  time is held and has a button to the payment page; it asks the server again until the payment page exists (the gateway
+  writes its address a moment after booking) and until the payment has arrived. A booking that waits for a deposit no
+  longer says "Waiting for confirmation" and that the business will confirm it by email, and one whose time was released
+  but whose request is still payable still offers the payment. A deposit paid and a payment that did not go through are
+  shown. The page links only to an `https://` address.
+- **`deposit.pay_by`** is added to the guest view (`GET /manage/{token}`, `POST /book` and the cancel and reschedule
+  answers): while the request is `Initiated`, until when the booking is held (the earlier of the request's expiry and the
+  hold) or, once released, until when the request lasts.
+
 ## 0.10.0
 
 Needs Ferrum 0.4.0 (apps' upkeep runs one workspace at a time, on whichever replica is free).

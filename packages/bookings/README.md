@@ -157,7 +157,14 @@ answer the same 404. `POST`s are limited to 30 per 10 minutes per address and wo
 time_zone, when ("Mon 2 Nov 2026, 10:00 (Asia/Kolkata)"), until ("11:00"), seats,
 location_type, location (null when cancelled), guest: {name, email, phone}, answers: [{question,
 answer}], amount, cancellation_reason, waitlist_position (Waitlisted only), can_cancel,
-cancel_until, can_reschedule, reschedule_until, links: {manage, ics}}`.
+cancel_until, can_reschedule, reschedule_until, links: {manage, ics}, deposit}`.
+
+`deposit` is `null` without Booking Deposits or for a booking with no deposit request, else `{amount, currency,
+status (the payment request's: Initiated, Paid, Failed, Cancelled or Expired), payment_url, kept, pay_by}`.
+`payment_url` is given only while `status` is `Initiated`, and is null until the payment gateway has written it (a
+moment after booking), so a page asks again. `pay_by` is, while `status` is `Initiated`, for a `Pending` booking the
+earlier of the request's expiry and the end of the hold (the service's or the settings' `bpay_hold_minutes` from
+booking), for an `Expired` booking the request's expiry, else null.
 
 Guest tokens are 256 random bits; only their SHA-256 is stored (`bookings_token`). A booking has
 one per link handed out (the booking response, each email, each `guest_link`); all work until

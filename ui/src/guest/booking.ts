@@ -58,6 +58,18 @@ export interface Slots {
   days: { date: string; slots: Slot[] }[];
 }
 
+/** The deposit a booking waits for (`payments::guest_view`), with Booking Deposits. */
+export interface Deposit {
+  amount: string;
+  currency: string | null;
+  status: "Initiated" | "Paid" | "Failed" | "Cancelled" | "Expired";
+  /** Where to pay it: only while it is due, and only once the payment gateway has written it. */
+  payment_url: string | null;
+  kept: string | null;
+  /** Until when the time is held, or the request lasts. */
+  pay_by: string | null;
+}
+
 /** What a guest sees of their booking (`guest_view` in the app's site). */
 export interface GuestBooking {
   number?: string | null;
@@ -81,6 +93,22 @@ export interface GuestBooking {
   /** The staff member's outside calendar became busy at this time, and nobody has kept it. */
   clash?: boolean;
   reschedule_until?: string | null;
+  deposit?: Deposit | null;
+}
+
+/** The guest can still pay a deposit: it waits, and the booking is held for it or was released (it is still payable). */
+export const depositDue = (b: GuestBooking): boolean => b.deposit?.status === "Initiated" && (b.status === "Pending" || b.status === "Expired");
+
+/** The payment page's address, only if it is https: nothing else becomes a link. */
+export function payLink(b: GuestBooking): string | null {
+  const u = depositDue(b) ? b.deposit?.payment_url : null;
+  return u && /^https:\/\/\S+$/.test(u) ? u : null;
+}
+
+/** Milliseconds until the booking is asked about again, or false to stop. The payment page appears a moment after booking. */
+export function pollEvery(b: GuestBooking | undefined, openForMs: number): number | false {
+  if (!b || !depositDue(b)) return false;
+  return payLink(b) || openForMs >= 60_000 ? 15_000 : 3000;
 }
 
 /** The days that have times, by date. */

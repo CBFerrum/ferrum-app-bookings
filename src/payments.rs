@@ -329,9 +329,14 @@ pub(crate) async fn upkeep(k: &Kernel, ctx: &Ctx, now: crate::Instant) -> Result
     Ok(done)
 }
 
-/// Whether the hold of a Pending booking's unpaid deposit ran out by `now`: its service's hold
-/// minutes, or the settings', from when it was booked (none set: only the request's own expiry).
+/// Whether the hold of a Pending booking's unpaid deposit ran out by `now`.
 async fn hold_over(tx: &mut Tx, tenant: Uuid, b: &Doc, now: crate::Instant) -> Result<bool> {
+    Ok(hold_until(tx, tenant, b).await?.is_some_and(|t| t <= now))
+}
+
+/// Until when the time of a Pending booking is held for its unpaid deposit: its service's hold
+/// minutes, or the settings', from when it was booked (none set: no hold, only the request's own expiry).
+async fn hold_until(tx: &mut Tx, tenant: Uuid, b: &Doc) -> Result<Option<crate::Instant>> {
     let minutes: Option<i64> = sqlx::query_scalar(
         "select coalesce(sv.bpay_hold_minutes, (select bpay_hold_minutes from e_booking_settings where tenant_id = $1 limit 1)) \
          from e_booking_service sv where sv.tenant_id = $1 and sv.id = $2",
@@ -342,24 +347,32 @@ async fn hold_over(tx: &mut Tx, tenant: Uuid, b: &Doc, now: crate::Instant) -> R
     .await?
     .flatten();
     Ok(match (minutes, time(b, "created_at")) {
-        (Some(m), Some(at)) => at + Duration::minutes(m) <= now,
-        _ => false,
+        (Some(m), Some(at)) => Some(at + Duration::minutes(m)),
+        _ => None,
     })
 }
 
-/// What a guest sees of their booking's deposit: how much, and the way to pay it while it is due.
+/// What a guest sees of their booking's deposit: how much, the way to pay it while it is due, and
+/// until when (`pay_by`: the earlier of the hold and the request's expiry while the time is held, the
+/// request's expiry once it was released).
 pub async fn guest_view(ctx: &Ctx, tx: &mut Tx, b: &Doc) -> Result<Value> {
     let Some(pr) = id(b, "bpay_payment_request") else { return Ok(Value::Null) };
-    let row: Option<(String, Option<String>, Option<String>)> =
-        sqlx::query_as("select status, currency_code, payment_url from e_payment_request where tenant_id = $1 and id = $2")
+    let row: Option<(String, Option<String>, Option<String>, Option<crate::Instant>)> =
+        sqlx::query_as("select status, currency_code, payment_url, expires_at from e_payment_request where tenant_id = $1 and id = $2")
             .bind(ctx.tenant)
             .bind(pr)
             .fetch_optional(&mut **tx)
             .await?;
-    let Some((status, currency, url)) = row else { return Ok(Value::Null) };
+    let Some((status, currency, url, expires)) = row else { return Ok(Value::Null) };
+    let pay_by = match (status.as_str(), s(b, "status")) {
+        ("Initiated", Some("Pending")) => [expires, hold_until(tx, ctx.tenant, b).await?].into_iter().flatten().min(),
+        ("Initiated", Some("Expired")) => expires,
+        _ => None,
+    };
     Ok(json!({
         "amount": money(d(b, "bpay_deposit")), "currency": currency, "status": status,
         "payment_url": if status == "Initiated" { url } else { None }, "kept": b.get("bpay_kept"),
+        "pay_by": pay_by.map(crate::ts),
     }))
 }
 
