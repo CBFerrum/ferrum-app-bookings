@@ -229,6 +229,19 @@ fn shown(html: &str) -> String {
     html.replace("&#x2f;", "/")
 }
 
+/// What a hostile guest types as their name: a script, a quote and a link.
+const HOSTILE: &str = r#"<script>alert(1)</script> "Q" <a href="https://evil.test/x">go</a>"#;
+
+/// A mail body shows [`HOSTILE`] as text: every tag and quote escaped, nothing a mail reader runs or follows.
+/// How many times it is shown.
+fn shows_hostile_as_text(html: &str) -> usize {
+    let html = shown(html);
+    assert!(!html.contains("<script") && !html.contains("href=\"https://evil.test"), "{html}");
+    let seen = html.matches("&lt;script&gt;alert(1)&lt;/script&gt; &quot;Q&quot; &lt;a href=&quot;https://evil.test/x&quot;&gt;go&lt;/a&gt;").count();
+    assert!(seen > 0, "{html}");
+    seen
+}
+
 fn token_in(content: &str) -> String {
     let at = content.find("token=").expect("a self-service link") + 6;
     content[at..at + 43].to_string()
@@ -2036,7 +2049,7 @@ async fn wording() {
     let ist: Tz = "Asia/Kolkata".parse().unwrap();
     let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
     let at = |hhmm: &str| local(ist, day, hhmm);
-    let (facial, manager, _mira) =
+    let (facial, manager, mira) =
         wording_setup(&t, json!({"price": "0", "location_type": "Video", "location_details": "https://meet.example.test/x?a=1&b=2"})).await;
     let book = |hhmm: &'static str, name: &'static str, email: &'static str, extra: Value| {
         let t = &t;
@@ -2077,6 +2090,18 @@ async fn wording() {
     let cancelled = &shown(mails.last().unwrap()["content"].as_str().unwrap());
     assert!(mails.last().unwrap()["subject"].as_str().unwrap().starts_with("Booking cancelled:"));
     assert!(cancelled.contains("Sick &amp; sorry") && !cancelled.contains("href="), "{cancelled}");
+
+    // ───────────── a script, a quote and a link typed as a name or a reason are text in the mail ─────────────
+    let hostile = book("17:00", HOSTILE, "hostile@example.test", json!({})).await;
+    t.maintain(Utc::now()).await;
+    let mails = t.mails_to("hostile@example.test").await;
+    shows_hostile_as_text(mails[0]["content"].as_str().unwrap());
+    // In-app notes are plain text the interface prints as text: the name as typed, never read as markup.
+    assert!(t.notes(&mira).await.contains(&format!("New booking: Facial with {HOSTILE}")), "{:?}", t.notes(&mira).await);
+    t.act(&manager, "Booking", hostile, "cancel_booking", json!({"reason": HOSTILE})).await;
+    t.maintain(Utc::now()).await;
+    let mails = t.mails_to("hostile@example.test").await;
+    assert_eq!(shows_hostile_as_text(mails.last().unwrap()["content"].as_str().unwrap()), 2, "the name and the reason");
 
     // ───────────── a workspace's wording is used, and a reset brings the default back ─────────────
     let mut own = serde_json::to_value(defaults.iter().find(|m| m.key == "bookings.guest_confirmed").unwrap()).unwrap();
@@ -2218,8 +2243,11 @@ async fn wording_without_the_mail_app() {
     let t = boot_with("plain", &[], Some(sent.clone())).await;
     let ist: Tz = "Asia/Kolkata".parse().unwrap();
     let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
-    let (facial, _manager, _mira) = wording_setup(&t, json!({"price": "0"})).await;
-    t.book(json!({"service": facial.to_string(), "start_time": rfc(local(ist, day, "10:00")), "name": "Guest", "email": "pat@example.test"})).await.unwrap();
+    let (facial, manager, mira) = wording_setup(&t, json!({"price": "0"})).await;
+    let v = t
+        .book(json!({"service": facial.to_string(), "start_time": rfc(local(ist, day, "10:00")), "name": HOSTILE, "email": "pat@example.test"}))
+        .await
+        .unwrap();
     t.maintain(Utc::now()).await;
     let rows =
         t.texts("select template || '/' || channel from message_send where tenant_id = $1 and recipient = 'pat@example.test' and $2::uuid is null", None).await;
@@ -2228,6 +2256,16 @@ async fn wording_without_the_mail_app() {
     let mails = sent.0.lock().unwrap().clone();
     assert_eq!(mails.len(), 1, "{mails:?}");
     assert!(mails[0].0 == "pat@example.test" && mails[0].1.starts_with("Booking confirmed: Facial"), "{mails:?}");
+    // What the guest typed is escaped on this path too, in the guest's mail and the reason a cancellation gives.
+    shows_hostile_as_text(&mails[0].2);
+    assert!(t.notes(&mira).await.contains(&format!("New booking: Facial with {HOSTILE}")), "{:?}", t.notes(&mira).await);
+    let booking = uid(&t.find_one("Booking", json!({"number": v["booking"]["number"]})).await);
+    t.act(&manager, "Booking", booking, "cancel_booking", json!({"reason": HOSTILE})).await;
+    t.maintain(Utc::now()).await;
+    t.k.dispatch_outbox_once().await.unwrap();
+    let mails = sent.0.lock().unwrap().clone();
+    assert!(mails.len() == 2 && mails[1].1.starts_with("Booking cancelled: Facial"), "{mails:?}");
+    assert_eq!(shows_hostile_as_text(&mails[1].2), 2, "the name and the reason");
 }
 
 #[test]
