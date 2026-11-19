@@ -542,17 +542,29 @@ pub(crate) async fn invoice(hc: &mut HookCtx<'_>, booking: &Doc) -> Result<Value
     Ok(created("SalesInvoice", &inv))
 }
 
-/// The guest's client record, the ERP Customer that invoices, CRM and Helpdesk share: the one ERP
-/// finds for a person by the guest's email (else their phone's digits) or makes, as the system
+/// The guest's client record, the ERP Customer that invoices, CRM and Helpdesk share. A booking made
+/// on the public page gets a customer of its own, made now with the name, email and phone typed
+/// there: a typed address proves nothing, so it never finds an existing customer (whose history and
+/// account a stranger would otherwise reach). A booking staff make finds the one ERP finds for a
+/// person by the email (else the phone's digits) or makes, as the system
 /// (`ferrum_app_erp::portal::customer_for`, which also holds its lock on the address to the end of
 /// the transaction). `None` without a guest name, or with neither an email nor a phone number of 6
-/// to 20 digits: there is nothing to find the guest by.
+/// to 20 digits: there is nothing to know the guest by.
 pub(crate) async fn client_for(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc) -> Result<Option<Uuid>> {
     let (email, phone) = (s(doc, "guest_email").filter(|e| !e.trim().is_empty()), s(doc, "guest_phone"));
     let digits = phone.map_or(0, |p| p.chars().filter(char::is_ascii_digit).count());
     let (Some(name), true) = (s(doc, "guest_name"), email.is_some() || (6..=20).contains(&digits)) else {
         return Ok(None);
     };
+    if s(doc, "source") == Some("Public") {
+        let c = obj(json!({
+            "customer_name": name,
+            "customer_type": "Individual",
+            "email": email.map(|e| e.trim().to_lowercase()),
+            "phone": phone.map(str::trim).filter(|p| !p.is_empty()),
+        }));
+        return Ok(Some(doc_id(&k.insert_tx(&sys(ctx), tx, "Customer", c).await?)?));
+    }
     Ok(Some(ferrum_app_erp::portal::customer_for(k, &sys(ctx), tx, name, email, phone).await?.0))
 }
 

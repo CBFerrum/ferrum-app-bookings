@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16.2
+
+Needs the same platform as 0.16.1. No database change.
+
+- **A guest is never matched to an existing customer.** A booking made on the public page gets a customer of its own,
+  made from the name, email and phone typed there; its invoice and deposit are that customer's. Before, a guest who
+  typed an existing customer's email or phone was put on that customer: the booking and its deposit invoice landed on
+  their account (and in their portal). A booking staff make still finds the customer by email or phone digits, and a
+  booking for a chosen customer keeps them.
+
 ## 0.16.1
 
 Needs Ferrum with K0-1 (`reports::readable_choice`, `readable_default`, `readable_columns`). No database change.

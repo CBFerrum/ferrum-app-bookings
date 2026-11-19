@@ -138,7 +138,7 @@ Numbered `BKG-{YYYY}-{seq:5}`. Create through `POST /api/v1/Booking` with `servi
 `answers` rows `{question, answer}`, `notes`, `company`, `join_waitlist`. The server fills
 `staff`, `staff_name`, `resource`, `end_time`, `status`, `service_name`, `location_type`,
 `location`, `item`, `rate` (the service price now), `amount` (rate × seats), `company` (from the
-settings) and guest details from the customer. Staff bookings are `Confirmed` at once; a full
+settings) and guest details from the customer. Without a `customer` the booking gets one when it is made: a public booking's is made from what the guest typed, never found by that address; a staff booking's is found by email or phone digits, or made. Staff bookings are `Confirmed` at once; a full
 class with `join_waitlist` gives `Waitlisted`; an unavailable time is `409` (taken: busy, full,
 no resource) or `422` (outside hours, too soon or far ahead, off the grid) with the reason.
 
@@ -157,7 +157,7 @@ deleted (cancel them). `source` is `Internal` or `Public`.
 | `cancel_by_business` (We Cancel It) | Pending, Confirmed, Waitlisted | `{reason?}` → the booking, `Cancelled`, `cancelled_by: Business`: the business lets the time go, so a paid deposit comes back in full whatever the service's terms; otherwise as `cancel_booking` |
 | `complete` | Confirmed, once started | → `Completed` |
 | `mark_no_show` | Pending, Confirmed, once started | → `No Show` |
-| `make_sales_invoice` | Confirmed, Completed, No Show | → `{entity: "SalesInvoice", id, number}`: a draft invoice of the booking's company in its currency, one line `item × seats` at the booked `rate`, no discount (the company's default sales taxes apply). A guest without a customer becomes one, as ERP finds a person's (`portal::customer_for`: an enabled customer with the guest's email, else phone digits, that no web shop's guest checkout made, else a new individual). Refused while a draft or submitted invoice exists; a deleted draft (the link clears) or a cancelled invoice allows a new one. Needs Sales Invoice create permission |
+| `make_sales_invoice` | Confirmed, Completed, No Show | → `{entity: "SalesInvoice", id, number}`: a draft invoice of the booking's company in its currency, one line `item × seats` at the booked `rate`, no discount (the company's default sales taxes apply). A guest without a customer becomes one: a booking from the public page a customer of its own, made from what the guest typed (never one found by that address); a staff booking's guest as ERP finds a person's (`portal::customer_for`: an enabled customer with the guest's email, else phone digits, that no web shop's guest checkout made, else a new individual). Refused while a draft or submitted invoice exists; a deleted draft (the link clears) or a cancelled invoice allows a new one. Needs Sales Invoice create permission |
 | `guest_link` | not Cancelled | → `{token, url, api, expires_at, note}`: a fresh self-service link to hand to the guest (the fallback without the Mail app) |
 
 ### Class Session actions — `POST /api/v1/BookingSession/{id}/actions/{action}`

@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.16.1-0e7490?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.16.2-0e7490?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -37,13 +37,13 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 
 | | |
 |---|---|
-| **Version** | 0.16.1 (Booking Deposits connector 0.3.0) |
+| **Version** | 0.16.2 (Booking Deposits connector 0.3.0) |
 | **Kind** | Its own interface at `/bookings/` for the team, and a public booking page at `/bookings/book/{workspace}`. Records open in the platform's records screens |
 | **What it adds** | 15 entities (8 you work with, 7 that sit inside them), 2 roles, 3 reports, 1 menu module, 2 packages (`bookings`, `bookings_payments`), 1 payments connector, 2 SQL files |
 | **Depends on** | Ferrum platform `>=0.4.0, <0.5` and [ERP](https://github.com/CBFerrum/ferrum-app-erp) `>=0.1` (installing Bookings installs ERP) |
 | **Works with** | Mail, Chat and Calendar (Comms) for emails, calendar invitations and video meetings, Commerce for deposits, ERP for customers, items and invoices, platform working calendars for holidays |
 | **Languages** | English, Arabic, Hindi (about 380 interface words each, and 250 names each) |
-| **Tests** | 74 Rust tests, 93 interface tests |
+| **Tests** | 76 Rust tests, 93 interface tests |
 | **Licence** | AGPL-3.0-only |
 
 ## 📸 Screenshots
@@ -132,7 +132,7 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 - **If it was taken while they typed.** Confirm is disabled with a message, and the server's complaints sit beside the field.
 - **Waitlist for a full class.** A guest can join the waitlist instead of failing.
 - **Their own booking page.** Every link shows the booking, lets the guest add it to a calendar (`.ics`), move it or cancel it. A cancel or move is allowed up to the configured number of hours before the start.
-- **Guests become customers.** A booking finds the guest's ERP customer by email or phone digits, or makes one, when it is booked, as ERP finds a person's: never a customer a web shop's guest checkout made, and one for bookings at the same moment.
+- **Guests become customers.** A booking made on the public page gets an ERP customer of its own, made from the name, email and phone the guest typed: a typed address proves nothing, so it never finds an existing customer (whose history and account a stranger would otherwise reach), and its invoices and deposit are that customer's. A booking staff make finds the guest's ERP customer by email or phone digits, or makes one, as ERP finds a person's: never a customer a web shop's guest checkout made, and one for bookings at the same moment.
 - **Spam guard.** A hidden field and a limit of 30 writes per 10 minutes per address and workspace.
 - **Your own page.** Booking Settings can point guest links at a page of your own instead of the app's page.
 - **Switch off.** With the public page off, every public address answers not found. Staff calendar feeds keep working.
@@ -344,6 +344,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 
 ### ✅ Recently shipped
 
+- [x] **0.16.2:** a booking from the public page gets a customer of its own, never an existing one found by the address the guest typed.
 - [x] **0.16.1:** reports group, default and show columns only by fields the reader may read.
 - [x] **0.16.0:** locations with their own staff, rooms, services and opening days; every booking is at one.
 - [x] **0.15.1:** class sessions on the schedule, booked or not, with New class session, Move, Repeat and Cancel session.

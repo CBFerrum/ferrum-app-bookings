@@ -2303,9 +2303,9 @@ fn guests_become_clients_end_to_end() {
     run(guests_become_clients());
 }
 
-/// A guest who books is a customer at once: found by email (any case), never a web shop's guest,
-/// else made; booking twice, or two bookings at the same moment, make one; erasing the guest erases
-/// the customer too.
+/// A guest who books is a customer at once: one of their own made from what they typed on the public
+/// page, never one found by that address (a typed address proves nothing, A11 D4); staff booking a
+/// caller find the customer by the phone's digits; erasing the guest erases the customer too.
 async fn guests_become_clients() {
     let t = boot("visit", &["commerce"]).await;
     let a = t.admin.clone();
@@ -2333,19 +2333,21 @@ async fn guests_become_clients() {
     let first = book("09:00", "ravi@example.test").await;
     assert_eq!(customers("ravi@example.test").await, 1, "a customer at once");
     let again = book("10:00", "Ravi@Example.test").await;
-    assert_eq!((customers("ravi@example.test").await, first["customer"].clone()), (1, again["customer"].clone()), "the same person booking twice");
+    assert_eq!(customers("ravi@example.test").await, 2, "the same address typed twice: a customer for each booking");
+    assert_ne!(first["customer"], again["customer"], "the second is never found by the first's address");
     let cust = t.get("Customer", first["customer"].as_str().unwrap().parse().unwrap()).await;
     assert_eq!((cust["customer_name"].clone(), cust["customer_type"].clone()), (json!("Ravi Kumar"), json!("Individual")));
-    // An existing customer is linked, not copied.
+    // An existing customer is never linked by an address a guest typed.
     let known = uid(&t.insert(&a, "Customer", json!({"customer_name": "Sara Ali", "customer_type": "Individual", "email": "sara@example.test"})).await);
-    assert_eq!(book("11:00", "sara@example.test").await["customer"], json!(known.to_string()));
+    assert_ne!(book("11:00", "sara@example.test").await["customer"], json!(known.to_string()));
     // A web shop's guest with the address is not: anyone may type anyone's address at a guest checkout.
     let guest = json!({"customer_name": "Lee at the shop", "customer_type": "Individual", "email": "lee@example.test", "commerce_guest": true});
     let guest = uid(&t.insert(&ferrum_domain::util::sys(&a), "Customer", guest).await);
     assert_ne!(book("16:00", "lee@example.test").await["customer"], json!(guest.to_string()), "a customer of their own");
-    // Two bookings for one new address at the same moment make one customer.
+    // Two bookings for one new address at the same moment: a customer each.
     let (x, y) = tokio::join!(book("12:00", "pat@example.test"), book("13:00", "pat@example.test"));
-    assert_eq!((customers("pat@example.test").await, x["customer"].clone()), (1, y["customer"].clone()));
+    assert_eq!(customers("pat@example.test").await, 2);
+    assert_ne!(x["customer"], y["customer"]);
     // Without an email (staff booking a caller), the phone's digits find the customer.
     let call = t
         .insert(
@@ -2368,6 +2370,117 @@ async fn guests_become_clients() {
     let (b, c) = (t.get("Booking", uid(&first)).await, t.get("Customer", uid(&cust)).await);
     assert!(b["guest_email"].is_null() && c["email"].is_null(), "booking {} customer {}", b["guest_email"], c["email"]);
     assert_ne!(c["customer_name"], json!("Ravi Kumar"));
+}
+
+#[test]
+fn a_guest_is_never_matched_to_an_existing_customer() {
+    run(guest_never_matched());
+}
+
+/// A public booking is never put on an existing customer because the guest typed that customer's
+/// email or phone (A11 D4): the guest gets a customer of their own, and the existing customer gains
+/// nothing. A booking staff make for that customer keeps them.
+async fn guest_never_matched() {
+    let t = boot("match", &[]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    t.insert(&a, "BookingSettings", json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60})).await;
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let staff =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Noor", "email": "noor@match.test", "time_zone": "Asia/Kolkata", "working_hours": every})).await;
+    let svc = uid(&t.insert(&a, "BookingService", json!({"service_name": "Visit", "duration_minutes": 60, "staff": [{"staff": sid(&staff)}]})).await);
+    let known = uid(&t
+        .insert(&a, "Customer", json!({"customer_name": "Sara Ali", "customer_type": "Individual", "email": "sara@example.test", "phone": "+91 98200 12345"}))
+        .await);
+    let on_known = || t.scalar("select count(*) from e_booking where tenant_id = $1 and customer = $2", Some(known));
+    let book = |hhmm: &'static str, email: &'static str, phone: &'static str| {
+        let t = &t;
+        async move {
+            let body = json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, hhmm)), "name": "Someone Else", "email": email, "phone": phone});
+            let v = t.book(body).await.expect("booked");
+            t.find_one("Booking", json!({"number": v["booking"]["number"]})).await
+        }
+    };
+    // The customer's own email (another case), then their phone with an address of the guest's own.
+    for b in [book("09:00", "Sara@Example.test", "").await, book("10:00", "someone@example.test", "+91-98200-12345").await] {
+        let own: Uuid = b["customer"].as_str().expect("a customer of their own").parse().unwrap();
+        assert_ne!(own, known);
+        let c = t.get("Customer", own).await;
+        assert_eq!((c["customer_name"].clone(), c["customer_type"].clone()), (json!("Someone Else"), json!("Individual")));
+    }
+    assert_eq!(on_known().await, 0, "nothing of the guests' reaches the customer");
+    let sara = t.get("Customer", known).await;
+    assert_eq!((sara["customer_name"].clone(), sara["email"].clone()), (json!("Sara Ali"), json!("sara@example.test")), "the customer is unchanged");
+    // Staff booking for the customer keep them.
+    let staff_made =
+        t.insert(&a, "Booking", json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, "11:00")), "customer": known.to_string()})).await;
+    assert_eq!(staff_made["customer"], json!(known.to_string()));
+    assert_eq!(on_known().await, 1);
+}
+
+#[test]
+fn the_deposit_invoice_goes_to_the_guests_own_customer() {
+    run(deposit_on_own_customer());
+}
+
+/// A guest who types an existing customer's email on the public page has the deposit invoice made
+/// on a customer of their own; the existing customer has no invoice and no payment request for it.
+async fn deposit_on_own_customer() {
+    let t = boot("owed", &["commerce", "bookings_payments"]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let inr = t.find_one("Currency", json!({"code": "INR"})).await;
+    let cid = uid(&t.insert(&a, "Company", json!({"company_name": "Owed Studio", "abbr": "OS", "default_currency": inr["id"]})).await);
+    let services_group = t.find_one("ItemGroup", json!({"group_name": "Services"})).await;
+    let nos = t.find_one("Uom", json!({"uom_name": "Nos"})).await;
+    let item = |code: &str| json!({"item_code": code, "item_name": code, "item_group": services_group["id"], "stock_uom": nos["id"], "is_stock_item": false});
+    let facial_item = uid(&t.insert(&a, "Item", item("FACIAL")).await);
+    let ship = uid(&t.insert(&a, "Item", item("SHIP")).await);
+    let stores = t.find_one("Warehouse", json!({"warehouse_name": "Stores", "company": cid.to_string()})).await;
+    let selling = t.find_one("PriceList", json!({"price_list_name": "Standard Selling"})).await;
+    t.insert(
+        &a,
+        "StoreSettings",
+        json!({"store_name": "Owed", "company": cid.to_string(), "currency": inr["id"], "price_list": selling["id"], "fulfilment_warehouse": stores["id"],
+               "shipping_item": ship.to_string(), "payment_methods": [{"gateway": "fakepay", "label": "Card", "expiry_minutes": 30}], "store_url": "https://owed.test"}),
+    )
+    .await;
+    t.insert(
+        &a,
+        "BookingSettings",
+        json!({"company": cid.to_string(), "public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 30,
+               "bpay_payment_method": "fakepay"}),
+    )
+    .await;
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let mira =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Mira", "email": "mira@owed.test", "time_zone": "Asia/Kolkata", "working_hours": every})).await;
+    let facial = uid(&t
+        .insert(
+            &a,
+            "BookingService",
+            json!({"service_name": "Facial", "duration_minutes": 60, "price": "1000", "item": facial_item.to_string(), "location_type": "In Person",
+                   "staff": [{"staff": sid(&mira)}], "bpay_deposit_percent": "30", "bpay_refund_hours": 48, "bpay_keep_percent": "100"}),
+        )
+        .await);
+    let known = uid(&t.insert(&a, "Customer", json!({"customer_name": "Asha Rao", "customer_type": "Individual", "email": "asha@example.test"})).await);
+    let v = t
+        .book(json!({"service": facial.to_string(), "start_time": rfc(local(ist, day, "10:00")), "name": "Not Asha", "email": "asha@example.test"}))
+        .await
+        .expect("booked");
+    assert_eq!(v["booking"]["deposit"]["status"], json!("Initiated"), "a deposit is asked for");
+    let b = t.find_one("Booking", json!({"number": v["booking"]["number"]})).await;
+    let own = b["customer"].as_str().expect("a customer of their own").to_string();
+    assert_ne!(own, known.to_string());
+    let invoice = t.get("SalesInvoice", b["sales_invoice"].as_str().unwrap().parse().unwrap()).await;
+    assert_eq!(invoice["customer"], json!(own), "the deposit invoice is the guest's own customer's");
+    let on_known = |table: &'static str| {
+        let t = &t;
+        async move { t.scalar(&format!("select count(*) from {table} where tenant_id = $1 and customer = $2"), Some(known)).await }
+    };
+    assert_eq!((on_known("e_sales_invoice").await, on_known("e_booking").await), (0, 0), "nothing is owed by the existing customer");
 }
 
 #[test]
