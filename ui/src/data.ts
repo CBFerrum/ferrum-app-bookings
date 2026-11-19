@@ -3,7 +3,7 @@
 // which answer with the booking as it now stands or say why not.
 
 import { api, docPath } from "@ferrum/client";
-import type { Bk, Hour, Off, ResourceRow, ServiceRow, StaffRow } from "./board";
+import type { Bk, Hour, Off, ResourceRow, ServiceRow, Ses, StaffRow } from "./board";
 
 export const rows = <T,>(entity: string, query: Record<string, string | number | boolean>, signal?: AbortSignal) =>
   api.get<{ rows: T[] }>(`/api/v1/${entity}`, query, signal).then((r) => r.rows);
@@ -41,19 +41,28 @@ export const LIMIT = 500;
 export interface Range {
   bookings: Bk[];
   off: Off[];
+  /** Scheduled class sessions, booked or not. */
+  sessions: Ses[];
 }
 
-/** Bookings that hold or held time between two instants, and the time off in that stretch. */
+const SESSION_FIELDS = "number,service,service_name,staff,staff_name,start_time,end_time,block_start,block_end,capacity,resource,status,series,session_key,version";
+
+/** Bookings that hold or held time between two instants, the time off and the scheduled class sessions in that stretch. */
 export async function loadRange(from: number, to: number, signal?: AbortSignal): Promise<Range> {
-  const [bookings, off] = await Promise.all([
+  const [bookings, off, sessions] = await Promise.all([
     rows<Bk>(
       "Booking",
       { filters: JSON.stringify([["start_time", "<", iso(to)], ["end_time", ">", iso(from)], ["status", "in", ["Pending", "Confirmed", "Completed", "No Show"]]]), fields: FIELDS, sort: "start_time asc", limit: LIMIT },
       signal,
     ),
     rows<Off>("StaffTimeOff", { filters: JSON.stringify([["from_time", "<", iso(to)], ["to_time", ">", iso(from)]]), fields: "staff,from_time,to_time,reason", limit: 200 }, signal),
+    rows<Ses>(
+      "BookingSession",
+      { filters: JSON.stringify([["start_time", "<", iso(to)], ["end_time", ">", iso(from)], ["status", "=", "Scheduled"]]), fields: SESSION_FIELDS, sort: "start_time asc", limit: LIMIT },
+      signal,
+    ),
   ]);
-  return { bookings, off };
+  return { bookings, off, sessions };
 }
 
 /** Bookings waiting for an answer or a seat, from now on. */
@@ -61,6 +70,10 @@ export const loadWaiting = (signal?: AbortSignal) =>
   rows<Bk>("Booking", { filters: JSON.stringify([["status", "in", ["Pending", "Waitlisted"]], ["end_time", ">", iso(Date.now())]]), fields: FIELDS, sort: "start_time asc", limit: 100 }, signal);
 
 export const act = <T = Bk,>(id: string, action: string, params: Record<string, unknown> = {}) => api.post<T>(docPath("Booking", id, "actions", action), params);
+
+/** A class session's operation: `cancel_session`, `move` or `repeat`. */
+export const actSession = <T,>(id: string, action: "cancel_session" | "move" | "repeat", params: Record<string, unknown> = {}) =>
+  api.post<T>(docPath("BookingSession", id, "actions", action), params);
 
 export interface FreeSlot {
   start: string;

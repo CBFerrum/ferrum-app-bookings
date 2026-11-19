@@ -7,7 +7,7 @@ import type { ReactNode } from "react";
 import { renderToString } from "react-dom/server";
 import { MemoryRouter, Route, Routes } from "react-router";
 import { describe, expect, it } from "vitest";
-import type { Bk } from "./board";
+import type { Bk, Ses } from "./board";
 import type { Meta } from "./data";
 import { BookPage } from "./guest/Book";
 import type { Catalog, Deposit, GuestBooking } from "./guest/booking";
@@ -282,13 +282,17 @@ const bk = (id: string, over: Partial<Bk>): Bk => ({
   ...over,
 });
 
-function seeded(rows: Bk[], waiting: Bk[] = []) {
+const ALL = { read: "all", write: "all", create: "all", delete: "all", submit: "none", cancel: "none", export: "none", import: "none" };
+const READ = { ...ALL, write: "none", create: "none", delete: "none" };
+
+function seeded(rows: Bk[], waiting: Bk[] = [], sessions: Ses[] = [], sessionRights = ALL) {
   const qc = client();
   const [from, to] = dayBounds(ZONE, DAY);
   qc.setQueryData(["me"], { tenant: "t", user: { id: "u", email: "asha@spa.test", full_name: "Asha", is_admin: false, roles: [] }, timezone: ZONE, packages: [] });
   qc.setQueryData(["meta", "Booking"], { name: "Booking", permissions: { read: "all", write: "all", create: "all", delete: "none", submit: "none", cancel: "none", export: "none", import: "none" } });
   qc.setQueryData(["bk", "meta"], meta);
-  qc.setQueryData(["bk", "range", from, to], { bookings: rows, off: [{ id: "o1", staff: "st-2", from_time: at("12:00"), to_time: at("13:00"), reason: "Lunch" }] });
+  qc.setQueryData(["meta", "BookingSession"], { name: "BookingSession", permissions: sessionRights });
+  qc.setQueryData(["bk", "range", from, to], { bookings: rows, off: [{ id: "o1", staff: "st-2", from_time: at("12:00"), to_time: at("13:00"), reason: "Lunch" }], sessions });
   qc.setQueryData(["bk", "waiting"], waiting);
   return qc;
 }
@@ -332,6 +336,45 @@ describe("the schedule", () => {
 
   it("says when nothing is booked", () => {
     expect(draw(seeded([]), `/?date=${DAY}`, <Schedule />)).toContain("Nothing is booked");
+  });
+
+  const yoga: Ses = { id: "ses-1", service: "svc-2", service_name: "Pilates", staff: "st-2", staff_name: "Ravi Iyer", start_time: at("17:00"), end_time: at("17:45"), capacity: 12, status: "Scheduled", session_key: "s/ses-1" };
+
+  it("draws a scheduled class nobody has booked yet", () => {
+    const html = draw(seeded([], [], [yoga]), `/?date=${DAY}`, <Schedule />);
+    expect(html).toContain("0 of 12 seats");
+    expect(html).toContain("Pilates");
+    expect(html).toContain("scheduled");
+  });
+
+  it("opens the session with its seats and the three things to do", () => {
+    const seat = bk("y1", { service: "svc-2", service_name: "Pilates", session_key: "s/ses-1", staff: "st-2", staff_name: "Ravi Iyer", start_time: at("17:00"), end_time: at("17:45"), guest_name: "Lena", seats: 2 });
+    const html = draw(seeded([seat], [], [yoga]), `/?date=${DAY}&s=s/ses-1`, <Schedule />);
+    expect(html).toContain("2 of 12 seats taken");
+    expect(html).toContain("Lena");
+    for (const word of ["Move", "Repeat", "Cancel session"]) expect(html).toContain(word);
+    const read = draw(seeded([seat], [], [yoga], READ), `/?date=${DAY}&s=s/ses-1`, <Schedule />);
+    expect(read).toContain("2 of 12 seats taken");
+    expect(read).not.toContain("Cancel session");
+    expect(read).not.toContain(">Repeat<");
+  });
+
+  it("says so when nobody has booked", () => {
+    expect(draw(seeded([], [], [yoga]), `/?date=${DAY}&s=s/ses-1`, <Schedule />)).toContain("Nobody has booked yet.");
+  });
+
+  it("gives a class that was never scheduled no session buttons", () => {
+    const html = draw(seeded(rows), `/?date=${DAY}&s=k1`, <Schedule />);
+    expect(html).toContain("3 of 8 seats taken");
+    expect(html).not.toContain("Cancel session");
+  });
+
+  it("offers New class session only where there is a class", () => {
+    expect(draw(seeded([]), `/?date=${DAY}`, <Schedule />)).toContain("New class session");
+    const qc = seeded([]);
+    qc.setQueryData(["bk", "meta"], { ...meta, services: meta.services.filter((x) => (x.capacity ?? 1) === 1) });
+    expect(draw(qc, `/?date=${DAY}`, <Schedule />)).not.toContain("New class session");
+    expect(draw(seeded([], [], [], READ), `/?date=${DAY}`, <Schedule />)).not.toContain("New class session");
   });
 });
 

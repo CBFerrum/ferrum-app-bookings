@@ -256,7 +256,7 @@ export function Board(p: BoardProps) {
                   const minutes = (b.end - b.start) / 60_000;
                   const h = Math.max(minutes * PX, LEAST * PX * 0.7);
                   const first = b.bookings[0];
-                  const label = `${range(b)}, ${b.title}${b.kind === "session" ? tr(", {seats} of {capacity} seats", { seats: b.seats, capacity: b.capacity }) : first.service_name ? `, ${first.service_name}` : ""}${clashed(b) ? tr(", outside opening hours") : ""}, ${b.status}`;
+                  const label = `${range(b)}, ${b.title}${b.kind === "session" ? tr(", {seats} of {capacity} seats", { seats: b.seats, capacity: b.capacity }) : first.service_name ? `, ${first.service_name}` : ""}${clashed(b) ? tr(", outside opening hours") : ""}, ${b.bookings.length ? b.status : tr("scheduled")}`;
                   return (
                     <div key={b.key} className="bk-slot" style={{ top: at(b.from, lane), left: `calc(${(col / cols) * 100}% + 2px)`, width: `calc(${100 / cols}% - 4px)` }} data-lifted={lifted || undefined}>
                       {before > 0 && <div className="bk-buffer" style={{ height: before * PX }} aria-hidden="true" />}

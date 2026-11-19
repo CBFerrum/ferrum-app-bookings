@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.15.0-0e7490?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.15.1-0e7490?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -37,13 +37,13 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 
 | | |
 |---|---|
-| **Version** | 0.15.0 (Booking Deposits connector 0.3.0) |
+| **Version** | 0.15.1 (Booking Deposits connector 0.3.0) |
 | **Kind** | Its own interface at `/bookings/` for the team, and a public booking page at `/bookings/book/{workspace}`. Records open in the platform's records screens |
 | **What it adds** | 13 entities (7 you work with, 6 that sit inside them), 2 roles, 3 reports, 1 menu module, 2 packages (`bookings`, `bookings_payments`), 1 payments connector, 2 SQL files |
 | **Depends on** | Ferrum platform `>=0.4.0, <0.5` and [ERP](https://github.com/CBFerrum/ferrum-app-erp) `>=0.1` (installing Bookings installs ERP) |
 | **Works with** | Mail, Chat and Calendar (Comms) for emails, calendar invitations and video meetings, Commerce for deposits, ERP for customers, items and invoices, platform working calendars for holidays |
 | **Languages** | English, Arabic, Hindi (about 380 interface words each, and 250 names each) |
-| **Tests** | 71 Rust tests, 86 interface tests |
+| **Tests** | 71 Rust tests, 93 interface tests |
 | **Licence** | AGPL-3.0-only |
 
 ## 📸 Screenshots
@@ -101,6 +101,7 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 
 - **Appointments and group classes.** A service is one seat (an appointment) or many seats per session (a class). Seats are set per service, from 1 to 1000.
 - **Class sessions scheduled ahead.** A manager schedules a dated session of a class ("Yoga, Monday 18:00, with Asha, 12 seats, Studio 1") before anyone books it. It holds its teacher's time and its room from that moment, has its own seats, and is what guests are offered. A class can be set to be offered only at its scheduled sessions; otherwise any free time in working hours still opens one.
+- **Sessions on the schedule.** Every scheduled session shows on the schedule, booked or not ("0 of 12 seats"); New class session schedules one. Opening it lists who has a seat and, for a person who may change sessions, Move, Repeat and Cancel session, each a dialog that shows the server's answer.
 - **A session is one thing.** Cancelling a session cancels every seat and waitlist place in it and tells each guest once; a paid deposit comes back in full. Moving it takes every seat to the new time, teacher or room, or nothing if that time is taken. Repeating it makes a timetable: every week, 2 weeks, 4 weeks or month, up to 52 sessions, whole or skipping the taken dates.
 - **Time and buffers.** Duration from 5 minutes to 24 hours, a buffer kept free before and another after each booking, and a slot interval that decides which start times are offered. Each service may override the workspace's interval.
 - **Price and item.** A price per seat in the company currency. A priced service names the ERP item it is invoiced as.
@@ -313,7 +314,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 | Zapier and Make connectors | ❌ | ✅ | ✅ | 🟡 | ✅ | ✅ |
 | API and webhooks | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-<sub>¹ Cal.com has an open core with commercial enterprise features. ² Included in some Microsoft 365 plans. ³ Through integrations or exports, not one data set. ⁴ Sessions are scheduled ahead as records with their own seats, teacher and room, and cancelled, moved and repeated as one thing; unbooked sessions do not show on the schedule yet. ⁵ Free services only. A paid series is booked one at a time. ⁶ Needs Commerce and a payment gateway plugin; refunds are approved by a person. ⁷ Needs the Mail app. ⁸ Bookings reach a calendar by a signed feed, and busy times are read from an iCalendar address every 15 minutes. ⁹ Meetings are made in Ferrum Comms, not Zoom, Meet or Teams.</sub>
+<sub>¹ Cal.com has an open core with commercial enterprise features. ² Included in some Microsoft 365 plans. ³ Through integrations or exports, not one data set. ⁴ Sessions are scheduled ahead as records with their own seats, teacher and room, shown on the schedule booked or not, and cancelled, moved and repeated as one thing; no substitute teacher is recorded beside the teacher. ⁵ Free services only. A paid series is booked one at a time. ⁶ Needs Commerce and a payment gateway plugin; refunds are approved by a person. ⁷ Needs the Mail app. ⁸ Bookings reach a calendar by a signed feed, and busy times are read from an iCalendar address every 15 minutes. ⁹ Meetings are made in Ferrum Comms, not Zoom, Meet or Teams.</sub>
 
 ### 🏆 Where Bookings stands out
 
@@ -341,6 +342,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 
 ### ✅ Recently shipped
 
+- [x] **0.15.1:** class sessions on the schedule, booked or not, with New class session, Move, Repeat and Cancel session.
 - [x] **0.15.0:** a class session is cancelled, moved and repeated as one thing; a booking the business cancels returns its whole deposit.
 - [x] **0.14.0:** a class session is a record, scheduled before anyone books it, holding its teacher's time and room; a class can be offered only at its scheduled sessions.
 - [x] **0.13.0:** a service's staff rows carry a priority and a weight: a guest who picks nobody gets the highest priority free, and equal priorities share the day by weight.
@@ -383,7 +385,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 - [ ] An invoice made automatically on completion.
 
 **Scheduling**
-- [ ] A class timetable of real sessions, with a title, capacity and instructor each, and a substitute.
+- [ ] A substitute teacher recorded on a class session.
 - [ ] Waitlist for one-to-one slots, and waitlist offers with a claim window.
 - [ ] Collective bookings with several hosts.
 

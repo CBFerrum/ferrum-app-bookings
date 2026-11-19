@@ -16,6 +16,7 @@ import { type Bk, blocks as makeBlocks, type Block, dropHint, type Lane, makeLan
 import { act, LIMIT, loadMeta, loadRange, loadWaiting, type Range } from "./data";
 import { NewBooking, type Start } from "./NewBooking";
 import { Pop } from "./Pop";
+import { NewSession } from "./Sessions";
 import { BookingSheet, refreshBookings, SessionSheet } from "./Sheet";
 import { ClashMark, Failed, Loading, Nothing } from "./states";
 import { Tabs } from "./Tabs";
@@ -102,6 +103,7 @@ export function Schedule() {
   const [sp, setSp] = useSearchParams();
   const [draft, setDraft] = useState<Start | null>(() => (sp.has("new") ? {} : null));
   const [blocking, setBlocking] = useState(false);
+  const [scheduling, setScheduling] = useState(false);
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const t = setInterval(() => setNow(Date.now()), 60_000);
@@ -145,17 +147,23 @@ export function Schedule() {
   const bookingMeta = useEntityMeta("Booking");
   const canWrite = !!bookingMeta.data && can(bookingMeta.data.permissions, "write");
   const canCreate = !!bookingMeta.data && can(bookingMeta.data.permissions, "create");
+  const sessionMeta = useEntityMeta("BookingSession");
+  const canWriteSessions = !!sessionMeta.data && can(sessionMeta.data.permissions, "write");
+  const canSchedule = !!sessionMeta.data && can(sessionMeta.data.permissions, "create");
   const offMeta = useEntityMeta("StaffTimeOff");
   const canBlock = !!offMeta.data && can(offMeta.data.permissions, "create");
 
   const refresh = useCallback(() => refreshBookings(qc), [qc]);
   useLiveEntity("Booking", refresh);
+  useLiveEntity("BookingSession", refresh);
   useLiveEntity("StaffTimeOff", useCallback(() => void qc.invalidateQueries({ queryKey: ["bk", "range"] }), [qc]));
 
   const chosenStaff = meta.data?.staff.find((p) => p.id === chosen[0]);
   const services = useMemo(() => new Map((meta.data?.services ?? []).map((s) => [s.id, s])), [meta.data]);
   const bookings = useMemo(() => (range.data?.bookings ?? []).filter((b) => !service || b.service === service), [range.data, service]);
-  const all = useMemo(() => makeBlocks(bookings, services), [bookings, services]);
+  const sessions = useMemo(() => (range.data?.sessions ?? []).filter((x) => !service || x.service === service), [range.data, service]);
+  const all = useMemo(() => makeBlocks(bookings, services, sessions), [bookings, services, sessions]);
+  const hasClass = (meta.data?.services ?? []).some((x) => x.active !== false && (x.capacity ?? 1) > 1);
 
   // Who has a column: the people picked (everyone active when none is), and anyone with a booking in view.
   const people = useMemo(() => {
@@ -332,6 +340,11 @@ export function Schedule() {
               <CalendarOff size={16} aria-hidden="true" /> {tr("Block time")}
             </Button>
           ) : null}
+          {canSchedule && hasClass ? (
+            <Button onClick={() => setScheduling(true)}>
+              <Plus size={16} aria-hidden="true" /> {tr("New class session")}
+            </Button>
+          ) : null}
           {canCreate && meta.data?.staff.length ? (
             <Button variant="primary" onClick={() => setDraft({})}>
               <Plus size={16} aria-hidden="true" /> {tr("New booking")}
@@ -435,8 +448,8 @@ export function Schedule() {
         <div className="bk-main">{body}</div>
         {openId ? (
           <BookingSheet key={openId} id={openId} zone={zone} hour12={hour12} canWrite={canWrite} onClose={closeSheet} />
-        ) : session ? (
-          <SessionSheet bookings={session.bookings} zone={zone} hour12={hour12} onOpen={(id) => set({ b: id, s: null })} onClose={closeSheet} />
+        ) : session && meta.data ? (
+          <SessionSheet key={session.key} block={session} meta={meta.data} zone={zone} hour12={hour12} canWrite={canWriteSessions} onOpen={(id) => set({ b: id, s: null })} onClose={closeSheet} onChanged={refresh} />
         ) : null}
       </div>
 
@@ -450,6 +463,21 @@ export function Schedule() {
           onSaved={() => {
             setBlocking(false);
             void qc.invalidateQueries({ queryKey: ["bk", "range"] });
+          }}
+        />
+      )}
+
+      {scheduling && meta.data && (
+        <NewSession
+          meta={meta.data}
+          zone={zone}
+          hour12={hour12}
+          day={date}
+          onClose={() => setScheduling(false)}
+          onCreated={(x) => {
+            setScheduling(false);
+            refresh();
+            set({ date: dayOf(Date.parse(x.start_time), zone), view: view === "week" ? "week" : "day", s: x.session_key, b: null }, true);
           }}
         />
       )}

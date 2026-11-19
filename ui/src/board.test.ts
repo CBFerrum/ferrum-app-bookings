@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type Bk, blocks, clashed, clip, dropHint, hhmm, hourMarks, initials, inOrder, landing, makeLane, mergeSpans, nextSteps, pack, type ServiceRow, snap, tone, viewWindow, workSpans } from "./board";
+import { type Bk, blocks, clashed, type Ses, clip, dropHint, hhmm, hourMarks, initials, inOrder, landing, makeLane, mergeSpans, nextSteps, pack, type ServiceRow, snap, tone, viewWindow, workSpans } from "./board";
 import { instantAt } from "./zone";
 
 const Z = "Asia/Kolkata";
@@ -90,6 +90,35 @@ describe("blocks", () => {
     expect(blocks([booking("1", { status: "Cancelled" }), booking("2", { status: "Waitlisted" })], services)).toEqual([]);
     expect(blocks([booking("e", { status: "Expired" })], services)).toEqual([]);
     expect(blocks([booking("p", { service: "pilates", session_key: "k" })], services)[0].kind).toBe("session");
+  });
+
+  const ses = (over: Partial<Ses> = {}): Ses => ({
+    id: "s1",
+    service: "pilates",
+    service_name: "Pilates",
+    staff: "asha",
+    start_time: iso(at("2026-11-02", "18:00")),
+    end_time: iso(at("2026-11-02", "19:00")),
+    capacity: 12,
+    status: "Scheduled",
+    session_key: "s/1",
+    ...over,
+  });
+
+  it("draws a scheduled session with no seats as a block", () => {
+    const out = blocks([], services, [ses()]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ kind: "session", key: "s/1", bookings: [], seats: 0, capacity: 12, title: "Pilates", staff: "asha" });
+    expect(out[0].session?.id).toBe("s1");
+    expect(blocks([], services, [ses({ status: "Cancelled" })])).toEqual([]);
+  });
+
+  it("gives a session's own seats to the block of its bookings", () => {
+    const seat = booking("a", { service: "pilates", service_name: "Pilates", session_key: "s/1", seats: 3, from: "18:00", to: "19:00" });
+    const out = blocks([seat], services, [ses()]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ kind: "session", seats: 3, capacity: 12 });
+    expect(out[0].bookings.map((b) => b.id)).toEqual(["a"]);
   });
 
   it("lists them by when they start", () => {

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.1
+
+Needs the same platform as 0.15.0. No database change. Interface only.
+
+- **Class sessions on the schedule.** The schedule draws every scheduled session, booked or not ("0 of 12 seats"),
+  with the session's own seats. A "New class session" button (for a person who may schedule, where a class exists)
+  schedules one. The session's sheet lists who has a seat, says "Nobody has booked yet." when empty, and offers Move,
+  Repeat and Cancel session to a person who may change sessions; each dialog shows the server's refusal beside its
+  field and keeps what was typed.
+
 ## 0.15.0
 
 Needs the same platform as 0.14.0. Database: one field, `Booking.cancelled_by`. Three operations on Class Session.

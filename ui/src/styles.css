@@ -1388,6 +1388,23 @@
   gap: 0.5rem;
 }
 
+/* a class session's dialogs */
+
+.bk-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2rem;
+}
+
+.bk-skipped {
+  margin: 0;
+  padding-inline-start: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
 .bk-center {
   display: flex;
   justify-content: center;

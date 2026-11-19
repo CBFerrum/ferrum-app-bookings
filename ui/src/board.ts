@@ -44,6 +44,26 @@ export interface Bk {
   _titles?: Record<string, string>;
 }
 
+/** A class session scheduled before anyone books it (`BookingSession`). */
+export interface Ses {
+  id: string;
+  number?: string | null;
+  service: string;
+  service_name?: string | null;
+  staff: string;
+  staff_name?: string | null;
+  start_time: string;
+  end_time: string;
+  block_start?: string | null;
+  block_end?: string | null;
+  capacity?: number | null;
+  resource?: string | null;
+  status: "Scheduled" | "Cancelled";
+  series?: string | null;
+  session_key: string;
+  version?: number;
+}
+
 export interface ServiceRow {
   id: string;
   service_name: string;
@@ -152,6 +172,8 @@ export interface Block {
   title: string;
   seats: number;
   capacity: number;
+  /** The scheduled session the block is, when it is one. */
+  session?: Ses;
 }
 
 const ms = (v: string | null | undefined, fallback: number) => {
@@ -166,17 +188,43 @@ function sessionStatus(list: Bk[]): Status {
 }
 
 /** Bookings on the grid: one block each, except the seats of a class, which are one block together.
- *  Cancelled, expired and waitlisted bookings hold no time, so they have none. */
-export function blocks(bookings: Bk[], services: Map<string, ServiceRow>): Block[] {
+ *  Cancelled, expired and waitlisted bookings hold no time, so they have none. A scheduled session is
+ *  the block of its seats, with its own seats; one nobody has booked yet is a block with no bookings. */
+export function blocks(bookings: Bk[], services: Map<string, ServiceRow>, sessions: Ses[] = []): Block[] {
   const groups = new Map<string, Bk[]>();
   for (const b of bookings.filter((x) => x.status !== "Cancelled" && x.status !== "Expired" && x.status !== "Waitlisted")) {
     const key = b.session_key || b.id;
     groups.set(key, [...(groups.get(key) ?? []), b]);
   }
+  const scheduled = new Map(sessions.filter((s) => s.status === "Scheduled").map((s) => [s.session_key, s]));
+  const empty = [...scheduled.values()]
+    .filter((s) => !groups.has(s.session_key))
+    .map((s): Block => {
+      const start = ms(s.start_time, 0);
+      const end = ms(s.end_time, start);
+      return {
+        key: s.session_key,
+        kind: "session",
+        bookings: [],
+        staff: s.staff,
+        resource: s.resource ?? null,
+        start,
+        end,
+        from: ms(s.block_start, start),
+        to: ms(s.block_end, end),
+        status: "Confirmed",
+        service: s.service,
+        title: s.service_name ?? services.get(s.service)?.service_name ?? tr("Class"),
+        seats: 0,
+        capacity: s.capacity ?? services.get(s.service)?.capacity ?? 1,
+        session: s,
+      };
+    });
   return [...groups.entries()]
-    .map(([key, list]) => {
+    .map(([key, list]): Block => {
       const first = list[0];
-      const capacity = services.get(first.service)?.capacity ?? 1;
+      const session = scheduled.get(key);
+      const capacity = session?.capacity ?? services.get(first.service)?.capacity ?? 1;
       const start = Math.min(...list.map((b) => ms(b.start_time, 0)));
       const end = Math.max(...list.map((b) => ms(b.end_time, start)));
       return {
@@ -194,8 +242,10 @@ export function blocks(bookings: Bk[], services: Map<string, ServiceRow>): Block
         title: capacity > 1 ? (first.service_name ?? tr("Class")) : (first.guest_name ?? first.service_name ?? tr("Booking")),
         seats: list.reduce((n, b) => n + (b.seats ?? 1), 0),
         capacity,
+        session,
       } satisfies Block;
     })
+    .concat(empty)
     .sort((a, b) => a.start - b.start || a.end - b.end);
 }
 
