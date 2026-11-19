@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.16.1
+
+Needs Ferrum with K0-1 (`reports::readable_choice`, `readable_default`, `readable_columns`). No database change.
+
+- **Reports follow what the reader may read.** A report grouped by a field the person cannot read is refused; with no
+  grouping asked for, a hidden default falls back to the first grouping they read; a column of a field they cannot read
+  is left out, with its values in every row and in the totals. Before, a role that hid a booking's source, service or
+  amount still saw them through the reports.
+
 ## 0.16.0
 
 Needs the same platform as 0.15.1. Database: two new entities (Booking Location, Service Location) and five fields

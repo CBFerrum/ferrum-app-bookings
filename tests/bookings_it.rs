@@ -3219,3 +3219,63 @@ async fn locations() {
         .await;
     assert!(times_for(&found, &ben.to_string()).is_empty() && !times_for(&found, &asha.to_string()).is_empty());
 }
+
+#[test]
+fn a_report_refuses_grouping_by_a_field_the_caller_cannot_read() {
+    run(report_readability());
+}
+
+/// A report groups, defaults and shows columns only by fields the caller may read (S9 K0-7): a grouping by a hidden
+/// field is refused, a hidden default falls back to the next readable grouping, and a column of a hidden field is left
+/// out with its values.
+async fn report_readability() {
+    let t = boot("readable", &[]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(2);
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    t.insert(&a, "BookingSettings", json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60})).await;
+    let staff =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Noor", "email": "noor@readable.test", "time_zone": "Asia/Kolkata", "working_hours": every})).await;
+    let svc = uid(&t.insert(&a, "BookingService", json!({"service_name": "Visit", "duration_minutes": 60, "staff": [{"staff": sid(&staff)}]})).await);
+    t.book(json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, "10:00")), "name": "Guest", "email": "g@example.test"})).await.unwrap();
+    // A role that reads bookings but not who booked from where, what they were for, or what they cost.
+    let rule = ferrum_meta::PermissionDef {
+        entity: "Booking".into(),
+        read: true,
+        hide: vec!["source".into(), "service_name".into(), "amount".into()],
+        ..Default::default()
+    };
+    t.k.set_role_permission(&a, "Booking Viewer", &rule).await.unwrap();
+    let viewer = t.user("viewer@readable.test", &["Booking Viewer"]).await;
+    let range = [("from_date", day.to_string()), ("to_date", day.to_string())];
+    let run = |ctx: &Ctx, name: &'static str, group: Option<&'static str>| {
+        let (t, ctx, range) = (&t, ctx.clone(), range.clone());
+        async move {
+            let mut p: HashMap<String, String> = range.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+            if let Some(g) = group {
+                p.insert("group_by".into(), g.into());
+            }
+            ferrum_domain::reports::run(&t.k, &ctx, name, &p).await
+        }
+    };
+
+    // ───────────── a grouping by a field the caller cannot read is refused ─────────────
+    let refused = run(&viewer, "bookings_summary", Some("Source")).await.unwrap_err();
+    assert_eq!(refused.code(), "forbidden", "{refused:?}");
+    assert!(run(&viewer, "bookings_attendance", Some("Service")).await.is_err());
+    assert!(run(&viewer, "bookings_summary", Some("Staff")).await.is_ok(), "a field they read");
+    assert!(run(&a, "bookings_summary", Some("Source")).await.is_ok(), "the administrator reads it");
+
+    // ───────────── a default the caller cannot read falls back to a readable grouping ─────────────
+    let mine = run(&viewer, "bookings_summary", None).await.unwrap();
+    assert_eq!(mine["meta"]["group_by"], json!("Staff"), "Service is hidden: the next grouping they read");
+    assert_eq!(run(&a, "bookings_summary", None).await.unwrap()["meta"]["group_by"], json!("Service"));
+
+    // ───────────── a column of a hidden field is left out, with its values ─────────────
+    let names = |v: &Value| v["columns"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert!(!names(&mine).contains(&"amount".to_string()), "{:?}", names(&mine));
+    assert!(mine["rows"].as_array().unwrap().iter().all(|r| r.get("amount").is_none()) && mine["totals"].get("amount").is_none(), "{mine}");
+    let full = run(&a, "bookings_summary", None).await.unwrap();
+    assert!(names(&full).contains(&"amount".to_string()) && full["rows"][0].get("amount").is_some());
+}
