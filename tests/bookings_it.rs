@@ -1476,6 +1476,36 @@ async fn deposits() {
     assert_eq!(t.scalar("select count(*) from e_order_refund where tenant_id = $1 and payment_request = $2", Some(first_request)).await, 1);
     assert_eq!(receipts_of(&t).await.len(), 5, "no receipt more");
 
+    // ───────────── the business cancels: the deposit comes back whole, whatever the terms ─────────────
+    // Until 0.15.0 a staff cancellation was settled by the service's terms like a guest's: inside the 100 hours set
+    // above, all 300 were kept. A cancellation the business makes now returns it in full.
+    let (fifth, _, _) = book("13:00", "zhou@example.test").await;
+    let request: Uuid = t.get("Booking", fifth).await["bpay_payment_request"].as_str().unwrap().parse().unwrap();
+    t.act(&fakepay, "PaymentRequest", request, "mark_paid", json!({"amount": "300", "currency": "INR", "gateway_reference": "pi_5"})).await;
+    t.act(&manager, "Booking", fifth, "cancel_by_business", json!({"reason": "Our therapist is ill"})).await;
+    let b = t.get("Booking", fifth).await;
+    assert_eq!((dec_of(&b["bpay_kept"]), b["cancelled_by"].clone()), ("0".to_string(), json!("Business")), "all of it back");
+    let r = t.get("OrderRefund", b["bpay_refund"].as_str().expect("a refund").parse().unwrap()).await;
+    assert_eq!(dec_of(&r["amount"]), "300");
+    // A class session the business cancels: every seat's deposit back in full.
+    let peel = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Peel Class", "duration_minutes": 60, "capacity": 4, "price": "1000", "item": facial_item.to_string(),
+                   "staff": [{"staff": sid(&mira)}], "bpay_deposit_percent": "30", "bpay_refund_hours": 100, "bpay_keep_percent": "100"}),
+        )
+        .await);
+    let class = t.insert(&manager, "BookingSession", json!({"service": peel.to_string(), "staff": sid(&mira), "start_time": rfc(at("15:00"))})).await;
+    let v = t.book(json!({"service": peel.to_string(), "start_time": rfc(at("15:00")), "name": "Guest", "email": "yan@example.test"})).await.unwrap();
+    let seat = uid(&t.find_one("Booking", json!({"number": v["booking"]["number"]})).await);
+    let request: Uuid = t.get("Booking", seat).await["bpay_payment_request"].as_str().unwrap().parse().unwrap();
+    t.act(&fakepay, "PaymentRequest", request, "mark_paid", json!({"amount": "300", "currency": "INR", "gateway_reference": "pi_6"})).await;
+    t.act(&manager, "BookingSession", uid(&class), "cancel_session", json!({"reason": "Studio flooded"})).await;
+    let b = t.get("Booking", seat).await;
+    assert_eq!((b["status"].clone(), dec_of(&b["bpay_kept"]), b["cancelled_by"].clone()), (json!("Cancelled"), "0".to_string(), json!("Business")));
+    assert_eq!(dec_of(&t.get("OrderRefund", b["bpay_refund"].as_str().expect("a refund").parse().unwrap()).await["amount"]), "300");
+
     // ───────────── a refusal inside a booking leaves nothing of it ─────────────
     // A payment method the store does not have: Commerce refuses, and the guest's booking goes with its invoice.
     let counts = || async {
@@ -2744,4 +2774,239 @@ async fn class_sessions() {
     assert!(matches!(asked, Err(Error::Forbidden(_))), "{asked:?}");
     assert!(t.k.update(&ben_user, "BookingSession", sid_, obj(json!({"capacity": 9})), None).await.is_err());
     assert!(t.k.delete(&ben_user, "BookingSession", sid_, None).await.is_err());
+}
+
+#[test]
+fn class_session_actions_end_to_end() {
+    run(class_session_actions());
+}
+
+/// A class session is cancelled, moved and repeated as one thing: every seat goes with it, each guest is told once,
+/// nothing lands on taken time, and a guest cancelling at the same moment is cancelled once.
+async fn class_session_actions() {
+    let t = boot("pilates", &["comms"]).await;
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let at = |hhmm: &str| local(ist, day, hhmm);
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let manager = t.user("manager@pilates.test", &["Bookings Manager"]).await;
+    t.insert(
+        &manager,
+        "BookingSettings",
+        json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60, "approval_required": false,
+               "cancellation_window_hours": 0, "reschedule_window_hours": 0}),
+    )
+    .await;
+    let person = |name: &str| json!({"display_name": name, "email": format!("{}@pilates.test", name.to_lowercase()), "time_zone": "Asia/Kolkata", "working_hours": every});
+    let asha = uid(&t.insert(&manager, "BookingStaff", person("Asha")).await);
+    let ben = uid(&t.insert(&manager, "BookingStaff", person("Ben")).await);
+    let room = |name: &str| json!({"resource_name": name, "capacity": 1});
+    let (one, two) = (uid(&t.insert(&manager, "BookingResource", room("Room 1")).await), uid(&t.insert(&manager, "BookingResource", room("Room 2")).await));
+    let pilates = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Pilates", "duration_minutes": 60, "capacity": 10, "price": "0", "sessions_only": true,
+                   "staff": [{"staff": asha.to_string()}, {"staff": ben.to_string()}],
+                   "resources": [{"resource": one.to_string()}, {"resource": two.to_string()}]}),
+        )
+        .await);
+    let facial = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Facial", "duration_minutes": 60, "price": "0", "staff": [{"staff": asha.to_string()}, {"staff": ben.to_string()}]}),
+        )
+        .await);
+    let schedule = |who: Uuid, start: DateTime<Utc>, extra: Value| {
+        let (t, manager) = (&t, &manager);
+        async move {
+            let mut v = json!({"service": pilates.to_string(), "staff": who.to_string(), "start_time": rfc(start)});
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            uid(&t.insert(manager, "BookingSession", v).await)
+        }
+    };
+    let book = |start: DateTime<Utc>, name: String, waitlist: bool| {
+        let t = &t;
+        async move {
+            let email = format!("{}@example.test", name.to_lowercase());
+            let v =
+                t.book(json!({"service": pilates.to_string(), "start_time": rfc(start), "name": name, "email": email, "waitlist": waitlist})).await.unwrap();
+            (uid(&t.find_one("Booking", json!({"number": v["booking"]["number"]})).await), v["token"].as_str().unwrap_or_default().to_string())
+        }
+    };
+    let cancels = |all: &[String]| all.iter().filter(|s| s.starts_with("Booking cancelled")).count();
+
+    // ───────────── cancelling a session cancels every seat and waitlist place, and tells each guest once ─────────────
+    let s1 = schedule(asha, at("10:00"), json!({"capacity": 3})).await;
+    let mut seats = Vec::new();
+    for n in ["Ann", "Bo", "Cy"] {
+        seats.push(book(at("10:00"), n.to_string(), false).await.0);
+    }
+    let (dee, _) = book(at("10:00"), "Dee".to_string(), true).await;
+    assert_eq!(t.get("Booking", dee).await["status"], json!("Waitlisted"));
+    t.maintain(Utc::now()).await;
+    let out = t.act(&manager, "BookingSession", s1, "cancel_session", json!({"reason": "Teacher unwell"})).await;
+    assert_eq!(out["cancelled"].as_array().unwrap().len(), 4, "{out}");
+    assert_eq!(out["cancelled"][0], json!(dee.to_string()), "the waitlist place first: no freed seat is offered to it");
+    for b in seats.iter().chain([&dee]) {
+        let b = t.get("Booking", *b).await;
+        assert_eq!(
+            (b["status"].clone(), b["cancellation_reason"].clone(), b["cancelled_by"].clone()),
+            (json!("Cancelled"), json!("Teacher unwell"), json!("Business"))
+        );
+    }
+    assert!(t.get("Booking", dee).await["confirmed_at"].is_null(), "nobody is promoted out of a cancelled session");
+    let s = t.get("BookingSession", s1).await;
+    assert_eq!((s["status"].clone(), s["cancellation_reason"].clone()), (json!("Cancelled"), json!("Teacher unwell")));
+    t.maintain(Utc::now()).await;
+    t.maintain(Utc::now()).await;
+    for email in ["ann@example.test", "bo@example.test", "cy@example.test"] {
+        assert_eq!(cancels(&subjects_of(&t, email).await), 1, "{email}: one cancellation, the second round sends none");
+    }
+    assert!(t.action(&manager, "BookingSession", s1, "cancel_session", json!({})).await.is_err(), "a cancelled session is not cancelled twice");
+    let gone = t.post_pub("/book", json!({"service": pilates.to_string(), "start_time": rfc(at("10:00")), "name": "Eli", "email": "eli@example.test"})).await;
+    assert!(gone.is_err(), "a cancelled session is not offered: {gone:?}");
+    let slots = t.get_pub(&format!("/slots?service={pilates}&from={day}&to={day}&time_zone=Asia/Kolkata")).await;
+    assert!(!all_starts(&slots).contains(&rfc(at("10:00"))));
+
+    // ───────────── moving a session moves every seat, half an hour onto its own old time ─────────────
+    let s2 = schedule(asha, at("12:00"), json!({"capacity": 2, "resource": one.to_string()})).await;
+    let key = t.get("BookingSession", s2).await["session_key"].as_str().unwrap().to_string();
+    let (eve, _) = book(at("12:00"), "Eve".to_string(), false).await;
+    let (fay, _) = book(at("12:00"), "Fay".to_string(), false).await;
+    let (gus, _) = book(at("12:00"), "Gus".to_string(), true).await;
+    t.maintain(Utc::now()).await;
+    let gus_mails = t.mails_to("gus@example.test").await.len();
+    let out = t.act(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("12:30"))})).await;
+    assert_eq!(out["moved"], json!(2));
+    for b in [eve, fay, gus] {
+        let b = t.get("Booking", b).await;
+        assert_eq!((b["start_time"].clone(), b["end_time"].clone(), b["session_key"].clone()), (json!(rfc(at("12:30"))), json!(rfc(at("13:30"))), json!(key)));
+    }
+    assert_eq!(t.get("Booking", eve).await["block_start"], json!(rfc(at("12:30"))));
+    assert_eq!(t.get("BookingSession", s2).await["start_time"], json!(rfc(at("12:30"))));
+    t.maintain(Utc::now()).await;
+    for email in ["eve@example.test", "fay@example.test"] {
+        assert_eq!(subjects_of(&t, email).await.iter().filter(|s| s.starts_with("Booking moved")).count(), 1, "{email}");
+    }
+    assert_eq!(t.mails_to("gus@example.test").await.len(), gus_mails, "the waitlist place moves silently");
+
+    // ───────────── refused moves change nothing ─────────────
+    let snapshot = || async {
+        let mut rows = vec![t.get("BookingSession", s2).await];
+        for b in [eve, fay, gus] {
+            rows.push(t.get("Booking", b).await);
+        }
+        let f = |r: &Doc, k: &str| r.get(k).cloned().unwrap_or_default();
+        rows.iter().map(|r| (f(r, "staff"), f(r, "start_time"), f(r, "resource"), f(r, "notice_version"))).collect::<Vec<_>>()
+    };
+    let before = snapshot().await;
+    t.insert(&manager, "Booking", json!({"service": facial.to_string(), "staff": asha.to_string(), "start_time": rfc(at("15:00")), "guest_name": "Hal"})).await;
+    let onto = t.action(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("15:00"))})).await.unwrap_err();
+    assert!(matches!(onto, Error::Conflict(_)), "onto another booking: {onto:?}");
+    t.insert(&manager, "StaffTimeOff", json!({"staff": asha.to_string(), "from_time": rfc(at("16:00")), "to_time": rfc(at("17:00"))})).await;
+    assert_eq!(refused_field(&t.action(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("16:00"))})).await.unwrap_err()), "start_time");
+    assert_eq!(refused_field(&t.action(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("20:00"))})).await.unwrap_err()), "start_time");
+    let past = rfc(Utc::now() - Duration::days(1));
+    assert_eq!(refused_field(&t.action(&manager, "BookingSession", s2, "move", json!({"start_time": past})).await.unwrap_err()), "start_time");
+    assert_eq!(snapshot().await, before, "session and seats exactly as before");
+
+    // ───────────── another teacher and room go to every seat; a taken room refuses ─────────────
+    let out =
+        t.act(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("12:30")), "staff": ben.to_string(), "resource": two.to_string()})).await;
+    assert_eq!(out["moved"], json!(2));
+    for b in [eve, fay] {
+        let b = t.get("Booking", b).await;
+        assert_eq!((b["staff"].clone(), b["staff_name"].clone(), b["resource"].clone()), (json!(ben.to_string()), json!("Ben"), json!(two.to_string())));
+    }
+    schedule(asha, at("14:00"), json!({"resource": one.to_string()})).await;
+    let before = snapshot().await;
+    let taken = t.action(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("14:00")), "resource": one.to_string()})).await.unwrap_err();
+    assert!(matches!(taken, Error::Conflict(_)), "Room 1 is held by Asha's 14:00: {taken:?}");
+    assert_eq!(snapshot().await, before);
+    let out = t.act(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("12:30"))})).await;
+    assert_eq!(out["moved"], json!(0), "where it is: nothing changes");
+    assert_eq!(snapshot().await, before, "and nobody is told");
+
+    // ───────────── a guest cancelling while the session is cancelled: cancelled once ─────────────
+    let mut rounds = Vec::new();
+    for i in 0..10i64 {
+        let start = local(ist, day + Duration::days(1 + i / 8), &format!("{:02}:00", 9 + i % 8));
+        let session = schedule(ben, start, json!({})).await;
+        let (b, token) = book(start, format!("Racer{i}"), false).await;
+        rounds.push((session, b, token, format!("racer{i}@example.test")));
+    }
+    t.maintain(Utc::now()).await;
+    for (session, b, token, _) in &rounds {
+        let path = format!("/manage/{token}/cancel");
+        let guest = t.site("POST", &path, Some(json!({"reason": "Cannot come"})));
+        let business = t.action(&manager, "BookingSession", *session, "cancel_session", json!({"reason": "Closed"}));
+        let (guest, business) = tokio::join!(guest, business);
+        assert!(done_or_already(&guest), "{guest:?}");
+        assert!(business.is_ok(), "{business:?}");
+        assert_eq!(t.get("Booking", *b).await["status"], json!("Cancelled"));
+    }
+    t.maintain(Utc::now()).await;
+    for (_, _, _, email) in &rounds {
+        assert_eq!(cancels(&subjects_of(&t, email).await), 1, "{email}: one cancellation mail");
+    }
+
+    // ───────────── repeat schedules the weeks, whole or nothing ─────────────
+    let s4 = schedule(ben, at("17:00"), json!({})).await;
+    t.insert(
+        &manager,
+        "Booking",
+        json!({"service": facial.to_string(), "staff": ben.to_string(), "start_time": rfc(at("17:00") + Duration::days(14)), "guest_name": "Ivy"}),
+    )
+    .await;
+    let sessions = || t.scalar("select count(*) from e_booking_session where tenant_id = $1 and status = 'Scheduled' and $2::uuid is null", None);
+    let count = sessions().await;
+    let whole = t.action(&manager, "BookingSession", s4, "repeat", json!({"every": "week", "count": 4})).await.unwrap_err();
+    assert!(messages(&whole).contains(&(day + Duration::days(14)).to_string()), "names the date: {whole:?}");
+    assert_eq!(sessions().await, count, "nothing scheduled");
+    let out = t.act(&manager, "BookingSession", s4, "repeat", json!({"every": "week", "count": 4, "skip_conflicts": "Yes"})).await;
+    assert_eq!((out["scheduled"].as_array().unwrap().len(), out["skipped"].as_array().unwrap().len()), (2, 1), "{out}");
+    assert_eq!(sessions().await, count + 2);
+    let series = t.get("BookingSession", s4).await["series"].clone();
+    assert!(series.is_string());
+    let later: Uuid = out["scheduled"][0]["id"].as_str().unwrap().parse().unwrap();
+    assert_eq!(t.get("BookingSession", later).await["series"], series);
+
+    // ───────────── the same key answers once ─────────────
+    let s5 = schedule(asha, at("09:00") + Duration::days(20), json!({})).await;
+    let inv = || {
+        ferrum_kernel::capability::Invocation::new("bookings.booking_session.cancel_session", json!({"id": s5, "params": {"reason": "Once"}})).key("close-s5")
+    };
+    let first = t.k.invoke(&manager, inv()).await.expect("cancelled");
+    let again = t.k.invoke(&manager, inv()).await.expect("answered");
+    assert!(!first.repeated && again.repeated);
+    assert_eq!(again.result, first.result);
+
+    // ───────────── only a manager; the catalog lists the three with their contracts ─────────────
+    let ben_user = t.user("ben@pilates.test", &["Bookings User"]).await;
+    let s6 = schedule(ben, at("09:00") + Duration::days(21), json!({})).await;
+    for (name, params) in [
+        ("cancel_session", json!({})),
+        ("move", json!({"start_time": rfc(at("10:00") + Duration::days(21))})),
+        ("repeat", json!({"every": "week", "count": 2})),
+    ] {
+        assert!(t.action(&ben_user, "BookingSession", s6, name, params).await.is_err(), "{name}");
+        let cap = t.k.capability(&manager, &format!("bookings.booking_session.{name}")).expect(name);
+        assert_eq!(serde_json::to_value(cap.effect).unwrap(), json!("transactional_action"), "{name}");
+        assert!(!cap.completion.is_empty(), "{name}");
+    }
+    assert_eq!(t.get("BookingSession", s6).await["status"], json!("Scheduled"));
+}
+
+async fn subjects_of(t: &T, email: &str) -> Vec<String> {
+    t.mails_to(email).await.iter().map(|m| m["subject"].as_str().unwrap_or_default().to_string()).collect()
+}
+
+/// A guest's request that either did it or found it done.
+fn done_or_already(r: &Result<(u16, Value), Error>) -> bool {
+    match r {
+        Ok((status, _)) => *status == 200,
+        Err(e) => messages(e).contains("already"),
+    }
 }

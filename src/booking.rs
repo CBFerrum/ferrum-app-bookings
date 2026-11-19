@@ -218,7 +218,7 @@ async fn keep_despite_clash(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc) -
     update(k, ctx, tx, booking, obj(json!({"outside_clash": false, "outside_clash_kept": ts(chrono::Utc::now())})), false).await
 }
 
-async fn update(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, mut patch: Doc, notify: bool) -> Result<Doc> {
+pub(crate) async fn update(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, mut patch: Doc, notify: bool) -> Result<Doc> {
     if notify {
         patch.insert("notice_version".into(), json!(int(booking, "notice_version") + 1));
     }
@@ -320,7 +320,8 @@ pub async fn reschedule(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, m: &M
 }
 
 /// Cancels a booking (guests within the cancellation window); a freed class seat goes to the waitlist.
-pub async fn cancel(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, reason: Option<&str>, public: bool) -> Result<Doc> {
+/// `by_business`: the business lets the time go, not the guest (a paid deposit comes back whole).
+pub async fn cancel(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, reason: Option<&str>, public: bool, by_business: bool) -> Result<Doc> {
     let was = status(booking).to_string();
     if !matches!(was.as_str(), "Pending" | "Confirmed" | "Waitlisted") {
         return Err(Error::invalid(format!("this booking is already {}", if was.is_empty() { "closed" } else { was.as_str() })));
@@ -338,7 +339,9 @@ pub async fn cancel(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, reason: O
     }
     let reason: Option<String> =
         reason.map(|r| r.chars().filter(|c| !c.is_control() || *c == '\n').take(1000).collect::<String>().trim().to_string()).filter(|r| !r.is_empty());
-    let patch = obj(json!({"status": "Cancelled", "cancellation_reason": reason, "cancelled_at": ts(Utc::now()), "last_change": "Cancelled"}));
+    let by = if by_business && !public { "Business" } else { "Guest" };
+    let patch =
+        obj(json!({"status": "Cancelled", "cancellation_reason": reason, "cancelled_at": ts(Utc::now()), "cancelled_by": by, "last_change": "Cancelled"}));
     let out = update(k, ctx, tx, booking, patch, true).await?;
     if ACTIVE.contains(&was.as_str())
         && let Some(key) = s(booking, "session_key")
@@ -590,7 +593,8 @@ impl DocHook for BookingHook {
         let out = match name {
             "confirm" => confirm(hc.kernel, &engine, hc.tx, doc).await?,
             "reschedule" => reschedule(hc.kernel, &engine, hc.tx, doc, &parse_move(params)?, false).await?,
-            "cancel_booking" => cancel(hc.kernel, &engine, hc.tx, doc, params.get("reason").and_then(Value::as_str), false).await?,
+            "cancel_booking" => cancel(hc.kernel, &engine, hc.tx, doc, params.get("reason").and_then(Value::as_str), false, false).await?,
+            "cancel_by_business" => cancel(hc.kernel, &engine, hc.tx, doc, params.get("reason").and_then(Value::as_str), false, true).await?,
             "complete" => finish(hc.kernel, &engine, hc.tx, doc, "Completed").await?,
             "keep_despite_clash" => keep_despite_clash(hc.kernel, &engine, hc.tx, doc).await?,
             "mark_no_show" => finish(hc.kernel, &engine, hc.tx, doc, "No Show").await?,

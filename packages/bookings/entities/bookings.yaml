@@ -195,6 +195,43 @@
     - {name: block_end, type: datetime, read_only: true, hidden: true, no_copy: true}
     - {name: session_key, type: data, read_only: true, hidden: true, no_copy: true}
   indexes: [[staff, start_time], [service, start_time], [status, start_time]]
+  actions:
+    - name: cancel_session
+      label: Cancel Session
+      permission: write
+      condition: "doc.status == 'Scheduled'"
+      confirm: "Cancel this session and every booking in it? Each guest is told."
+      params:
+        - {name: reason, type: text, label: Reason, description: The guests see it}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {session: {type: string, format: uuid}, cancelled: {type: array, items: {type: string, format: uuid}}}}
+        completion: "The session is Cancelled and every booking and waitlist place in it is cancelled, committed with this receipt; a paid deposit comes back in full; each guest is told once by the next upkeep round"
+    - name: move
+      label: Move
+      permission: write
+      hidden: true
+      condition: "doc.status == 'Scheduled'"
+      params:
+        - {name: start_time, type: data, label: New Start, required: true, description: "An instant as RFC 3339 text, e.g. 2026-12-01T18:00:00+05:30"}
+        - {name: staff, type: link, to: BookingStaff, label: Teacher, description: "Empty: the same teacher"}
+        - {name: resource, type: link, to: BookingResource, label: Room, description: "Empty: the same room"}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {session: {type: string, format: uuid}, moved: {type: integer}}}
+        completion: "The session and every booking in it are at the new time, teacher and room, committed with this receipt; each guest with a seat is told once"
+    - name: repeat
+      label: Repeat
+      permission: write
+      condition: "doc.status == 'Scheduled' && doc.series == null"
+      params:
+        - {name: every, type: select, label: Every, options: [week, 2 weeks, 4 weeks, month], required: true}
+        - {name: count, type: int, label: Sessions in All, required: true, description: "2 to 52, this one included"}
+        - {name: skip_conflicts, type: select, label: Skip Times That Are Taken, options: ["No", "Yes"], description: "No: a time that is taken stops the series"}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {series: {type: string}, scheduled: {type: array}, skipped: {type: array}}}
+        completion: "The later sessions are Scheduled and share this session's series, committed with this receipt; with skipping, the dates that were taken are listed"
   form:
     - {label: Session, fields: [service, staff, start_time, end_time, capacity, resource, status]}
     - {label: History, collapsible: true, fields: [series, cancellation_reason]}
@@ -249,6 +286,7 @@
     - {name: scheduled_at, type: datetime, read_only: true, no_copy: true, description: "When the current time was booked or last moved"}
     - {name: confirmed_at, type: datetime, read_only: true, no_copy: true}
     - {name: cancelled_at, type: datetime, read_only: true, no_copy: true}
+    - {name: cancelled_by, type: select, options: [Guest, Business], read_only: true, no_copy: true, description: "Business: the business let the time go, and a paid deposit comes back in full whatever the service's terms"}
     - {name: completed_at, type: datetime, read_only: true, no_copy: true}
     - {name: block_start, type: datetime, read_only: true, hidden: true, no_copy: true}
     - {name: block_end, type: datetime, read_only: true, hidden: true, no_copy: true}
@@ -275,6 +313,17 @@
       condition: "doc.status == 'Pending' || doc.status == 'Confirmed' || doc.status == 'Waitlisted'"
       params:
         - {name: reason, type: text, label: Reason, description: The guest sees it}
+    - name: cancel_by_business
+      label: We Cancel It
+      permission: write
+      condition: "doc.status == 'Pending' || doc.status == 'Confirmed' || doc.status == 'Waitlisted'"
+      confirm: "Cancel this booking on the business's side? A paid deposit comes back in full, whatever the service's terms."
+      params:
+        - {name: reason, type: text, label: Reason, description: The guest sees it}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {id: {type: string, format: uuid}, status: {type: string}, cancelled_by: {type: string}}}
+        completion: "The booking is Cancelled with cancelled_by Business, committed with this receipt; a paid deposit is credited and asked back in full whatever the service's terms; the guest is told once by the next upkeep round"
     - {name: keep_despite_clash, label: Keep Despite the Clash, permission: write, condition: "doc.outside_clash",
        confirm: "Keep this booking at its time, though the staff member's outside calendar is busy then?"}
     - {name: complete, label: Mark Completed, permission: write, condition: "doc.status == 'Confirmed'"}
@@ -301,5 +350,5 @@
     - {label: Intake Answers, collapsible: true, fields: [answers]}
     - {label: Location, collapsible: true, fields: [location_type, location]}
     - {label: Billing, collapsible: true, fields: [company, item, rate, amount, sales_invoice]}
-    - {label: History, collapsible: true, fields: [cancellation_reason, scheduled_at, confirmed_at, cancelled_at, completed_at, outside_clash, outside_clash_since, outside_clash_kept, closed_clash]}
+    - {label: History, collapsible: true, fields: [cancellation_reason, cancelled_by, scheduled_at, confirmed_at, cancelled_at, completed_at, outside_clash, outside_clash_since, outside_clash_kept, closed_clash]}
   list: {columns: [number, start_time, service_name, staff_name, guest_name, seats, status, outside_clash], sort: start_time desc}

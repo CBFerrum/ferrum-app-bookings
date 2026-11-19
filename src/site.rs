@@ -490,7 +490,7 @@ async fn change(k: &Kernel, ctx: &Ctx, tok: &str, what: Change) -> Result<Value>
         let mut tx = k.db.tenant_tx(ctx.tenant).await?;
         let (st, b) = by_token(k, ctx, &mut tx, tok, true).await?;
         let after = match &what {
-            Change::Cancel(reason) => booking::cancel(k, ctx, &mut tx, &b, reason.as_deref(), true).await?,
+            Change::Cancel(reason) => booking::cancel(k, ctx, &mut tx, &b, reason.as_deref(), true, false).await?,
             Change::Move(m) => booking::reschedule(k, ctx, &mut tx, &b, m, true).await?,
         };
         let root = settings::site_root(&mut tx, ctx.tenant).await?;

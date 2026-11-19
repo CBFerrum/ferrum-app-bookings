@@ -561,7 +561,7 @@ async fn expire_waitlists(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> 
                 tx.commit().await?;
                 return Ok(0);
             }
-            booking::cancel(k, ctx, &mut tx, &b, Some("No seat became free before the class started."), false).await?;
+            booking::cancel(k, ctx, &mut tx, &b, Some("No seat became free before the class started."), false, false).await?;
             tx.commit().await?;
             Ok(1)
         })

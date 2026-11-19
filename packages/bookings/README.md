@@ -79,7 +79,7 @@ Administrators can do everything. Staff without a Bookings role see nothing of t
    room from then on, with nobody booked: no other booking or session can take them. Its key is
    `s/{id}`, shared by every seat booked into it. Afterwards only `capacity` changes by an edit,
    never below the seats taken; the time, teacher, room and status change only through the
-   session's actions. It is deleted only while nothing is booked or waitlisted in it. Seats booked
+   session's actions (below). It is deleted only while nothing is booked or waitlisted in it. Seats booked
    before at the same time (an ad hoc session) are not taken over: scheduling there is refused.
 
 ## How availability works
@@ -135,11 +135,23 @@ deleted (cancel them). `source` is `Internal` or `Public`.
 |---|---|---|
 | `confirm` | Pending | → the booking, `Confirmed` |
 | `reschedule` | Pending, Confirmed | `{start_time, staff?: id \| "any", seats?}` (staff absent = keep) → the booking; re-checked like a new booking (staff rules); freed class seats go to the waitlist |
-| `cancel_booking` | Pending, Confirmed, Waitlisted | `{reason?}` → the booking, `Cancelled`; a freed class seat goes to the waitlist |
+| `cancel_booking` | Pending, Confirmed, Waitlisted | `{reason?}` → the booking, `Cancelled`, `cancelled_by: Guest` (a cancellation the guest asked for, here or on their page): a paid deposit is settled by the service's terms; a freed class seat goes to the waitlist |
+| `cancel_by_business` (We Cancel It) | Pending, Confirmed, Waitlisted | `{reason?}` → the booking, `Cancelled`, `cancelled_by: Business`: the business lets the time go, so a paid deposit comes back in full whatever the service's terms; otherwise as `cancel_booking` |
 | `complete` | Confirmed, once started | → `Completed` |
 | `mark_no_show` | Pending, Confirmed, once started | → `No Show` |
 | `make_sales_invoice` | Confirmed, Completed, No Show | → `{entity: "SalesInvoice", id, number}`: a draft invoice of the booking's company in its currency, one line `item × seats` at the booked `rate`, no discount (the company's default sales taxes apply). A guest without a customer becomes one, as ERP finds a person's (`portal::customer_for`: an enabled customer with the guest's email, else phone digits, that no web shop's guest checkout made, else a new individual). Refused while a draft or submitted invoice exists; a deleted draft (the link clears) or a cancelled invoice allows a new one. Needs Sales Invoice create permission |
 | `guest_link` | not Cancelled | → `{token, url, api, expires_at, note}`: a fresh self-service link to hand to the guest (the fallback without the Mail app) |
+
+### Class Session actions — `POST /api/v1/BookingSession/{id}/actions/{action}`
+
+Bookings Manager only (write on Class Session). Each is the operation `bookings.booking_session.{action}`
+(`transactional_action`; a repeated effect key answers the first result).
+
+| Action | When | Params → result |
+|---|---|---|
+| `cancel_session` | Scheduled | `{reason?}` (cleaned, at most 1000 characters) → `{session, cancelled: [booking ids]}`: the session `Cancelled` with the reason, its waitlist places cancelled first (no freed seat is offered to them), then every seat, each as a business cancellation (a paid deposit back in full); each guest is told once by the next upkeep round |
+| `move` | Scheduled (hidden on the record page: the schedule offers it) | `{start_time (RFC 3339 text, ahead), staff?, resource?}` (empty = the same) → `{session, moved}`: decided once for the whole session under the old and new teachers' locks (another booking or session in the way, buffers included, or a taken room: 409; outside hours, time off, the past: 422) and nothing changes on a refusal; the session and every seat move together, keeping the key, each seat told once; waitlist places move silently. Where it already is: `moved: 0`, nobody told |
+| `repeat` | Scheduled, not in a series | `{every: week / 2 weeks / 4 weeks / month, count: 2–52 (this one included), skip_conflicts?: "Yes"}` → `{series, scheduled: [{id, start_time}], skipped: [{date, start_time, reason}]}`: later sessions at the same local time in the teacher's zone, each checked as one scheduled by hand; a taken date stops the whole repeat (naming it) unless skipping |
 
 ### Waitlists
 

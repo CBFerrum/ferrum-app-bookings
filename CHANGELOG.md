@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.15.0
+
+Needs the same platform as 0.14.0. Database: one field, `Booking.cancelled_by`. Three operations on Class Session.
+Interface rebuilt (names only).
+
+- **Cancel Session** (`cancel_session {reason?}`): the session and every seat and waitlist place in it are cancelled
+  in one transaction, waitlist places first so no freed seat is offered to them; each guest is told once.
+- **Move** (`move {start_time, staff?, resource?}`): the session and every seat go to a new time, teacher or room,
+  decided once for the whole session; a time that is taken refuses and nothing changes. Waitlist places move
+  silently. Moving it where it is changes nothing.
+- **Repeat** (`repeat {every, count, skip_conflicts?}`): a timetable of later sessions at the same local time, whole
+  or nothing unless taken dates are skipped.
+- **A business cancellation returns the whole deposit.** Until now a cancellation made by staff was settled by the
+  service's terms like a guest's: inside the refund window the deposit was kept. A new Booking action, We Cancel It
+  (`cancel_by_business`), marks the booking `cancelled_by: Business` and a paid deposit comes back in full whatever
+  the terms. Cancelling a class session always does so for every seat. Cancel Booking stays the guest's cancellation
+  (`cancelled_by: Guest`), settled by the terms, as before.
+
 ## 0.14.0
 
 Needs the same platform as 0.13.0. Database: a new entity, Class Session (`e_booking_session`), and
