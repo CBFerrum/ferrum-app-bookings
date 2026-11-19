@@ -82,6 +82,24 @@ Administrators can do everything. Staff without a Bookings role see nothing of t
    session's actions (below). It is deleted only while nothing is booked or waitlisted in it. Seats booked
    before at the same time (an ad hoc session) are not taken over: scheduling there is refused.
 
+7. **Booking Locations** (`BookingLocation`; Bookings Manager creates and changes, Bookings User
+   reads): `location_name`, `active`, `address` (guests see it for an in-person service that states no
+   address of its own), `time_zone` (IANA; where the booking page starts for it), `calendar` (Opening
+   Calendar: nobody is booked there outside its open time; empty = the business calendar of Booking
+   Settings). A staff member (`location`) and a room (`location`) belong to one location or, empty,
+   to every location; a person who works at two places is "everywhere" (hours per location are not
+   built). A service lists where it is offered (`locations` rows; empty = every location). A booking
+   and a class session carry `booking_location`, set once when made and kept by Reschedule, Move,
+   a waitlist promotion and a paid deposit's restore; an edit cannot change it (cancel and book
+   again). A location in use cannot be deleted: make it inactive, and its bookings stay.
+
+   **Which location**: with no active location, none (as before locations existed). Otherwise the
+   one asked for (it must be active and one the service is offered at, else a field error on
+   `location`); else the named staff member's when the service is offered there; else the only
+   location the service is offered at; else "choose a location". Only that location's staff and
+   rooms (and those of every location) are candidates; a named staff member who works elsewhere is
+   refused on `staff`. `find_slots` and `/slots` take `location` the same way.
+
 ## How availability works
 
 * The appointment `[start, start + duration)` lies inside the staff member's working time (their
@@ -178,11 +196,11 @@ answer the same 404. `POST`s are limited to 30 per 10 minutes per address and wo
 
 | Method & path | Request | Response |
 |---|---|---|
-| `GET /services` | — | `{time_zone, currency, services: [{id, name, description, duration_minutes, seats, price, location_type, location (in person only), staff: [{id, name, bio}], questions: [{question, type, options, required}]}]}` — active services with active staff |
-| `GET /slots` | `service` (required), `from`, `to` (dates in the zone; default the next 7 days, at most 62), `time_zone` (IANA; default the workspace's), `staff`, `seats`, `waitlist` (1: list full classes too, marked `full: true` with `seats_left` what is free, so a page can offer their waitlist) | `{service: {id, name, duration_minutes, seats}, time_zone, from, to, days: [{date, slots: [{start, end, time ("HH:MM" in the zone), seats_left, staff: [{id, name}]}]}]}`. 404 for an unknown or inactive service; 422 for bad parameters |
-| `POST /book` | `{service, start_time, staff? (id or "any"), seats?, name, email, phone?, time_zone?, language?, notes?, answers? ({question: answer} or [{question, answer}]), waitlist?, website}` | `201 {booking: View, token}`. `website` is a honeypot: when filled the answer is `201 {"status": "received"}` and nothing is booked. Answers are checked against the questions (required ones present, numbers, Yes/No, one of the choices, nothing unknown). 422 with field errors, 409 when taken, 404 unknown service |
+| `GET /services` | — | `{time_zone, currency, locations: [{id, name, address, time_zone}], services: [{id, name, description, duration_minutes, seats, price, location_type, location (in person only), locations: [ids it is offered at], staff: [{id, name, bio, location}], questions: [{question, type, options, required}]}]}` — active services with active staff; `locations` are the active ones (empty when the workspace has none) |
+| `GET /slots` | `service` (required), `from`, `to` (dates in the zone; default the next 7 days, at most 62), `time_zone` (IANA; default the workspace's), `staff`, `seats`, `location` (resolved as "Locations" below; 422 on `location` when it must be chosen or is not offered), `waitlist` (1: list full classes too, marked `full: true` with `seats_left` what is free, so a page can offer their waitlist) | `{service: {id, name, duration_minutes, seats}, time_zone, from, to, days: [{date, slots: [{start, end, time ("HH:MM" in the zone), seats_left, staff: [{id, name}]}]}]}`. 404 for an unknown or inactive service; 422 for bad parameters |
+| `POST /book` | `{service, start_time, staff? (id or "any"), location?, seats?, name, email, phone?, time_zone?, language?, notes?, answers? ({question: answer} or [{question, answer}]), waitlist?, website}` | `201 {booking: View, token}`. `website` is a honeypot: when filled the answer is `201 {"status": "received"}` and nothing is booked. Answers are checked against the questions (required ones present, numbers, Yes/No, one of the choices, nothing unknown). 422 with field errors, 409 when taken, 404 unknown service |
 | `GET /manage/{token}` | — | `{booking: View}` |
-| `GET /manage/{token}/slots` | `from`, `to`, `time_zone`, `staff` | Like `/slots` for the booking's service and seats; its own time does not block |
+| `GET /manage/{token}/slots` | `from`, `to`, `time_zone`, `staff` | Like `/slots` for the booking's service, seats and location; its own time does not block |
 | `POST /manage/{token}/reschedule` | `{start_time, staff?, seats?}` | `{booking: View}`; guest rules (grid, notice, advance) and the reschedule window; 409 when taken |
 | `POST /manage/{token}/cancel` | `{reason?}` | `{booking: View}`; the cancellation window applies (not to waitlist places) |
 | `GET /manage/{token}/booking.ics` | — | `text/calendar` (METHOD:PUBLISH), as an attachment |
@@ -190,7 +208,7 @@ answer the same 404. `POST`s are limited to 30 per 10 minutes per address and wo
 
 **View**: `{number, status, service: {id, name}, staff: {id, name}, start_time, end_time,
 time_zone, when ("Mon 2 Nov 2026, 10:00 (Asia/Kolkata)"), until ("11:00"), seats,
-location_type, location (null when cancelled), guest: {name, email, phone}, answers: [{question,
+location_type, location (null when cancelled), place ({id, name, address} of its location, or null), guest: {name, email, phone}, answers: [{question,
 answer}], amount, cancellation_reason, waitlist_position (Waitlisted only), can_cancel,
 cancel_until, can_reschedule, reschedule_until, links: {manage, ics}, deposit}`.
 

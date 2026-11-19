@@ -244,6 +244,8 @@ pub struct Declared {
     /// Its own seats; `None`: the service's.
     pub capacity: Option<i64>,
     pub resource: Option<Uuid>,
+    /// Its location; `None`: no location.
+    pub place: Option<Uuid>,
 }
 
 /// Limits on starts: notice and advance windows (public bookings), and whether a start must be a
@@ -327,6 +329,8 @@ pub struct World {
     pub rules: Rules,
     /// Scheduled class sessions of any service that hold these staff members' time or these resources.
     pub sessions: Vec<Declared>,
+    /// The location being booked; `None`: none.
+    pub place: Option<Uuid>,
 }
 
 /// The fair choice: join an existing class session first (classes fill up); otherwise the highest
@@ -354,7 +358,8 @@ impl World {
 
     /// The scheduled session of this world's service with `staff` starting at `start`.
     fn declared(&self, staff: Uuid, start: Instant) -> Option<&Declared> {
-        self.sessions.iter().find(|d| d.service == self.service.id && d.staff == staff && d.span.start == start)
+        // A session at another location is not one a booking here can join: it only holds the teacher's time.
+        self.sessions.iter().find(|d| d.service == self.service.id && d.staff == staff && d.span.start == start && (d.place.is_none() || d.place == self.place))
     }
 
     /// The key every seat of one class session shares (the exclusion constraint lets equal keys
@@ -675,7 +680,7 @@ mod tests {
     }
 
     fn world(svc: Service, staff: Vec<Staff>) -> World {
-        World { service: svc, staff, resources: vec![], booked: vec![], rules: Rules::default(), sessions: vec![] }
+        World { service: svc, staff, resources: vec![], booked: vec![], rules: Rules::default(), sessions: vec![], place: None }
     }
 
     /// A session scheduled the way `BookingSession` schedules one; its key.
@@ -691,6 +696,7 @@ mod tests {
             block: Span::new(s - svc.before, s + svc.duration + svc.after),
             capacity,
             resource: resource.map(uid),
+            place: None,
         });
         key
     }
@@ -1103,6 +1109,7 @@ mod tests {
             block: Span::new(at, at + Duration::hours(1)),
             capacity: None,
             resource: None,
+            place: None,
         });
         assert_eq!(why(&w, "2026-06-01T09:30:00Z"), [Why::Busy], "its buffer after reaches 10:15");
         assert_eq!(why(&w, "2026-06-01T10:30:00Z"), [Why::Busy]);

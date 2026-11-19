@@ -48,14 +48,18 @@ async fn schedule(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
     if room.is_some_and(|r| !svc.resources.contains(&r)) {
         return Err(Error::field("resource", format!("is not one of the rooms of {}", svc.name)));
     }
+    let place = calendar::place(hc.tx, tenant, &svc, id(doc, "booking_location"), Some(staff)).await?;
     calendar::lock_staff(hc.tx, tenant, &[staff]).await?;
     calendar::lock_resources(hc.tx, tenant, &room.into_iter().collect::<Vec<_>>()).await?;
     let people = calendar::staff(hc.tx, tenant, &[staff]).await?;
     let Some(teacher) = people.first().filter(|p| p.active).cloned() else { return Err(Error::field("staff", "is not taking bookings")) };
+    if place.is_some() && teacher.location.is_some_and(|l| Some(l) != place) {
+        return Err(Error::field("staff", "does not work at that location"));
+    }
     let st = settings::load(hc.tx, tenant).await?.for_service(&svc);
     let end = start + Duration::minutes(svc.duration);
     let block = Span::new(start - Duration::minutes(svc.before), end + Duration::minutes(svc.after));
-    let world = calendar::world(hc.tx, tenant, &svc, &people, &st, Span::new(start, end), None).await?;
+    let world = calendar::world(hc.tx, tenant, &svc, &people, &st, Span::new(start, end), None, place).await?;
     let key = key_of(doc_id(doc)?);
     if let Err(why) = world.free_at(staff, start, Some(&key)) {
         // Seats booked before at that time share a key made of service, teacher and start: not this session's.
@@ -65,8 +69,8 @@ async fn schedule(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
         return Err(refused(why, note));
     }
     if let Some(r) = room {
-        if !world.resources.iter().any(|x| x.id == r) {
-            return Err(Error::field("resource", "is not an active room or resource"));
+        if !world.resources.iter().any(|x| x.id == r && x.capacity > 0) {
+            return Err(Error::field("resource", "is not an active room or resource at this location"));
         }
         if !world.room_free(r, Span::new(start, end), block, None) {
             return Err(Error::Conflict("that room is taken then".into()));
@@ -80,6 +84,7 @@ async fn schedule(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
         "block_start": ts(block.start),
         "block_end": ts(block.end),
         "session_key": key,
+        "booking_location": place.map(|l| l.to_string()),
         "status": "Scheduled",
     })));
     Ok(())
@@ -236,15 +241,20 @@ async fn move_session(hc: &mut HookCtx<'_>, doc: &Doc, params: &Value) -> Result
     calendar::lock_resources(hc.tx, tenant, &held.into_iter().chain(room).collect::<Vec<_>>()).await?;
     let people = calendar::staff(hc.tx, tenant, &[teacher]).await?;
     let Some(person) = people.first().filter(|p| p.active).cloned() else { return Err(Error::field("staff", "is not taking bookings")) };
+    // A session stays at its location: a teacher who works elsewhere is not one it moves to.
+    let place = id(doc, "booking_location");
+    if place.is_some() && person.location.is_some_and(|l| Some(l) != place) {
+        return Err(Error::field("staff", "does not work at that location"));
+    }
     let st = settings::load(hc.tx, tenant).await?.for_service(&svc);
     let end = start + Duration::minutes(svc.duration);
     let block = Span::new(start - Duration::minutes(svc.before), end + Duration::minutes(svc.after));
-    let mut world = calendar::world(hc.tx, tenant, &svc, &people, &st, Span::new(start, end), None).await?;
+    let mut world = calendar::world(hc.tx, tenant, &svc, &people, &st, Span::new(start, end), None, place).await?;
     world.sessions.retain(|d| d.key != key);
     world.booked.retain(|b| b.session != key);
     world.free_at(teacher, start, Some(&key)).map_err(|why| refused(why, ""))?;
     if let Some(r) = room {
-        if !world.resources.iter().any(|x| x.id == r) {
+        if !world.resources.iter().any(|x| x.id == r && x.capacity > 0) {
             return Err(Error::field("resource", "is not an active room or resource"));
         }
         if !world.room_free(r, Span::new(start, end), block, Some(&key)) {
@@ -312,6 +322,7 @@ async fn repeat(hc: &mut HookCtx<'_>, doc: &Doc, params: &Value) -> Result<Value
             "start_time": ts(start),
             "capacity": doc.get("capacity"),
             "resource": doc.get("resource"),
+            "booking_location": doc.get("booking_location"),
             "series": name,
         }));
         // A refused date must not cost the others the transaction.
@@ -350,7 +361,7 @@ impl DocHook for SessionHook {
         if let Some(old) = old
             && !hc.ctx.is_system
         {
-            for f in ["service", "staff", "start_time", "resource", "status"] {
+            for f in ["service", "staff", "start_time", "resource", "status", "booking_location"] {
                 if old.get(f) != doc.get(f) {
                     return Err(Error::field(f, "changes only through the session's actions (Move, Cancel Session)"));
                 }

@@ -63,6 +63,7 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("Booking", Arc::new(booking::BookingHook))
         .register("BookingService", Arc::new(setup::ServiceHook))
         .register("BookingSession", Arc::new(session::SessionHook))
+        .register("BookingLocation", Arc::new(setup::LocationHook))
         .register("BookingStaff", Arc::new(setup::StaffHook))
         .register("StaffTimeOff", Arc::new(setup::TimeOffHook))
         .register("BookingResource", Arc::new(setup::ResourceHook))

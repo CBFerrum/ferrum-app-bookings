@@ -131,6 +131,7 @@ async fn services(k: &Kernel, ctx: &Ctx) -> Result<Value> {
     ids.dedup();
     let staff = calendar::staff(&mut tx, ctx.tenant, &ids).await?;
     let code = currency(&mut tx, ctx.tenant, st.company).await?;
+    let places = calendar::locations(&mut tx, ctx.tenant).await?;
     tx.commit().await?;
     let list: Vec<Value> = all
         .iter()
@@ -139,7 +140,7 @@ async fn services(k: &Kernel, ctx: &Ctx) -> Result<Value> {
                 .staff
                 .iter()
                 .filter_map(|sid| staff.iter().find(|s| s.id == *sid && s.active))
-                .map(|s| json!({"id": s.id, "name": s.name, "bio": s.bio}))
+                .map(|s| json!({"id": s.id, "name": s.name, "bio": s.bio, "location": s.location}))
                 .collect();
             (!people.is_empty()).then(|| {
                 json!({
@@ -155,12 +156,16 @@ async fn services(k: &Kernel, ctx: &Ctx) -> Result<Value> {
                     // Video links and phone numbers go to booked guests only.
                     "location": if svc.location_type == "In Person" { svc.location.clone() } else { None },
                     "staff": people,
+                    // Where it is offered, among the active locations; empty when the workspace has none.
+                    "locations": places.iter().filter(|l| svc.locations.is_empty() || svc.locations.contains(&l.id)).map(|l| l.id).collect::<Vec<_>>(),
                     "questions": svc.questions.iter().map(|q| json!({"question": q.question, "type": q.answer_type, "options": q.options, "required": q.required})).collect::<Vec<_>>(),
                 })
             })
         })
         .collect();
-    Ok(json!({"time_zone": ctx.schema.timezone, "currency": code, "services": list}))
+    let locations: Vec<Value> =
+        places.iter().map(|l| json!({"id": l.id, "name": l.name, "address": l.address, "time_zone": l.zone.map(|z| z.name().to_string())})).collect();
+    Ok(json!({"time_zone": ctx.schema.timezone, "currency": code, "locations": locations, "services": list}))
 }
 
 /// How many in a row a guest may book `svc` from the page: a free service its business lets them
@@ -172,10 +177,12 @@ fn guest_repeats(svc: &ServiceInfo) -> i64 {
 /// `GET /slots?service=&from=&to=&time_zone=&staff=&seats=&waitlist=1`: with `waitlist`, a full
 /// class is listed too, marked `full`, for a page that offers its waitlist.
 async fn open_slots(k: &Kernel, ctx: &Ctx, req: &SiteRequest) -> Result<Value> {
-    let q = slots::parse(|key| query(req, key).map(str::to_string), workspace_zone(ctx))?;
+    let mut q = slots::parse(|key| query(req, key).map(str::to_string), workspace_zone(ctx))?;
+    let asked = query(req, "location").map(|v| v.parse::<Uuid>().map_err(|_| Error::field("location", "is not a location id"))).transpose()?;
     let mut tx = k.db.tenant_tx(ctx.tenant).await?;
     let st = open_page(&mut tx, ctx.tenant).await?;
     let svc = bookable(&mut tx, ctx.tenant, query(req, "service")).await?;
+    q.place = calendar::place(&mut tx, ctx.tenant, &svc, asked, q.staff).await.map_err(crate::setup::as_location)?;
     let st = st.for_service(&svc);
     let waitlist = matches!(query(req, "waitlist"), Some("1" | "true"));
     let out = slots::find(&mut tx, ctx.tenant, &svc, &st, &q, st.public_rules(Utc::now()), None, waitlist).await?;
@@ -310,6 +317,21 @@ async fn book(k: &Kernel, ctx: &Ctx, body: &Map<String, Value>) -> Result<(u16, 
             None
         }
     };
+    let location = match body.get("location") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(v)) if v.trim().is_empty() => None,
+        Some(Value::String(v)) => match v.trim().parse::<Uuid>() {
+            Ok(u) => Some(u),
+            Err(_) => {
+                errors.push(FieldError::new("location", "is not a location id"));
+                None
+            }
+        },
+        Some(_) => {
+            errors.push(FieldError::new("location", "is not a location id"));
+            None
+        }
+    };
     let seats = match body.get("seats") {
         None | Some(Value::Null) => 1,
         Some(v) => match v.as_i64().or_else(|| v.as_str().and_then(|x| x.trim().parse().ok())) {
@@ -351,6 +373,7 @@ async fn book(k: &Kernel, ctx: &Ctx, body: &Map<String, Value>) -> Result<(u16, 
             "service": svc.id.to_string(),
             "start_time": start,
             "staff": staff.map(|u| u.to_string()),
+            "booking_location": location.map(|u| u.to_string()),
             "seats": seats,
             "source": "Public",
             "join_waitlist": waitlist,
@@ -362,7 +385,7 @@ async fn book(k: &Kernel, ctx: &Ctx, body: &Map<String, Value>) -> Result<(u16, 
             "notes": notes,
             "answers": rows,
         }));
-        let doc = k.insert_tx(ctx, &mut tx, "Booking", input).await?;
+        let doc = k.insert_tx(ctx, &mut tx, "Booking", input).await.map_err(crate::setup::as_location)?;
         let series = match &repeat {
             Some((every, count)) => Some(series::repeat_in(k, ctx, &mut tx, &doc, &json!({"every": every, "count": count})).await?),
             None => None,
@@ -424,6 +447,17 @@ async fn guest_view(ctx: &Ctx, tx: &mut Tx, b: &Doc, st: &Settings, root: &str, 
         None => st.clone(),
     };
     let (cancel_until, move_until) = (start - st.cancel_window, start - st.reschedule_window);
+    let place = match id(b, "booking_location") {
+        Some(l) => {
+            sqlx::query_as::<_, (Uuid, String, Option<String>)>("select id, location_name, address from e_booking_location where tenant_id = $1 and id = $2")
+                .bind(ctx.tenant)
+                .bind(l)
+                .fetch_optional(&mut **tx)
+                .await?
+                .map(|(id, name, address)| json!({"id": id, "name": name, "address": address}))
+        }
+        None => None,
+    };
     Ok(json!({
         "number": b.get("number"),
         "status": status,
@@ -436,6 +470,7 @@ async fn guest_view(ctx: &Ctx, tx: &mut Tx, b: &Doc, st: &Settings, root: &str, 
         "until": end.with_timezone(&tz).format("%H:%M").to_string(),
         "seats": int(b, "seats"),
         "location_type": b.get("location_type"),
+        "place": place,
         "location": if matches!(status, "Cancelled" | "Expired") { Value::Null } else { b.get("location").cloned().unwrap_or(Value::Null) },
         "guest": {"name": b.get("guest_name"), "email": b.get("guest_email"), "phone": b.get("guest_phone")},
         "answers": rows(b, "answers").iter().map(|r| json!({"question": r.get("question"), "answer": r.get("answer")})).collect::<Vec<_>>(),
@@ -471,6 +506,7 @@ async fn manage_slots(k: &Kernel, ctx: &Ctx, req: &SiteRequest, tok: &str) -> Re
     let (st, b) = by_token(k, ctx, &mut tx, tok, false).await?;
     let mut q = slots::parse(|key| query(req, key).map(str::to_string), notify::guest_zone(&b, ctx))?;
     q.seats = int(&b, "seats").max(1);
+    q.place = id(&b, "booking_location");
     let sid = id(&b, "service").ok_or_else(|| Error::NotFound("booking".into()))?;
     let svc = calendar::service(&mut tx, ctx.tenant, sid).await?.ok_or_else(|| Error::NotFound("booking".into()))?;
     let st = st.for_service(&svc);
@@ -638,6 +674,7 @@ mod tests {
             location_type: "In Person".into(),
             location: None,
             staff: vec![],
+            locations: vec![],
             rank: Default::default(),
             resources: vec![],
             questions,

@@ -30,6 +30,26 @@
     - {label: Opening Days, fields: [calendar]}
     - {label: Links, collapsible: true, fields: [public_url, manage_page_url, signing_secret]}
 
+- name: BookingLocation
+  label: Booking Location
+  kind: master
+  module: bookings
+  title_field: location_name
+  description: "A place the business takes bookings at. Staff, rooms and services that name it are its own; those that name none are everywhere."
+  fields:
+    - {name: location_name, type: data, required: true, unique: true, in_list: true, max_length: 140}
+    - {name: active, type: check, default: true, in_list: true, in_filter: true, description: "Inactive locations are not offered for new bookings"}
+    - {name: address, type: text, max_length: 500, description: "Guests see it for in-person services that state no address of their own"}
+    - {name: time_zone, type: data, max_length: 64, in_list: true, description: "IANA time zone the booking page starts in for this location, e.g. Europe/London. Empty = the workspace's"}
+    - {name: calendar, type: data, max_length: 64, label: Opening Calendar, description: "A working calendar (Admin, Calendars): nobody is booked here outside its open time. Empty = the Business Calendar of Booking Settings"}
+  list: {columns: [location_name, time_zone, active], sort: location_name asc}
+
+- name: BookingServiceLocation
+  label: Service Location
+  kind: child
+  fields:
+    - {name: location, type: link, to: BookingLocation, required: true, on_delete: cascade, in_list: true}
+
 - name: BookingResource
   label: Booking Resource
   kind: master
@@ -41,6 +61,7 @@
     - {name: resource_type, type: select, options: [Room, Equipment, Vehicle, Other], default: Room, required: true, in_list: true, in_filter: true}
     - {name: capacity, type: int, default: 1, required: true, min: 1, max: 1000, in_list: true, description: "Bookings or class sessions it can host at once"}
     - {name: active, type: check, default: true, in_list: true, in_filter: true, description: "Inactive resources are not given to new bookings"}
+    - {name: location, type: link, to: BookingLocation, in_filter: true, description: "Where it is. Empty = usable at every location"}
     - {name: calendar, type: data, max_length: 64, label: Working Calendar, description: "A working calendar (Admin, Calendars): it is booked only in its open time. Empty: whenever staff work"}
     - {name: description, type: text}
   list: {columns: [resource_name, resource_type, capacity, active], sort: resource_name asc}
@@ -66,6 +87,7 @@
     - {name: email, type: email, required: true, unique: true, in_list: true, description: "The Ferrum user this is: they see their own bookings, get notified, and organize calendar invitations"}
     - {name: time_zone, type: data, required: true, default_expr: "user.timezone", max_length: 64, in_list: true, description: "IANA time zone of the working hours, e.g. Europe/London"}
     - {name: active, type: check, default: true, in_list: true, in_filter: true, description: "Inactive staff get no new bookings"}
+    - {name: location, type: link, to: BookingLocation, in_list: true, in_filter: true, description: "Where they work. Empty = every location"}
     - {name: bio, type: text, description: "Shown on the booking page"}
     - {name: calendar, type: data, max_length: 64, label: Working Calendar, description: "A working calendar (Admin, Calendars): when set, its open time (holidays and dated changes included) replaces the working hours below"}
     - {name: working_hours, type: table, of: BookingWorkingHour}
@@ -78,7 +100,7 @@
     - {name: calendar_feed, label: Calendar Feed Link, permission: read}
     - {name: rotate_calendar_feed, label: Reset Calendar Feed Link, permission: read, confirm: "A new feed link is made and every earlier one stops working. Continue?"}
   form:
-    - {label: Staff, fields: [display_name, email, time_zone, active, bio]}
+    - {label: Staff, fields: [display_name, email, time_zone, active, location, bio]}
     - {label: Working Hours, fields: [calendar, working_hours]}
     - {label: Outside Calendar, fields: [outside_calendar, outside_calendar_read, outside_calendar_error]}
   list: {columns: [display_name, email, time_zone, active], sort: display_name asc}
@@ -150,6 +172,7 @@
     - {name: location_details, type: text, description: "Address, video meeting link or phone number; guests see it once booked"}
     - {name: staff, type: table, of: BookingServiceStaff, required: true, description: "Staff who provide it"}
     - {name: resources, type: table, of: BookingServiceResource, description: "Each booking needs one of these free; empty = none"}
+    - {name: locations, type: table, of: BookingServiceLocation, description: "Where it is offered. Empty = every location"}
     - {name: questions, type: table, of: BookingQuestion, label: Intake Questions}
     - {name: min_notice_minutes, type: int, label: Minimum Notice (Minutes), min: 0, max: 525600, description: "Empty = Booking Settings"}
     - {name: max_advance_days, type: int, label: Book Ahead At Most (Days), min: 1, max: 730, description: "Empty = Booking Settings"}
@@ -159,12 +182,28 @@
     - {name: reminders, type: table, of: BookingReminder, description: "Reminders before each confirmed booking of this service. Empty = Booking Settings'"}
   actions:
     # The booking screens list the free times; a record page could not show them.
-    - {name: find_slots, label: Find Free Slots, permission: read, hidden: true}
+    - name: find_slots
+      label: Find Free Slots
+      permission: read
+      hidden: true
+      read_only: true
+      params:
+        - {name: from, type: date, label: From, description: "First day, in the asked zone. Empty: today"}
+        - {name: to, type: date, label: To, description: "Last day. Empty: a week from From; at most 62 days"}
+        - {name: time_zone, type: data, label: Time Zone, description: "IANA time zone the days are read in. Empty: the workspace's"}
+        - {name: staff, type: link, to: BookingStaff, label: Staff, description: "Only this staff member's times"}
+        - {name: seats, type: int, label: Seats, description: "1 to 1000"}
+        - {name: booking, type: link, to: Booking, label: Booking, description: "A booking being moved: the time it holds counts as free"}
+        - {name: location, type: link, to: BookingLocation, label: Location, description: "Only this location's staff, rooms and opening days"}
+      contract:
+        effect: query
+        returns: {type: object, properties: {time_zone: {type: string}, from: {type: string}, to: {type: string}, days: {type: array}}}
+        completion: "The free starts of the service, by day in the asked zone; nothing is held"
   form:
     - {label: Service, fields: [service_name, active, description, location_type, location_details]}
     - {label: Time, fields: [duration_minutes, buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, capacity, sessions_only, guest_repeat_max]}
     - {label: Price, fields: [price, item]}
-    - {label: Staff and Resources, fields: [staff, resources]}
+    - {label: Staff and Resources, fields: [staff, resources, locations]}
     - {label: Intake Questions, collapsible: true, fields: [questions]}
     - {label: Rules, collapsible: true, fields: [min_notice_minutes, max_advance_days, cancellation_window_hours, reschedule_window_hours, approval_required, reminders]}
   list: {columns: [service_name, duration_minutes, capacity, price, location_type, active], sort: service_name asc}
@@ -188,6 +227,7 @@
     - {name: end_time, type: datetime, read_only: true}
     - {name: capacity, type: int, label: Seats, min: 1, max: 1000, in_list: true, description: "Empty = the service's seats"}
     - {name: resource, type: link, to: BookingResource, in_filter: true, description: "The room it is held in. Empty: one of the service's free rooms is taken when the first seat is booked"}
+    - {name: booking_location, type: link, to: BookingLocation, label: Booking Location, in_filter: true, description: "Where it takes place. Changes only with Move"}
     - {name: status, type: select, options: [Scheduled, Cancelled], default: Scheduled, read_only: true, in_list: true, in_filter: true}
     - {name: series, type: data, read_only: true, no_copy: true, in_filter: true, description: "Shared by sessions repeated together"}
     - {name: cancellation_reason, type: text, read_only: true, no_copy: true}
@@ -233,7 +273,7 @@
         returns: {type: object, properties: {series: {type: string}, scheduled: {type: array}, skipped: {type: array}}}
         completion: "The later sessions are Scheduled and share this session's series, committed with this receipt; with skipping, the dates that were taken are listed"
   form:
-    - {label: Session, fields: [service, staff, start_time, end_time, capacity, resource, status]}
+    - {label: Session, fields: [service, staff, start_time, end_time, capacity, resource, booking_location, status]}
     - {label: History, collapsible: true, fields: [series, cancellation_reason]}
   list: {columns: [number, start_time, service_name, staff_name, capacity, status], sort: start_time desc}
 
@@ -267,6 +307,7 @@
     - {name: series, type: data, read_only: true, no_copy: true, in_filter: true, description: "Shared by bookings repeated together"}
     - {name: join_waitlist, type: check, no_copy: true, description: "When the class is full, join its waitlist instead of failing"}
     - {name: resource, type: link, to: BookingResource, read_only: true, in_filter: true}
+    - {name: booking_location, type: link, to: BookingLocation, label: Booking Location, in_filter: true, description: "Where it takes place. Changes only with Reschedule"}
     - {name: customer, type: link, to: Customer, in_filter: true}
     - {name: guest_name, type: data, max_length: 200, in_list: true}
     - {name: guest_email, type: email}
@@ -300,7 +341,7 @@
     - {name: outside_clash_kept, type: datetime, read_only: true, no_copy: true, label: Kept Despite a Clash, description: "Not flagged again at this time"}
     - {name: closed_clash, type: check, read_only: true, no_copy: true, in_filter: true, label: Outside Opening Hours,
        description: "A working calendar (the staff member's or the business's) closed this time after it was booked. It is kept: reschedule or cancel it"}
-  indexes: [[staff, start_time], [service, start_time], [status, start_time]]
+  indexes: [[staff, start_time], [service, start_time], [status, start_time], [booking_location, start_time]]
   rules:
     - {name: guest_or_customer, check: "doc.customer != null || (doc.guest_name != null && doc.guest_name != '')", message: "Choose a customer or enter the guest's name"}
   actions:
@@ -345,7 +386,7 @@
       params:
         - {name: reason, type: text, label: Reason, description: The guests see it}
   form:
-    - {label: Booking, fields: [service, service_name, staff, staff_name, start_time, end_time, seats, status, source, join_waitlist, resource]}
+    - {label: Booking, fields: [service, service_name, staff, staff_name, start_time, end_time, seats, status, source, join_waitlist, resource, booking_location]}
     - {label: Guest, fields: [customer, guest_name, guest_email, guest_phone, guest_time_zone, guest_language, notes]}
     - {label: Intake Answers, collapsible: true, fields: [answers]}
     - {label: Location, collapsible: true, fields: [location_type, location]}

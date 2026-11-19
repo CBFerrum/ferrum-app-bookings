@@ -3010,3 +3010,212 @@ fn done_or_already(r: &Result<(u16, Value), Error>) -> bool {
         Err(e) => messages(e).contains("already"),
     }
 }
+
+#[test]
+fn locations_end_to_end() {
+    run(locations());
+}
+
+/// Each place with its own people, rooms, services and opening days: a booking is at one location, with only that
+/// location's staff and rooms; a workspace without locations is as before.
+async fn locations() {
+    let t = boot("places", &[]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let d = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let at = |day: NaiveDate, hhmm: &str| local(ist, day, hhmm);
+    let every: Vec<Value> = WEEK.iter().map(|w| json!({"weekday": w, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let manager = t.user("manager@places.test", &["Bookings Manager"]).await;
+    t.insert(
+        &manager,
+        "BookingSettings",
+        json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60, "approval_required": false}),
+    )
+    .await;
+    let person = |name: &str, extra: Value| {
+        let mut v = json!({"display_name": name, "email": format!("{}@places.test", name.to_lowercase()), "time_zone": "Asia/Kolkata", "working_hours": every});
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        v
+    };
+    let chen = uid(&t.insert(&manager, "BookingStaff", person("Chen", json!({}))).await);
+    let massage = uid(&t
+        .insert(&manager, "BookingService", json!({"service_name": "Massage", "duration_minutes": 60, "price": "0", "staff": [{"staff": chen.to_string()}]}))
+        .await);
+    let book = |body: Value| {
+        let t = &t;
+        async move {
+            let v = t.post_pub("/book", body).await?;
+            Ok::<Doc, Error>(t.find_one("Booking", json!({"number": v["booking"]["number"]})).await)
+        }
+    };
+    let guest = |svc: Uuid, start: DateTime<Utc>, extra: Value| {
+        let mut v = json!({"service": svc.to_string(), "start_time": rfc(start), "name": "Guest", "email": "guest@example.test"});
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        v
+    };
+
+    // ───────────── without locations nothing changes ─────────────
+    assert_eq!(t.get_pub("/services").await["locations"], json!([]));
+    let plain = book(guest(massage, at(d, "09:00"), json!({}))).await.expect("booked");
+    assert!(plain["booking_location"].is_null());
+
+    // ───────────── a location's own people ─────────────
+    let place = |name: &str, extra: Value| {
+        let mut v = json!({"location_name": name, "address": format!("1 {name} Road")});
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        v
+    };
+    let north = uid(&t.insert(&manager, "BookingLocation", place("North", json!({"time_zone": "Asia/Kolkata"}))).await);
+    let south = uid(&t.insert(&manager, "BookingLocation", place("South", json!({}))).await);
+    let bad = t.k.insert(&manager, "BookingLocation", obj(place("West", json!({"time_zone": "Mars/Base"})))).await.unwrap_err();
+    assert_eq!(refused_field(&bad), "time_zone");
+    let asha = uid(&t.insert(&manager, "BookingStaff", person("Asha", json!({"location": north.to_string()}))).await);
+    let ben = uid(&t.insert(&manager, "BookingStaff", person("Ben", json!({"location": south.to_string()}))).await);
+    t.update(
+        &manager,
+        "BookingService",
+        massage,
+        json!({"staff": [{"staff": asha.to_string()}, {"staff": ben.to_string()}, {"staff": chen.to_string()}],
+               "locations": [{"location": north.to_string()}, {"location": south.to_string()}]}),
+    )
+    .await;
+    let listing = t.get_pub("/services").await;
+    assert_eq!(listing["locations"].as_array().unwrap().len(), 2);
+    let svc = listing["services"].as_array().unwrap().iter().find(|s| s["name"] == json!("Massage")).unwrap().clone();
+    assert_eq!(svc["locations"].as_array().unwrap().len(), 2);
+    assert!(svc["staff"].as_array().unwrap().iter().any(|s| s["location"] == json!(north.to_string())));
+    let slots_at = |svc: Uuid, day: NaiveDate, loc: Uuid| {
+        let t = &t;
+        async move { t.get_pub(&format!("/slots?service={svc}&from={day}&to={day}&time_zone=Asia/Kolkata&location={loc}")).await }
+    };
+    let north_slots = slots_at(massage, d + Duration::days(1), north).await;
+    assert!(!times_for(&north_slots, &asha.to_string()).is_empty() && !times_for(&north_slots, &chen.to_string()).is_empty());
+    assert!(times_for(&north_slots, &ben.to_string()).is_empty(), "Ben works at South");
+    for i in 0..20i64 {
+        let day = d + Duration::days(1 + i / 18);
+        let start = at(day, &format!("{:02}:00", 9 + (i % 18) / 2));
+        let b = book(guest(massage, start, json!({"location": north.to_string()}))).await.expect("booked at North");
+        assert_ne!(b["staff"], json!(ben.to_string()), "booking {i} at North went to Ben");
+        assert_eq!((b["booking_location"].clone(), b["location"].clone()), (json!(north.to_string()), json!("1 North Road")), "the location's address");
+    }
+    let wrong = book(guest(massage, at(d + Duration::days(3), "10:00"), json!({"location": north.to_string(), "staff": ben.to_string()}))).await.unwrap_err();
+    assert_eq!(refused_field(&wrong), "staff", "Ben does not work at North");
+
+    // ───────────── chosen when there are two, filled in when there is one ─────────────
+    let ask = book(guest(massage, at(d + Duration::days(3), "11:00"), json!({}))).await.unwrap_err();
+    assert_eq!((refused_field(&ask), messages(&ask).contains("choose a location")), ("location".to_string(), true));
+    let bens = book(guest(massage, at(d + Duration::days(3), "11:00"), json!({"staff": ben.to_string()}))).await.expect("Ben's own location");
+    assert_eq!(bens["booking_location"], json!(south.to_string()));
+    let facial = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Facial", "duration_minutes": 60, "price": "0", "location_details": "Suite 4",
+                   "staff": [{"staff": asha.to_string()}, {"staff": ben.to_string()}], "locations": [{"location": south.to_string()}]}),
+        )
+        .await);
+    let one = book(guest(facial, at(d + Duration::days(3), "12:00"), json!({}))).await.expect("the only location");
+    assert_eq!((one["booking_location"].clone(), one["staff"].clone()), (json!(south.to_string()), json!(ben.to_string())));
+    assert_eq!(one["location"], json!("Suite 4"), "a service with an address of its own keeps it");
+
+    // ───────────── offered only where it says ─────────────
+    let elsewhere = book(guest(facial, at(d + Duration::days(3), "13:00"), json!({"location": north.to_string()}))).await.unwrap_err();
+    assert_eq!(refused_field(&elsewhere), "location");
+
+    // ───────────── a room belongs to its location ─────────────
+    let steam = uid(&t.insert(&manager, "BookingResource", json!({"resource_name": "Steam Room", "capacity": 1, "location": south.to_string()})).await);
+    let sauna = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Steam", "duration_minutes": 60, "price": "0", "staff": [{"staff": chen.to_string()}], "resources": [{"resource": steam.to_string()}]}),
+        )
+        .await);
+    let day4 = d + Duration::days(4);
+    assert!(all_starts(&slots_at(sauna, day4, north).await).is_empty(), "North has no steam room");
+    let north_steam = book(guest(sauna, at(day4, "10:00"), json!({"location": north.to_string()}))).await;
+    assert!(north_steam.is_err(), "{north_steam:?}");
+    let south_steam = book(guest(sauna, at(day4, "10:00"), json!({"location": south.to_string()}))).await.expect("South has it");
+    assert_eq!(south_steam["resource"], json!(steam.to_string()));
+
+    // ───────────── a location's opening days ─────────────
+    let day5 = d + Duration::days(5);
+    let at_north = book(guest(massage, at(day5, "10:00"), json!({"location": north.to_string(), "staff": asha.to_string()}))).await.expect("booked");
+    let at_south = book(guest(massage, at(day5, "10:00"), json!({"location": south.to_string(), "staff": ben.to_string()}))).await.expect("booked");
+    let h = json!([["09:00", "18:00"]]);
+    t.k.put_logic_calendar(
+        &a,
+        "north",
+        &json!({"zone": "Asia/Kolkata", "weekends": [], "holidays": [day5.to_string()],
+                "hours": {"mon": h, "tue": h, "wed": h, "thu": h, "fri": h, "sat": h, "sun": h}, "exceptions": {}}),
+    )
+    .await
+    .unwrap();
+    t.update(&manager, "BookingLocation", north, json!({"calendar": "north"})).await;
+    assert!(all_starts(&slots_at(massage, day5, north).await).is_empty(), "North is closed that day");
+    assert!(!all_starts(&slots_at(massage, day5, south).await).is_empty(), "South is open");
+    t.maintain(Utc::now()).await;
+    assert_eq!(t.get("Booking", uid(&at_north)).await["closed_clash"], json!(true));
+    assert_eq!(t.get("Booking", uid(&at_south)).await["closed_clash"], json!(false));
+
+    // ───────────── moved and promoted bookings stay at their location ─────────────
+    let moved = t.act(&manager, "Booking", uid(&at_south), "reschedule", json!({"start_time": rfc(at(day5, "15:00"))})).await;
+    assert_eq!(moved["booking_location"], json!(south.to_string()));
+    let edit = t.k.update(&manager, "Booking", uid(&at_south), obj(json!({"booking_location": north.to_string()})), None).await.unwrap_err();
+    assert_eq!(refused_field(&edit), "booking_location", "a booking does not change place by an edit");
+    let yoga = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Yoga", "duration_minutes": 60, "capacity": 2, "price": "0", "staff": [{"staff": chen.to_string()}]}),
+        )
+        .await);
+    let day6 = d + Duration::days(6);
+    let first = book(guest(yoga, at(day6, "16:00"), json!({"location": south.to_string(), "seats": 2}))).await.expect("seats");
+    let waiting = book(guest(yoga, at(day6, "16:00"), json!({"location": south.to_string(), "waitlist": true}))).await.expect("waitlisted");
+    assert_eq!(waiting["status"], json!("Waitlisted"));
+    t.act(&manager, "Booking", uid(&first), "cancel_booking", json!({})).await;
+    let promoted = t.get("Booking", uid(&waiting)).await;
+    assert_eq!((promoted["status"].clone(), promoted["booking_location"].clone()), (json!("Confirmed"), json!(south.to_string())));
+
+    // ───────────── a class session is at a location, offered only there ─────────────
+    let day7 = d + Duration::days(7);
+    let ses = t
+        .insert(
+            &manager,
+            "BookingSession",
+            json!({"service": yoga.to_string(), "staff": chen.to_string(), "start_time": rfc(at(day7, "12:00")), "booking_location": north.to_string()}),
+        )
+        .await;
+    assert_eq!(ses["booking_location"], json!(north.to_string()));
+    let north_yoga = slots_at(yoga, day7, north).await;
+    assert!(all_starts(&north_yoga).contains(&rfc(at(day7, "12:00"))));
+    assert!(!all_starts(&slots_at(yoga, day7, south).await).contains(&rfc(at(day7, "12:00"))), "the North session holds Chen's time at South");
+    let away =
+        t.k.insert(
+            &manager,
+            "BookingSession",
+            obj(json!({"service": yoga.to_string(), "staff": ben.to_string(), "start_time": rfc(at(day7, "15:00")), "booking_location": north.to_string()})),
+        )
+        .await;
+    assert!(away.is_err(), "Ben does not give Yoga or work at North: {away:?}");
+
+    // ───────────── an inactive location is not offered, and its bookings stay ─────────────
+    t.update(&manager, "BookingLocation", south, json!({"active": false})).await;
+    assert_eq!(t.get_pub("/services").await["locations"].as_array().unwrap().len(), 1);
+    let closed = book(guest(massage, at(d + Duration::days(8), "10:00"), json!({"location": south.to_string()}))).await.unwrap_err();
+    assert_eq!(refused_field(&closed), "location");
+    let kept = t.get("Booking", uid(&bens)).await;
+    assert_eq!((kept["status"].clone(), kept["booking_location"].clone()), (json!("Confirmed"), json!(south.to_string())));
+
+    // ───────────── only a manager; find_slots in the catalog ─────────────
+    let asha_user = t.user("asha@places.test", &["Bookings User"]).await;
+    assert!(t.k.insert(&asha_user, "BookingLocation", obj(place("East", json!({})))).await.is_err());
+    assert!(t.k.update(&asha_user, "BookingStaff", asha, obj(json!({"location": south.to_string()})), None).await.is_err());
+    let cap = t.k.capability(&manager, "bookings.booking_service.find_slots").expect("find_slots");
+    assert_eq!(serde_json::to_value(cap.effect).unwrap(), json!("query"));
+    let found = t
+        .act(&manager, "BookingService", massage, "find_slots", json!({"from": day4.to_string(), "to": day4.to_string(), "location": north.to_string()}))
+        .await;
+    assert!(times_for(&found, &ben.to_string()).is_empty() && !times_for(&found, &asha.to_string()).is_empty());
+}

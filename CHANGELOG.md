@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.16.0
+
+Needs the same platform as 0.15.1. Database: two new entities (Booking Location, Service Location) and five fields
+(`BookingStaff.location`, `BookingResource.location`, `BookingService.locations`, `Booking.booking_location`,
+`BookingSession.booking_location`); no SQL file. Interface rebuilt (names only).
+
+- **Locations with their own staff, rooms, services and opening days.** A staff member and a room belong to one
+  location or to every location; a service lists where it is offered. Every booking and class session is at one
+  location, chosen as asked, else the named staff member's, else the only one the service is offered at; only that
+  location's staff and rooms are candidates, and its opening calendar replaces the business calendar there. Moving,
+  promoting and restoring keep the location; an edit cannot change it.
+- The public routes take `location` (`/slots`, `/book`) and answer the active locations (`/services`) and a
+  booking's place (`place` in the guest's view). `find_slots` takes `location` too, declares its parameters and is
+  a `query` operation with a contract.
+- The closed-calendar check of upkeep reads each location's opening calendar.
+- A workspace with no location works exactly as before.
+
 ## 0.15.1
 
 Needs the same platform as 0.15.0. No database change. Interface only.

@@ -10,7 +10,7 @@ use crate::engine::{self, Booked, Hours, Span, World};
 use crate::settings::Settings;
 use chrono::Duration;
 use chrono_tz::Tz;
-use ferrum_kernel::{Result, Tx};
+use ferrum_kernel::{Error, Result, Tx};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use uuid::Uuid;
@@ -39,6 +39,8 @@ pub struct ServiceInfo {
     pub location_type: String,
     pub location: Option<String>,
     pub staff: Vec<Uuid>,
+    /// Where it is offered; empty: every location.
+    pub locations: Vec<Uuid>,
     /// Each staff member's (priority, weight) for this service; missing: (0, 1).
     pub rank: HashMap<Uuid, (i64, i64)>,
     pub resources: Vec<Uuid>,
@@ -93,6 +95,62 @@ pub struct StaffInfo {
     pub feed_version: i64,
     /// Their working calendar (Admin → Calendars): when set, it replaces the weekly hours.
     pub calendar: Option<String>,
+    /// Where they work; `None`: every location.
+    pub location: Option<Uuid>,
+}
+
+/// An active place the business takes bookings at.
+#[derive(Debug, Clone)]
+pub struct LocationInfo {
+    pub id: Uuid,
+    pub name: String,
+    pub address: Option<String>,
+    pub zone: Option<Tz>,
+}
+
+/// The workspace's active locations, by name.
+pub async fn locations(tx: &mut Tx, tenant: Uuid) -> Result<Vec<LocationInfo>> {
+    let rows: Vec<(Uuid, String, Option<String>, Option<String>)> =
+        sqlx::query_as("select id, location_name, address, time_zone from e_booking_location where tenant_id = $1 and active order by location_name, id")
+            .bind(tenant)
+            .fetch_all(&mut **tx)
+            .await?;
+    let blank = |v: Option<String>| v.map(|c| c.trim().to_string()).filter(|c| !c.is_empty());
+    Ok(rows.into_iter().map(|(id, name, address, tz)| LocationInfo { id, name, address: blank(address), zone: tz.as_deref().and_then(zone) }).collect())
+}
+
+/// Where a booking of `offered_at` (the service's locations; empty: everywhere) takes place, among the
+/// workspace's active locations `all`: the one asked for, else the named staff member's, else the only one
+/// offered. `None` when the workspace has no location: exactly as before locations existed.
+pub fn place_among(all: &[Uuid], offered_at: &[Uuid], requested: Option<Uuid>, staff_location: Option<Uuid>) -> Result<Option<Uuid>> {
+    if all.is_empty() {
+        return Ok(None);
+    }
+    let offered: Vec<Uuid> = if offered_at.is_empty() { all.to_vec() } else { all.iter().copied().filter(|l| offered_at.contains(l)).collect() };
+    if let Some(r) = requested {
+        return if offered.contains(&r) { Ok(Some(r)) } else { Err(Error::field("booking_location", "this service is not offered there")) };
+    }
+    if let Some(l) = staff_location.filter(|l| offered.contains(l)) {
+        return Ok(Some(l));
+    }
+    match offered[..] {
+        [one] => Ok(Some(one)),
+        [] => Err(Error::field("booking_location", "this service is not offered at any open location")),
+        _ => Err(Error::field("booking_location", "choose a location")),
+    }
+}
+
+/// [`place_among`] for `svc`, with the workspace's active locations and the named staff member's.
+pub async fn place(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, requested: Option<Uuid>, staff: Option<Uuid>) -> Result<Option<Uuid>> {
+    let all: Vec<Uuid> = locations(tx, tenant).await?.into_iter().map(|l| l.id).collect();
+    if all.is_empty() {
+        return Ok(None);
+    }
+    let staff_location = match staff {
+        Some(s) => self::staff(tx, tenant, &[s]).await?.first().and_then(|p| p.location),
+        None => None,
+    };
+    place_among(&all, &svc.locations, requested, staff_location)
 }
 
 pub fn zone(name: &str) -> Option<Tz> {
@@ -144,6 +202,12 @@ pub async fn service(tx: &mut Tx, tenant: Uuid, id: Uuid) -> Result<Option<Servi
     }
     let resources: Vec<Uuid> =
         sqlx::query_scalar("select resource from e_booking_service__resources where tenant_id = $1 and parent_id = $2 and resource is not null order by idx")
+            .bind(tenant)
+            .bind(id)
+            .fetch_all(&mut **tx)
+            .await?;
+    let locations: Vec<Uuid> =
+        sqlx::query_scalar("select location from e_booking_service__locations where tenant_id = $1 and parent_id = $2 and location is not null order by idx")
             .bind(tenant)
             .bind(id)
             .fetch_all(&mut **tx)
@@ -206,6 +270,7 @@ pub async fn service(tx: &mut Tx, tenant: Uuid, id: Uuid) -> Result<Option<Servi
         location: location.filter(|l| !l.trim().is_empty()),
         guest_repeats: guest_repeats.unwrap_or(0).max(0),
         staff: dedup(staff),
+        locations: dedup(locations),
         rank,
         resources: dedup(resources),
         questions: questions
@@ -246,8 +311,9 @@ pub async fn staff(tx: &mut Tx, tenant: Uuid, ids: &[Uuid]) -> Result<Vec<StaffI
     if ids.is_empty() {
         return Ok(vec![]);
     }
-    let rows: Vec<(Uuid, String, String, Option<String>, bool, Option<String>, Option<i64>, Option<String>)> = sqlx::query_as(
-        "select id, display_name, email, time_zone, active, bio, feed_version, calendar from e_booking_staff where tenant_id = $1 and id = any($2)",
+    type Row = (Uuid, String, String, Option<String>, bool, Option<String>, Option<i64>, Option<String>, Option<Uuid>);
+    let rows: Vec<Row> = sqlx::query_as(
+        "select id, display_name, email, time_zone, active, bio, feed_version, calendar, location from e_booking_staff where tenant_id = $1 and id = any($2)",
     )
     .bind(tenant)
     .bind(ids)
@@ -271,7 +337,7 @@ pub async fn staff(tx: &mut Tx, tenant: Uuid, ids: &[Uuid]) -> Result<Vec<StaffI
     }
     let mut found: HashMap<Uuid, StaffInfo> = rows
         .into_iter()
-        .map(|(id, name, email, tz, active, bio, feed_version, calendar)| {
+        .map(|(id, name, email, tz, active, bio, feed_version, calendar, location)| {
             let info = StaffInfo {
                 id,
                 name,
@@ -282,6 +348,7 @@ pub async fn staff(tx: &mut Tx, tenant: Uuid, ids: &[Uuid]) -> Result<Vec<StaffI
                 hours: by_staff.remove(&id).unwrap_or_default(),
                 feed_version: feed_version.unwrap_or(1),
                 calendar: calendar.map(|c| c.trim().to_string()).filter(|c| !c.is_empty()),
+                location,
             };
             (id, info)
         })
@@ -393,26 +460,43 @@ pub async fn lock_resources(tx: &mut Tx, tenant: Uuid, ids: &[Uuid]) -> Result<(
     Ok(())
 }
 
-type SessionRow = (String, Uuid, Uuid, Instant, Instant, Instant, Instant, Option<i64>, Option<Uuid>);
+type SessionRow = (String, Uuid, Uuid, Instant, Instant, Instant, Instant, Option<i64>, Option<Uuid>, Option<Uuid>);
 
 type BookedRow = (Uuid, Uuid, Uuid, Option<Uuid>, Instant, Instant, Instant, Instant, String, Option<i64>);
 
 /// The engine's view of `svc` for `staff` around `around`: their time off and every active
 /// booking of theirs or on the service's resources (two days of margin, so buffers and whole local
 /// days are covered). `exclude` leaves out the booking being moved.
-pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffInfo], st: &Settings, around: Span, exclude: Option<Uuid>) -> Result<World> {
+/// `place`: the location the booking is at; only its rooms (and rooms of every location) count, and its opening
+/// calendar replaces the business's.
+#[allow(clippy::too_many_arguments)]
+pub async fn world(
+    tx: &mut Tx,
+    tenant: Uuid,
+    svc: &ServiceInfo,
+    staff: &[StaffInfo],
+    st: &Settings,
+    around: Span,
+    exclude: Option<Uuid>,
+    place: Option<Uuid>,
+) -> Result<World> {
     let from = around.start - Duration::days(2);
     let to = around.end + Duration::days(2);
     let staff_ids: Vec<Uuid> = staff.iter().map(|s| s.id).collect();
     let range = Span::new(from, to);
+    // A room of another location has no unit here: a service that needs rooms finds none free at a location without one.
     let resources: Vec<(Uuid, Option<i64>, Option<String>)> = if svc.resources.is_empty() {
         vec![]
     } else {
-        sqlx::query_as("select id, capacity, calendar from e_booking_resource where tenant_id = $1 and id = any($2) and active")
-            .bind(tenant)
-            .bind(&svc.resources)
-            .fetch_all(&mut **tx)
-            .await?
+        sqlx::query_as(
+            "select id, case when location is null or location = $3 then capacity else 0 end, calendar from e_booking_resource \
+             where tenant_id = $1 and id = any($2) and active",
+        )
+        .bind(tenant)
+        .bind(&svc.resources)
+        .bind(place)
+        .fetch_all(&mut **tx)
+        .await?
     };
     let off: Vec<(Uuid, Instant, Instant)> = sqlx::query_as(
         "select staff, from_time, to_time from e_staff_time_off where tenant_id = $1 and staff = any($2) and to_time > $3 and from_time < $4 \
@@ -448,7 +532,7 @@ pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffI
     .await?;
     // Scheduled sessions of every service: they hold their teacher's time and their room.
     let sessions: Vec<SessionRow> = sqlx::query_as(
-        "select session_key, staff, service, start_time, end_time, block_start, block_end, capacity, resource from e_booking_session \
+        "select session_key, staff, service, start_time, end_time, block_start, block_end, capacity, resource, booking_location from e_booking_session \
          where tenant_id = $1 and status = 'Scheduled' and block_end > $3 and block_start < $4 and (staff = any($2) or resource = any($5))",
     )
     .bind(tenant)
@@ -458,7 +542,22 @@ pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffI
     .bind(&svc.resources)
     .fetch_all(&mut **tx)
     .await?;
-    let business = business_open(tx, tenant, st, range).await?;
+    // A location with an opening calendar of its own opens and closes for everyone booked there.
+    let own: Option<String> = match place {
+        Some(p) => sqlx::query_scalar("select calendar from e_booking_location where tenant_id = $1 and id = $2")
+            .bind(tenant)
+            .bind(p)
+            .fetch_optional(&mut **tx)
+            .await?
+            .flatten()
+            .map(|c: String| c.trim().to_string())
+            .filter(|c| !c.is_empty()),
+        None => None,
+    };
+    let business = match own {
+        Some(name) => Some(calendar_open(tx, tenant, &name, range).await?),
+        None => business_open(tx, tenant, st, range).await?,
+    };
     let mut working = Vec::new();
     for s in staff.iter().filter(|s| s.active) {
         working.push(engine::Staff {
@@ -479,7 +578,7 @@ pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffI
             Some(name) => Some(calendar_open(tx, tenant, name, range).await?),
             None => None,
         };
-        usable.push(engine::Resource { id: *id, capacity: capacity.unwrap_or(1).max(1), open });
+        usable.push(engine::Resource { id: *id, capacity: capacity.unwrap_or(1).max(0), open });
     }
     Ok(World {
         service: svc.engine(st),
@@ -499,9 +598,10 @@ pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffI
             })
             .collect(),
         rules: Default::default(),
+        place,
         sessions: sessions
             .into_iter()
-            .map(|(key, staff, service, start, end, block_start, block_end, capacity, resource)| engine::Declared {
+            .map(|(key, staff, service, start, end, block_start, block_end, capacity, resource, place)| engine::Declared {
                 key,
                 staff,
                 service,
@@ -509,7 +609,36 @@ pub async fn world(tx: &mut Tx, tenant: Uuid, svc: &ServiceInfo, staff: &[StaffI
                 block: Span::new(block_start, block_end),
                 capacity: capacity.filter(|c| *c > 0),
                 resource,
+                place,
             })
             .collect(),
     })
+}
+
+#[cfg(test)]
+mod place_tests {
+    use super::place_among;
+    use uuid::Uuid;
+
+    fn field(r: ferrum_kernel::Result<Option<Uuid>>) -> String {
+        match r {
+            Err(ferrum_kernel::Error::Validation(f)) => format!("{}: {}", f[0].field, f[0].message),
+            other => format!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_booking_is_placed_by_the_rules_in_order() {
+        let (north, south, east) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+        let all = [north, south, east];
+        assert_eq!(place_among(&[], &[], None, None).unwrap(), None, "no locations: as before");
+        assert_eq!(place_among(&[], &[north], Some(south), Some(east)).unwrap(), None, "no active location: nothing to place");
+        assert_eq!(place_among(&all, &[], Some(south), Some(north)).unwrap(), Some(south), "the one asked for");
+        assert_eq!(field(place_among(&all, &[north], Some(south), None)), "booking_location: this service is not offered there");
+        assert_eq!(place_among(&all, &[north, south], None, Some(south)).unwrap(), Some(south), "the named staff member's");
+        assert_eq!(place_among(&all, &[north], None, Some(south)).unwrap(), Some(north), "theirs is not offered: the only one that is");
+        assert_eq!(place_among(&all, &[east], None, None).unwrap(), Some(east), "the only one offered");
+        assert_eq!(field(place_among(&all, &[], None, None)), "booking_location: choose a location");
+        assert_eq!(field(place_among(&all, &[Uuid::from_u128(9)], None, None)), "booking_location: this service is not offered at any open location");
+    }
 }
