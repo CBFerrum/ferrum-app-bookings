@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 /// The most one series holds: a year of weeks.
-const MAX_OCCURRENCES: u32 = 52;
+pub(crate) const MAX_OCCURRENCES: u32 = 52;
 
 /// How far apart occurrences are.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,7 +30,7 @@ pub enum Every {
 }
 
 impl Every {
-    fn parse(v: Option<&str>) -> Result<Every> {
+    pub(crate) fn parse(v: Option<&str>) -> Result<Every> {
         match v {
             Some("week") => Ok(Every::Days(7)),
             Some("2 weeks") => Ok(Every::Days(14)),
@@ -71,7 +71,7 @@ fn occurrence(booking: &Doc, series: Uuid, start: Instant) -> Doc {
 }
 
 /// Why a date cannot be had, as the engine said it.
-fn refusal(e: &Error) -> String {
+pub(crate) fn refusal(e: &Error) -> String {
     match e {
         Error::Validation(fields) => fields.iter().map(|f| f.message.clone()).collect::<Vec<_>>().join("; "),
         other => other.to_string(),
@@ -142,7 +142,7 @@ pub async fn cancel_from(hc: &mut HookCtx<'_>, booking: &Doc, params: &Value) ->
     for row in rows {
         let due = time(&row, "start_time").is_some_and(|t| t >= from);
         if due && matches!(s(&row, "status"), Some("Pending" | "Confirmed" | "Waitlisted")) {
-            booking::cancel(hc.kernel, &engine, hc.tx, &row, reason, false).await?;
+            booking::cancel(hc.kernel, &engine, hc.tx, &row, reason, false, false).await?;
             cancelled.push(row.get("id").cloned().unwrap_or(Value::Null));
         }
     }

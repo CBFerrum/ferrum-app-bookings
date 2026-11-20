@@ -23,7 +23,7 @@ const minutesOf = (hhmm: string) => {
   return Number.isFinite(h) && Number.isFinite(m) ? h * 60 + m : null;
 };
 
-export function NewBooking({ meta, zone, hour12, from, onClose, onCreated }: { meta: Meta; zone: string; hour12: boolean; from: Start; onClose: () => void; onCreated: (b: Bk) => void }) {
+export function NewBooking({ meta, zone, hour12, from, loc, onClose, onCreated }: { meta: Meta; zone: string; hour12: boolean; from: Start; loc?: string | null; onClose: () => void; onCreated: (b: Bk) => void }) {
   const services = meta.services.filter((s) => s.active !== false);
   const [service, setService] = useState(from.service ?? (services.length === 1 ? services[0].id : ""));
   const [staff, setStaff] = useState(from.staff ?? "");
@@ -32,6 +32,7 @@ export function NewBooking({ meta, zone, hour12, from, onClose, onCreated }: { m
   const [time, setTime] = useState(clockText(when, zone, false));
   const [seats, setSeats] = useState(1);
   const [guest, setGuest] = useState({ name: "", email: "", phone: "", notes: "" });
+  const [place, setPlace] = useState(loc ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | string | null>(null);
 
@@ -43,6 +44,9 @@ export function NewBooking({ meta, zone, hour12, from, onClose, onCreated }: { m
     queryFn: ({ signal }) => api.get<{ staff?: { staff: string }[] }>(docPath("BookingService", service), { titles: false }, signal),
   });
   const people = meta.staff.filter((p) => p.active !== false && (!gives.data || (gives.data.staff ?? []).some((r) => r.staff === p.id)));
+  // Where, asked only when it is not already clear: several locations, and nobody chosen who works at one.
+  const places = (meta.locations ?? []).filter((l) => l.active !== false);
+  const askWhere = places.length > 1 && !meta.staff.find((p) => p.id === staff)?.location;
   const minutes = minutesOf(time);
   const startAt = minutes === null || !date ? null : instantAt(zone, date, minutes);
   const endAt = startAt !== null && chosen?.duration_minutes ? startAt + chosen.duration_minutes * 60_000 : null;
@@ -61,6 +65,7 @@ export function NewBooking({ meta, zone, hour12, from, onClose, onCreated }: { m
       const made = await api.post<Bk>("/api/v1/Booking", {
         service,
         staff: staff || undefined,
+        booking_location: askWhere && place ? place : undefined,
         start_time: new Date(startAt).toISOString(),
         seats: chosen?.capacity && chosen.capacity > 1 ? seats : 1,
         guest_name: guest.name.trim(),
@@ -118,6 +123,18 @@ export function NewBooking({ meta, zone, hour12, from, onClose, onCreated }: { m
             ))}
           </select>
         </Field>
+        {askWhere && (
+          <Field label={t("Location")} htmlFor="bk-place" error={fieldError("booking_location")}>
+            <select id="bk-place" className="select" value={place} onChange={(e) => setPlace(e.target.value)}>
+              <option value="">{t("Choose a location…")}</option>
+              {places.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {isolate(l.location_name)}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         <div className="bk-new-when">
           <Field label={t("Day")} htmlFor="bk-date" required>
             <input id="bk-date" className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} />

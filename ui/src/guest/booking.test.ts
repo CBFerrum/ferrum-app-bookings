@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@ferrum/client";
-import { bookBody, calendarLinks, check, depositDue, durationText, firstDay, hasErrors, isLink, isTaken, onlyPerson, openDays, payLink, pollEvery, priceText, serverErrors, whereText, type GuestBooking, type Question, type Service, type Slots } from "./booking";
+import { bookBody, calendarLinks, type Catalog, placeOf, shownPeople, shownServices, step, check, depositDue, durationText, firstDay, hasErrors, isLink, isTaken, onlyPerson, openDays, payLink, pollEvery, priceText, serverErrors, whereText, type GuestBooking, type Question, type Service, type Slots } from "./booking";
 
 const questions: Question[] = [
   { question: "Any allergies?", type: "Yes/No", options: [], required: true },
@@ -176,5 +176,45 @@ describe("a deposit that is due", () => {
     expect(pollEvery(b("Pending", deposit("Initiated")), 0)).toBe(15_000);
     expect(pollEvery(b("Confirmed", deposit("Paid")), 0)).toBe(false);
     expect(pollEvery(undefined, 0)).toBe(false);
+  });
+});
+
+describe("locations", () => {
+  const north = { id: "north", name: "North", address: "1 Hill Road", time_zone: "Europe/London" };
+  const south = { id: "south", name: "South" };
+  const both = service({ id: "both", staff: [{ id: "asha", name: "Asha", location: "north" }, { id: "ben", name: "Ben", location: "south" }, { id: "chen", name: "Chen" }] });
+  const southOnly = service({ id: "s", locations: ["south"] });
+  const catalog = (locations: Catalog["locations"]): Catalog => ({ time_zone: "UTC", currency: null, locations, services: [both, southOnly] });
+
+  it("shows a location's services: those that list it, or list none", () => {
+    expect(shownServices(catalog([north, south]), "north").map((s) => s.id)).toEqual(["both"]);
+    expect(shownServices(catalog([north, south]), "south").map((s) => s.id)).toEqual(["both", "s"]);
+    expect(shownServices(catalog([north, south]), null).map((s) => s.id)).toEqual(["both", "s"]);
+  });
+
+  it("shows a service's people who work there or everywhere", () => {
+    expect(shownPeople(both, "north").map((p) => p.id)).toEqual(["asha", "chen"]);
+    expect(shownPeople(both, null).map((p) => p.id)).toEqual(["asha", "ben", "chen"]);
+  });
+
+  it("asks where first only when there is a choice", () => {
+    expect(step(catalog([north, south]), null, undefined)).toBe("where");
+    expect(step(catalog([north, south]), "north", undefined)).toBe("services");
+    expect(step(catalog([north, south]), "north", both)).toBe("book");
+    expect(step(catalog([north]), null, undefined)).toBe("services");
+    expect(step(catalog(undefined), null, both)).toBe("book");
+  });
+
+  it("takes the location from the address only when it is the catalog's", () => {
+    expect(placeOf(catalog([north, south]), "north")?.name).toBe("North");
+    expect(placeOf(catalog([north, south]), "gone")).toBeNull();
+    expect(placeOf(catalog([north]), null)?.id).toBe("north");
+    expect(placeOf(catalog([]), "north")).toBeNull();
+  });
+
+  it("books at the location chosen", () => {
+    const body = bookBody({ service: both, start: "x", form: { name: "A", email: "a@b.co", phone: "", notes: "", seats: 1, answers: {} }, zone: "UTC", location: "north" });
+    expect(body.location).toBe("north");
+    expect(bookBody({ service: both, start: "x", form: { name: "A", email: "a@b.co", phone: "", notes: "", seats: 1, answers: {} }, zone: "UTC" }).location).toBeUndefined();
   });
 });

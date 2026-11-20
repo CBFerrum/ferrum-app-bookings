@@ -1,5 +1,127 @@
 # Changelog
 
+## 0.16.4
+
+Needs the same platform as 0.16.3. No database change.
+
+- **Every visible action has a contract.** Confirm, Cancel Booking, Keep Despite the Clash, Mark Completed, Mark No
+  Show, Create Sales Invoice, Guest Self-Service Link, Repeat and Cancel This and Later on Booking, and Calendar Feed
+  Link and Reset Calendar Feed Link on Booking Staff, now say their effect, what they return and what "done" means,
+  and declare the parameters their handlers read, so an agent or an outside caller uses them through the gate as a
+  person does. The two feed actions are transactional (the workspace's signing key is made on first use).
+- **The two cancellations, said where they are described.** Cancel Booking is a cancellation on the guest's side
+  (the service's terms decide the deposit, also when staff press it for a guest who phoned); We Cancel It is the
+  business's and returns the deposit in full.
+
+## 0.16.3
+
+Needs the same platform as 0.16.2. No database change. Interface only.
+
+- **Locations on the booking page.** With more than one active location the page asks "Where would you like to come?"
+  first (`?loc=` in the address); then it offers only the services offered there, with the people who work there or
+  everywhere, and that location's free times, starting in its time zone until the guest chooses one. A location with
+  nothing offered says so, with a way back to the others; a location in a stale link falls back to the list. The
+  guest's booking page names the location. With one location, or none, nothing changes.
+- **Locations on the schedule.** A Location filter (with more than one location) shows that location's people and
+  those who work everywhere. A new booking or class session asks for the location only when there is a choice and the
+  person chosen works everywhere; it starts from the filter.
+
+## 0.16.2
+
+Needs the same platform as 0.16.1. No database change.
+
+- **A guest is never matched to an existing customer.** A booking made on the public page gets a customer of its own,
+  made from the name, email and phone typed there; its invoice and deposit are that customer's. Before, a guest who
+  typed an existing customer's email or phone was put on that customer: the booking and its deposit invoice landed on
+  their account (and in their portal). A booking staff make still finds the customer by email or phone digits, and a
+  booking for a chosen customer keeps them.
+- **Class sessions' database guards hold no writes while they are added.** The session's check constraint is added
+  `not valid` and validated in a statement of its own; its unique key and its index by teacher and time are the
+  entity's own (`unique`, `indexes`), which the schema sync builds without holding writes (they were
+  `bookings_session_key` and `bookings_sessions_ahead` in `sql/002_sessions.sql`). The overlap constraint stays in
+  the file: PostgreSQL cannot add it `not valid`, and the table is new and empty when it runs. Each statement may run
+  again.
+
+## 0.16.1
+
+Needs Ferrum with K0-1 (`reports::readable_choice`, `readable_default`, `readable_columns`). No database change.
+
+- **Reports follow what the reader may read.** A report grouped by a field the person cannot read is refused; with no
+  grouping asked for, a hidden default falls back to the first grouping they read; a column of a field they cannot read
+  is left out, with its values in every row and in the totals. Before, a role that hid a booking's source, service or
+  amount still saw them through the reports.
+
+## 0.16.0
+
+Needs the same platform as 0.15.1. Database: two new entities (Booking Location, Service Location) and five fields
+(`BookingStaff.location`, `BookingResource.location`, `BookingService.locations`, `Booking.booking_location`,
+`BookingSession.booking_location`); no SQL file. Interface rebuilt (names only).
+
+- **Locations with their own staff, rooms, services and opening days.** A staff member and a room belong to one
+  location or to every location; a service lists where it is offered. Every booking and class session is at one
+  location, chosen as asked, else the named staff member's, else the only one the service is offered at; only that
+  location's staff and rooms are candidates, and its opening calendar replaces the business calendar there. Moving,
+  promoting and restoring keep the location; an edit cannot change it.
+- The public routes take `location` (`/slots`, `/book`) and answer the active locations (`/services`) and a
+  booking's place (`place` in the guest's view). `find_slots` takes `location` too, declares its parameters and is
+  a `query` operation with a contract.
+- The closed-calendar check of upkeep reads each location's opening calendar.
+- A workspace with no location works exactly as before.
+
+## 0.15.1
+
+Needs the same platform as 0.15.0. No database change. Interface only.
+
+- **Class sessions on the schedule.** The schedule draws every scheduled session, booked or not ("0 of 12 seats"),
+  with the session's own seats. A "New class session" button (for a person who may schedule, where a class exists)
+  schedules one. The session's sheet lists who has a seat, says "Nobody has booked yet." when empty, and offers Move,
+  Repeat and Cancel session to a person who may change sessions; each dialog shows the server's refusal beside its
+  field and keeps what was typed.
+
+## 0.15.0
+
+Needs the same platform as 0.14.0. Database: one field, `Booking.cancelled_by`. Three operations on Class Session.
+Interface rebuilt (names only).
+
+- **Cancel Session** (`cancel_session {reason?}`): the session and every seat and waitlist place in it are cancelled
+  in one transaction, waitlist places first so no freed seat is offered to them; each guest is told once.
+- **Move** (`move {start_time, staff?, resource?}`): the session and every seat go to a new time, teacher or room,
+  decided once for the whole session; a time that is taken refuses and nothing changes. Waitlist places move
+  silently. Moving it where it is changes nothing.
+- **Repeat** (`repeat {every, count, skip_conflicts?}`): a timetable of later sessions at the same local time, whole
+  or nothing unless taken dates are skipped.
+- **A business cancellation returns the whole deposit.** Until now a cancellation made by staff was settled by the
+  service's terms like a guest's: inside the refund window the deposit was kept. A new Booking action, We Cancel It
+  (`cancel_by_business`), marks the booking `cancelled_by: Business` and a paid deposit comes back in full whatever
+  the terms. Cancelling a class session always does so for every seat. Cancel Booking stays the guest's cancellation
+  (`cancelled_by: Guest`), settled by the terms, as before.
+
+## 0.14.0
+
+Needs the same platform as 0.13.0. Database: a new entity, Class Session (`e_booking_session`), and
+`sql/002_sessions.sql` (its overlap and key constraints); one field on Booking Service, `sessions_only`. Interface
+rebuilt.
+
+- **Class sessions scheduled ahead.** A manager schedules a dated session of a class (service, teacher, start, its own
+  seats, its room) before anyone books it. From then on it holds its teacher's time and its room: no appointment or
+  other session can take them, and two sessions of one teacher cannot overlap (the database refuses it too). Its
+  seats share its own key, `s/{id}`. Guests are offered it like any time, even off the grid.
+- **Only Scheduled Sessions**, a switch on a class: offered only at its scheduled sessions. Off (the default) the class
+  keeps opening a session at any free time, as before.
+- A session's seats can be changed but never below the seats taken; its time, teacher and room do not change by an
+  edit; it is deleted only while nothing is booked in it. Bookings Managers schedule; Bookings Users read.
+- Not built yet: cancelling, moving and repeating a session as one thing, and unbooked sessions on the schedule.
+
+## 0.13.0
+
+Needs the same platform as 0.12.0. Database: two fields on Service Staff (`priority`, `weight`). Interface rebuilt.
+
+- **Priorities and weights.** Each row of a service's staff list has a priority (0 to 100) and a weight (1 to 100).
+  When a guest leaves the choice of person to the business, the highest priority free at that time is booked; among
+  equal priorities the day's bookings are shared in proportion to weight, then by booked minutes, then the heavier
+  weight. Rows saved before this release read as priority 0 and weight 1, which is the order of 0.12.0.
+- Not built: collective bookings with several hosts.
+
 ## 0.12.0
 
 Needs the same platform as 0.11.0. Database: one field, `BookingSettings.remind_staff`. Interface rebuilt.

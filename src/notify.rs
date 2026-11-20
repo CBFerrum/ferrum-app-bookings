@@ -561,7 +561,7 @@ async fn expire_waitlists(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> 
                 tx.commit().await?;
                 return Ok(0);
             }
-            booking::cancel(k, ctx, &mut tx, &b, Some("No seat became free before the class started."), false).await?;
+            booking::cancel(k, ctx, &mut tx, &b, Some("No seat became free before the class started."), false, false).await?;
             tx.commit().await?;
             Ok(1)
         })
@@ -607,8 +607,8 @@ async fn sweep_waitlists(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> {
 async fn closed_clashes(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> {
     let mut tx = k.db.tenant_tx(ctx.tenant).await?;
     let st = settings::load(&mut tx, ctx.tenant).await?;
-    let rows: Vec<(Uuid, Uuid, Instant, Instant, bool)> = sqlx::query_as(
-        "select id, staff, start_time, end_time, coalesce(closed_clash, false) from e_booking where tenant_id = $1 \
+    let rows: Vec<(Uuid, Uuid, Instant, Instant, bool, Option<Uuid>)> = sqlx::query_as(
+        "select id, staff, start_time, end_time, coalesce(closed_clash, false), booking_location from e_booking where tenant_id = $1 \
          and status in ('Pending', 'Confirmed') and start_time > $2 order by start_time, id limit 2000",
     )
     .bind(ctx.tenant)
@@ -622,15 +622,41 @@ async fn closed_clashes(k: &Kernel, ctx: &Ctx, now: Instant) -> Result<usize> {
     let mut ids: Vec<Uuid> = rows.iter().map(|r| r.1).collect();
     ids.sort();
     ids.dedup();
-    let business = calendar::business_open(&mut tx, ctx.tenant, &st, window).await?;
+    // The business's open time is read per location: a location's own opening calendar, else the workspace's.
+    let workspace = calendar::business_open(&mut tx, ctx.tenant, &st, window).await?;
+    let mut places: Vec<Option<Uuid>> = rows.iter().map(|r| r.5).collect();
+    places.sort();
+    places.dedup();
+    let people = calendar::staff(&mut tx, ctx.tenant, &ids).await?;
     let mut changed = 0;
-    for s in calendar::staff(&mut tx, ctx.tenant, &ids).await? {
-        let Some(open) = calendar::staff_open(&mut tx, ctx.tenant, &s, &business, window).await? else { continue };
-        for (bid, _, start, end, flagged) in rows.iter().filter(|r| r.1 == s.id) {
-            let closed = !open.iter().any(|w| w.contains(&Span::new(*start, *end)));
-            if closed != *flagged {
-                k.set_values_tx(ctx, &mut tx, "Booking", *bid, obj(json!({"closed_clash": closed}))).await?;
-                changed += 1;
+    for place in places {
+        let own: Option<String> = match place {
+            Some(p) => sqlx::query_scalar("select calendar from e_booking_location where tenant_id = $1 and id = $2")
+                .bind(ctx.tenant)
+                .bind(p)
+                .fetch_optional(&mut *tx)
+                .await?
+                .flatten()
+                .map(|c: String| c.trim().to_string())
+                .filter(|c| !c.is_empty()),
+            None => None,
+        };
+        let business = match own {
+            Some(name) => Some(calendar::calendar_open(&mut tx, ctx.tenant, &name, window).await?),
+            None => workspace.clone(),
+        };
+        for s in &people {
+            let mine: Vec<_> = rows.iter().filter(|r| r.1 == s.id && r.5 == place).collect();
+            if mine.is_empty() {
+                continue;
+            }
+            let Some(open) = calendar::staff_open(&mut tx, ctx.tenant, s, &business, window).await? else { continue };
+            for (bid, _, start, end, flagged, _) in mine {
+                let closed = !open.iter().any(|w| w.contains(&Span::new(*start, *end)));
+                if closed != *flagged {
+                    k.set_values_tx(ctx, &mut tx, "Booking", *bid, obj(json!({"closed_clash": closed}))).await?;
+                    changed += 1;
+                }
             }
         }
     }

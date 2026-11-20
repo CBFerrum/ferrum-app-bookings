@@ -12,9 +12,10 @@ export interface SlotQuery {
   zone: string;
   staff?: string;
   seats?: number;
+  location?: string;
 }
 
-const slotParams = (q: SlotQuery) => ({ from: q.from, to: q.to, time_zone: q.zone, staff: q.staff, seats: q.seats && q.seats > 1 ? q.seats : undefined });
+const slotParams = (q: SlotQuery) => ({ from: q.from, to: q.to, time_zone: q.zone, staff: q.staff, seats: q.seats && q.seats > 1 ? q.seats : undefined, location: q.location });
 
 export const catalog = (tenant: string, signal?: AbortSignal) => api.get<Catalog>(`${base(tenant)}/services`, undefined, signal);
 

@@ -22,6 +22,8 @@ pub struct Query {
     pub tz: Tz,
     pub staff: Option<Uuid>,
     pub seats: i64,
+    /// The location asked about (its staff, rooms and opening days); the callers resolve it.
+    pub place: Option<Uuid>,
 }
 
 /// Reads `from`, `to` (dates, default: the next 7 days from today in the zone), `time_zone`
@@ -46,7 +48,7 @@ pub fn parse(get: impl Fn(&str) -> Option<String>, default_tz: Tz) -> Result<Que
         None => 1,
         Some(v) => v.trim().parse::<i64>().ok().filter(|n| (1..=1000).contains(n)).ok_or_else(|| Error::field("seats", "must be a whole number from 1"))?,
     };
-    Ok(Query { from, to, tz, staff, seats })
+    Ok(Query { from, to, tz, staff, seats, place: None })
 }
 
 /// The bookable starts, grouped by local date in `q.tz`; `exclude` leaves out a booking being moved.
@@ -69,9 +71,15 @@ pub async fn find(
         Some(_) => return Err(Error::field("staff", format!("does not provide {}", svc.name))),
         None => svc.staff.clone(),
     };
-    let staff = calendar::staff(tx, tenant, &candidates).await?;
+    let mut staff = calendar::staff(tx, tenant, &candidates).await?;
+    if q.place.is_some() {
+        staff.retain(|s| s.location.is_none() || s.location == q.place);
+        if q.staff.is_some() && staff.is_empty() {
+            return Err(Error::field("staff", "does not work at that location"));
+        }
+    }
     let window = engine::local_days(q.tz, q.from, q.to);
-    let mut world = calendar::world(tx, tenant, svc, &staff, st, window, exclude).await?;
+    let mut world = calendar::world(tx, tenant, svc, &staff, st, window, exclude, q.place).await?;
     world.rules = rules;
     let name = |id: Uuid| staff.iter().find(|s| s.id == id).map(|s| s.name.clone()).unwrap_or_default();
     let mut days: BTreeMap<NaiveDate, Vec<Value>> = BTreeMap::new();

@@ -23,6 +23,7 @@ mod outside;
 mod payments;
 mod reports;
 mod series;
+mod session;
 mod settings;
 mod setup;
 mod site;
@@ -61,6 +62,8 @@ pub fn register(hooks: &mut HookRegistry) {
     hooks
         .register("Booking", Arc::new(booking::BookingHook))
         .register("BookingService", Arc::new(setup::ServiceHook))
+        .register("BookingSession", Arc::new(session::SessionHook))
+        .register("BookingLocation", Arc::new(setup::LocationHook))
         .register("BookingStaff", Arc::new(setup::StaffHook))
         .register("StaffTimeOff", Arc::new(setup::TimeOffHook))
         .register("BookingResource", Arc::new(setup::ResourceHook))
@@ -163,6 +166,8 @@ mod tests {
         assert!(schema.entity("BookingSettings").is_some_and(|e| e.secret_fields().count() == 1));
         let booking = schema.entity("Booking").expect("Booking");
         assert_eq!(booking.table, "e_booking");
+        assert_eq!(schema.entity("BookingSession").expect("BookingSession").table, "e_booking_session");
+        assert!(schema.entity("BookingService").is_some_and(|e| e.field("sessions_only").is_some()));
         for action in ["repeat", "cancel_series", "confirm", "reschedule", "cancel_booking", "complete", "mark_no_show", "make_sales_invoice", "guest_link"] {
             assert!(booking.def.actions.iter().any(|a| a.name == action), "{action}");
         }

@@ -47,6 +47,8 @@ pub struct Request<'a> {
     pub rules: Rules,
     /// Join a full class's waitlist instead of failing.
     pub waitlist: bool,
+    /// The location it is at: only its staff and rooms (and those of every location) are candidates.
+    pub place: Option<Uuid>,
 }
 
 /// Locks the candidate staff and resources, reads their calendar and picks: the fair candidate,
@@ -59,12 +61,19 @@ pub async fn plan(tx: &mut Tx, tenant: Uuid, r: &Request<'_>) -> Result<Plan> {
     };
     calendar::lock_staff(tx, tenant, &candidates).await?;
     calendar::lock_resources(tx, tenant, &r.svc.resources).await?;
-    let staff = calendar::staff(tx, tenant, &candidates).await?;
+    let mut staff = calendar::staff(tx, tenant, &candidates).await?;
     if r.staff.is_some() && !staff.first().is_some_and(|s| s.active) {
         return Err(Error::field("staff", "is not taking bookings"));
     }
+    // Locked before they are filtered: the lock set and order stay those of every booking.
+    if r.place.is_some() {
+        staff.retain(|s| s.location.is_none() || s.location == r.place);
+        if r.staff.is_some() && staff.is_empty() {
+            return Err(Error::field("staff", "does not work at that location"));
+        }
+    }
     let around = Span::new(r.start, r.start + Duration::minutes(r.svc.duration));
-    let mut world = calendar::world(tx, tenant, r.svc, &staff, r.st, around, r.exclude).await?;
+    let mut world = calendar::world(tx, tenant, r.svc, &staff, r.st, around, r.exclude, r.place).await?;
     world.rules = r.rules;
     let (ok, no) = world.candidates_at(r.start, r.seats);
     let svc = &world.service;
@@ -155,7 +164,8 @@ async fn schedule_new(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
     check_seats(&svc, seats)?;
     let now = Utc::now();
     let rules = if public { st.public_rules(now) } else { Rules::default() };
-    let request = Request { svc: &svc, st: &st, start, seats, staff: id(doc, "staff"), exclude: None, rules, waitlist: b(doc, "join_waitlist") };
+    let place = calendar::place(hc.tx, tenant, &svc, id(doc, "booking_location"), id(doc, "staff")).await?;
+    let request = Request { svc: &svc, st: &st, start, seats, staff: id(doc, "staff"), exclude: None, rules, waitlist: b(doc, "join_waitlist"), place };
     let p = plan(hc.tx, tenant, &request).await?;
     let booking = doc_id(doc)?;
     if let Some(c) = id(doc, "customer")
@@ -182,11 +192,24 @@ async fn schedule_new(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
     } else {
         "Confirmed"
     };
+    // An in-person service that states no address of its own is at its location's.
+    let address = match (place, &svc.location) {
+        (Some(l), None) if svc.location_type == "In Person" => {
+            sqlx::query_scalar::<_, Option<String>>("select address from e_booking_location where tenant_id = $1 and id = $2")
+                .bind(tenant)
+                .bind(l)
+                .fetch_optional(&mut **hc.tx)
+                .await?
+                .flatten()
+        }
+        _ => svc.location.clone(),
+    };
     doc.extend(schedule_fields(&p, booking));
     doc.extend(obj(json!({
         "service_name": svc.name,
+        "booking_location": place.map(|l| l.to_string()),
         "location_type": svc.location_type,
-        "location": svc.location,
+        "location": address,
         "item": svc.item.map(|i| i.to_string()),
         "rate": money(svc.price),
         "amount": money(svc.price * rust_decimal::Decimal::from(seats)),
@@ -218,7 +241,7 @@ async fn keep_despite_clash(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc) -
     update(k, ctx, tx, booking, obj(json!({"outside_clash": false, "outside_clash_kept": ts(chrono::Utc::now())})), false).await
 }
 
-async fn update(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, mut patch: Doc, notify: bool) -> Result<Doc> {
+pub(crate) async fn update(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, mut patch: Doc, notify: bool) -> Result<Doc> {
     if notify {
         patch.insert("notice_version".into(), json!(int(booking, "notice_version") + 1));
     }
@@ -297,7 +320,8 @@ pub async fn reschedule(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, m: &M
     touched.dedup();
     calendar::lock_staff(tx, tenant, &touched).await?;
     let rules = if public { st.public_rules(now) } else { Rules::default() };
-    let p = plan(tx, tenant, &Request { svc: &svc, st: &st, start: m.start, seats, staff, exclude: Some(bid), rules, waitlist: false }).await?;
+    let place = id(booking, "booking_location");
+    let p = plan(tx, tenant, &Request { svc: &svc, st: &st, start: m.start, seats, staff, exclude: Some(bid), rules, waitlist: false, place }).await?;
     let old_session = s(booking, "session_key").map(str::to_string);
     let mut patch = schedule_fields(&p, bid);
     patch.extend(obj(json!({
@@ -320,7 +344,8 @@ pub async fn reschedule(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, m: &M
 }
 
 /// Cancels a booking (guests within the cancellation window); a freed class seat goes to the waitlist.
-pub async fn cancel(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, reason: Option<&str>, public: bool) -> Result<Doc> {
+/// `by_business`: the business lets the time go, not the guest (a paid deposit comes back whole).
+pub async fn cancel(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, reason: Option<&str>, public: bool, by_business: bool) -> Result<Doc> {
     let was = status(booking).to_string();
     if !matches!(was.as_str(), "Pending" | "Confirmed" | "Waitlisted") {
         return Err(Error::invalid(format!("this booking is already {}", if was.is_empty() { "closed" } else { was.as_str() })));
@@ -338,7 +363,9 @@ pub async fn cancel(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, reason: O
     }
     let reason: Option<String> =
         reason.map(|r| r.chars().filter(|c| !c.is_control() || *c == '\n').take(1000).collect::<String>().trim().to_string()).filter(|r| !r.is_empty());
-    let patch = obj(json!({"status": "Cancelled", "cancellation_reason": reason, "cancelled_at": ts(Utc::now()), "last_change": "Cancelled"}));
+    let by = if by_business && !public { "Business" } else { "Guest" };
+    let patch =
+        obj(json!({"status": "Cancelled", "cancellation_reason": reason, "cancelled_at": ts(Utc::now()), "cancelled_by": by, "last_change": "Cancelled"}));
     let out = update(k, ctx, tx, booking, patch, true).await?;
     if ACTIVE.contains(&was.as_str())
         && let Some(key) = s(booking, "session_key")
@@ -388,6 +415,7 @@ pub async fn restore(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc) -> Resul
         exclude: Some(bid),
         rules: Rules::default(),
         waitlist: false,
+        place: id(booking, "booking_location"),
     };
     let p = match plan(tx, ctx.tenant, &request).await {
         Ok(p) => p,
@@ -423,8 +451,8 @@ pub async fn finish(k: &Kernel, ctx: &Ctx, tx: &mut Tx, booking: &Doc, to: &str)
 /// when public bookings need approval. Returns how many moved up.
 pub async fn promote(k: &Kernel, ctx: &Ctx, tx: &mut Tx, svc: &ServiceInfo, st: &Settings, session: &str) -> Result<usize> {
     let st = &st.for_service(svc);
-    let waiting: Vec<(Uuid, Option<Uuid>, Instant, Option<i64>, Option<String>, Option<i64>)> = sqlx::query_as(
-        "select id, staff, start_time, seats, source, notice_version from e_booking where tenant_id = $1 and session_key = $2 and status = 'Waitlisted' \
+    let waiting: Vec<(Uuid, Option<Uuid>, Instant, Option<i64>, Option<String>, Option<i64>, Option<Uuid>)> = sqlx::query_as(
+        "select id, staff, start_time, seats, source, notice_version, booking_location from e_booking where tenant_id = $1 and session_key = $2 and status = 'Waitlisted' \
          and start_time > now() order by created_at, id for update skip locked",
     )
     .bind(ctx.tenant)
@@ -432,8 +460,8 @@ pub async fn promote(k: &Kernel, ctx: &Ctx, tx: &mut Tx, svc: &ServiceInfo, st: 
     .fetch_all(&mut **tx)
     .await?;
     let mut promoted = 0;
-    for (wid, staff, start, seats, source, version) in waiting {
-        let request = Request { svc, st, start, seats: seats.unwrap_or(1), staff, exclude: Some(wid), rules: Rules::default(), waitlist: false };
+    for (wid, staff, start, seats, source, version, place) in waiting {
+        let request = Request { svc, st, start, seats: seats.unwrap_or(1), staff, exclude: Some(wid), rules: Rules::default(), waitlist: false, place };
         let p = match plan(tx, ctx.tenant, &request).await {
             Ok(p) => p,
             // Still no room for this one (or it no longer fits the service): try the next.
@@ -514,17 +542,29 @@ pub(crate) async fn invoice(hc: &mut HookCtx<'_>, booking: &Doc) -> Result<Value
     Ok(created("SalesInvoice", &inv))
 }
 
-/// The guest's client record, the ERP Customer that invoices, CRM and Helpdesk share: the one ERP
-/// finds for a person by the guest's email (else their phone's digits) or makes, as the system
+/// The guest's client record, the ERP Customer that invoices, CRM and Helpdesk share. A booking made
+/// on the public page gets a customer of its own, made now with the name, email and phone typed
+/// there: a typed address proves nothing, so it never finds an existing customer (whose history and
+/// account a stranger would otherwise reach). A booking staff make finds the one ERP finds for a
+/// person by the email (else the phone's digits) or makes, as the system
 /// (`ferrum_app_erp::portal::customer_for`, which also holds its lock on the address to the end of
 /// the transaction). `None` without a guest name, or with neither an email nor a phone number of 6
-/// to 20 digits: there is nothing to find the guest by.
+/// to 20 digits: there is nothing to know the guest by.
 pub(crate) async fn client_for(k: &Kernel, ctx: &Ctx, tx: &mut Tx, doc: &Doc) -> Result<Option<Uuid>> {
     let (email, phone) = (s(doc, "guest_email").filter(|e| !e.trim().is_empty()), s(doc, "guest_phone"));
     let digits = phone.map_or(0, |p| p.chars().filter(char::is_ascii_digit).count());
     let (Some(name), true) = (s(doc, "guest_name"), email.is_some() || (6..=20).contains(&digits)) else {
         return Ok(None);
     };
+    if s(doc, "source") == Some("Public") {
+        let c = obj(json!({
+            "customer_name": name,
+            "customer_type": "Individual",
+            "email": email.map(|e| e.trim().to_lowercase()),
+            "phone": phone.map(str::trim).filter(|p| !p.is_empty()),
+        }));
+        return Ok(Some(doc_id(&k.insert_tx(&sys(ctx), tx, "Customer", c).await?)?));
+    }
     Ok(Some(ferrum_app_erp::portal::customer_for(k, &sys(ctx), tx, name, email, phone).await?.0))
 }
 
@@ -569,8 +609,11 @@ impl DocHook for BookingHook {
         if let Some(old) = old
             && !hc.ctx.is_system
         {
-            for f in ["service", "staff", "start_time", "seats"] {
+            for f in ["service", "staff", "start_time", "seats", "booking_location"] {
                 if old.get(f) != doc.get(f) {
+                    if f == "booking_location" {
+                        return Err(Error::field(f, "stays where it was booked: cancel it and book again at the other location"));
+                    }
                     return Err(Error::field(f, "changes only through the Reschedule action"));
                 }
             }
@@ -590,7 +633,8 @@ impl DocHook for BookingHook {
         let out = match name {
             "confirm" => confirm(hc.kernel, &engine, hc.tx, doc).await?,
             "reschedule" => reschedule(hc.kernel, &engine, hc.tx, doc, &parse_move(params)?, false).await?,
-            "cancel_booking" => cancel(hc.kernel, &engine, hc.tx, doc, params.get("reason").and_then(Value::as_str), false).await?,
+            "cancel_booking" => cancel(hc.kernel, &engine, hc.tx, doc, params.get("reason").and_then(Value::as_str), false, false).await?,
+            "cancel_by_business" => cancel(hc.kernel, &engine, hc.tx, doc, params.get("reason").and_then(Value::as_str), false, true).await?,
             "complete" => finish(hc.kernel, &engine, hc.tx, doc, "Completed").await?,
             "keep_despite_clash" => keep_despite_clash(hc.kernel, &engine, hc.tx, doc).await?,
             "mark_no_show" => finish(hc.kernel, &engine, hc.tx, doc, "No Show").await?,

@@ -157,7 +157,8 @@ async fn ask_deposit(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
 /// its invoice is cancelled); a paid one is kept in part, the invoice credited for the rest and
 /// what was paid beyond what is kept asked to go back.
 async fn settle(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
-    settle_with(hc.kernel, hc.ctx, hc.tx, doc, false).await
+    // The business let the time go: all of a paid deposit comes back, whatever the terms say of a guest's cancellation.
+    settle_with(hc.kernel, hc.ctx, hc.tx, doc, s(doc, "cancelled_by") == Some("Business")).await
 }
 
 /// [`settle`]; with `all_back`, a paid deposit comes back whole whatever the terms (the business let

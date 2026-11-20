@@ -63,9 +63,42 @@ Administrators can do everything. Staff without a Bookings role see nothing of t
    | `capacity` (Seats) | 1 = one-to-one; more = a class with that many seats per session |
    | `price`, `item` | Per seat in the company currency; an `item` is required when the price is above 0 |
    | `location_type`, `location_details` | In Person / Video / Phone; video links and phone numbers are shown to booked guests only |
-   | `staff` | Rows `{staff}` — who provides it (at least one) |
+   | `sessions_only` (Only Scheduled Sessions) | A class is offered only at its scheduled Class Sessions (step 6). Off (default): any free grid time opens a session, and scheduled sessions are offered as well |
+   | `staff` | Rows `{staff, priority, weight}` — who provides it (at least one); see "Any staff" below |
    | `resources` | Rows `{resource}` — each booking needs one of them with a free unit (empty = none) |
    | `questions` | Intake questions `{question, answer_type: Text / Long Text / Number / Yes/No / Choice, options (one per line, for Choice), required}` |
+
+6. **Class Sessions** (`BookingSession`, numbered `SES-{YYYY}-{seq:5}`; Bookings Manager creates,
+   changes and deletes, Bookings User reads): one dated session of a group class scheduled before
+   anyone books it, with `service` (a class: more than one seat), `staff` (who gives the service,
+   active), `start_time`, optional `capacity` (its own seats, 1–1000; empty = the service's) and
+   optional `resource` (one of the service's rooms, active; empty = a free room is taken when the
+   first seat is booked). Scheduling refuses a teacher who is not free then (outside hours, time
+   off: a field error on `start_time`; another booking or session in the way, buffers included:
+   409), and a room with no free unit (409). A scheduled session holds its teacher's time and its
+   room from then on, with nobody booked: no other booking or session can take them. Its key is
+   `s/{id}`, shared by every seat booked into it. Afterwards only `capacity` changes by an edit,
+   never below the seats taken; the time, teacher, room and status change only through the
+   session's actions (below). It is deleted only while nothing is booked or waitlisted in it. Seats booked
+   before at the same time (an ad hoc session) are not taken over: scheduling there is refused.
+
+7. **Booking Locations** (`BookingLocation`; Bookings Manager creates and changes, Bookings User
+   reads): `location_name`, `active`, `address` (guests see it for an in-person service that states no
+   address of its own), `time_zone` (IANA; where the booking page starts for it), `calendar` (Opening
+   Calendar: nobody is booked there outside its open time; empty = the business calendar of Booking
+   Settings). A staff member (`location`) and a room (`location`) belong to one location or, empty,
+   to every location; a person who works at two places is "everywhere" (hours per location are not
+   built). A service lists where it is offered (`locations` rows; empty = every location). A booking
+   and a class session carry `booking_location`, set once when made and kept by Reschedule, Move,
+   a waitlist promotion and a paid deposit's restore; an edit cannot change it (cancel and book
+   again). A location in use cannot be deleted: make it inactive, and its bookings stay.
+
+   **Which location**: with no active location, none (as before locations existed). Otherwise the
+   one asked for (it must be active and one the service is offered at, else a field error on
+   `location`); else the named staff member's when the service is offered there; else the only
+   location the service is offered at; else "choose a location". Only that location's staff and
+   rooms (and those of every location) are candidates; a named staff member who works elsewhere is
+   refused on `staff`. `find_slots` and `/slots` take `location` the same way.
 
 ## How availability works
 
@@ -77,14 +110,22 @@ Administrators can do everything. Staff without a Bookings role see nothing of t
   it with an exclusion constraint (`bookings_no_double_booking`). Buffers may reach outside
   working hours.
 * Seats of a class session (same service, staff member and start) share one block; a session is
-  full at `capacity` seats. Existing sessions are offered at their own start even off the grid.
+  full at `capacity` seats — a scheduled session's own when it has them. Existing and scheduled
+  sessions are offered at their own start even off the grid; a class with Only Scheduled Sessions
+  offers nothing else ("no session is scheduled then").
+* A scheduled Class Session is busy time for its teacher for every booking that is not one of its
+  seats, and counts on its room while empty.
 * A resource hosts at most `capacity` sessions at any instant; joining a class uses the
   session's resource. The least loaded eligible resource is taken.
 * Guests (public endpoints) book only offered starts — on the grid from the start of each
   working interval — inside the notice and advance windows. Staff (internal bookings, the
   generic API) may book any minute inside working hours, past or future.
-* "Any staff" (`staff` empty): join an existing class session first, otherwise the staff member
-  with the fewest sessions that local day, then the fewest booked minutes, then a stable order.
+* "Any staff" (`staff` empty): join an existing class session first; otherwise, of the staff free
+  then, the highest `priority` on the service's staff row (0 to 100, default 0); among equal
+  priorities, the fewest sessions that local day per unit of `weight` (1 to 100, default 1), then
+  the fewest booked minutes per unit of weight, then the heavier weight, then a stable order.
+  Compared in whole numbers, so two requests for one time agree. Rows saved before 0.13.0 read as
+  priority 0, weight 1: today's order.
 * Concurrency: every booking, reschedule and waitlist promotion locks its candidate staff rows,
   then their resources, each in id order, before reading the calendar and deciding; seats and
   resource units are counted under those locks.
@@ -97,7 +138,7 @@ Numbered `BKG-{YYYY}-{seq:5}`. Create through `POST /api/v1/Booking` with `servi
 `answers` rows `{question, answer}`, `notes`, `company`, `join_waitlist`. The server fills
 `staff`, `staff_name`, `resource`, `end_time`, `status`, `service_name`, `location_type`,
 `location`, `item`, `rate` (the service price now), `amount` (rate × seats), `company` (from the
-settings) and guest details from the customer. Staff bookings are `Confirmed` at once; a full
+settings) and guest details from the customer. Without a `customer` the booking gets one when it is made: a public booking's is made from what the guest typed, never found by that address; a staff booking's is found by email or phone digits, or made. Staff bookings are `Confirmed` at once; a full
 class with `join_waitlist` gives `Waitlisted`; an unavailable time is `409` (taken: busy, full,
 no resource) or `422` (outside hours, too soon or far ahead, off the grid) with the reason.
 
@@ -112,11 +153,23 @@ deleted (cancel them). `source` is `Internal` or `Public`.
 |---|---|---|
 | `confirm` | Pending | → the booking, `Confirmed` |
 | `reschedule` | Pending, Confirmed | `{start_time, staff?: id \| "any", seats?}` (staff absent = keep) → the booking; re-checked like a new booking (staff rules); freed class seats go to the waitlist |
-| `cancel_booking` | Pending, Confirmed, Waitlisted | `{reason?}` → the booking, `Cancelled`; a freed class seat goes to the waitlist |
+| `cancel_booking` | Pending, Confirmed, Waitlisted | `{reason?}` → the booking, `Cancelled`, `cancelled_by: Guest`: a cancellation on the guest's side (on their page, or staff pressing it for a guest who phoned), so a paid deposit is settled by the service's terms; a freed class seat goes to the waitlist |
+| `cancel_by_business` (We Cancel It) | Pending, Confirmed, Waitlisted | `{reason?}` → the booking, `Cancelled`, `cancelled_by: Business`: the business lets the time go, so a paid deposit comes back in full whatever the service's terms; otherwise as `cancel_booking` |
 | `complete` | Confirmed, once started | → `Completed` |
 | `mark_no_show` | Pending, Confirmed, once started | → `No Show` |
-| `make_sales_invoice` | Confirmed, Completed, No Show | → `{entity: "SalesInvoice", id, number}`: a draft invoice of the booking's company in its currency, one line `item × seats` at the booked `rate`, no discount (the company's default sales taxes apply). A guest without a customer becomes one, as ERP finds a person's (`portal::customer_for`: an enabled customer with the guest's email, else phone digits, that no web shop's guest checkout made, else a new individual). Refused while a draft or submitted invoice exists; a deleted draft (the link clears) or a cancelled invoice allows a new one. Needs Sales Invoice create permission |
+| `make_sales_invoice` | Confirmed, Completed, No Show | → `{entity: "SalesInvoice", id, number}`: a draft invoice of the booking's company in its currency, one line `item × seats` at the booked `rate`, no discount (the company's default sales taxes apply). A guest without a customer becomes one: a booking from the public page a customer of its own, made from what the guest typed (never one found by that address); a staff booking's guest as ERP finds a person's (`portal::customer_for`: an enabled customer with the guest's email, else phone digits, that no web shop's guest checkout made, else a new individual). Refused while a draft or submitted invoice exists; a deleted draft (the link clears) or a cancelled invoice allows a new one. Needs Sales Invoice create permission |
 | `guest_link` | not Cancelled | → `{token, url, api, expires_at, note}`: a fresh self-service link to hand to the guest (the fallback without the Mail app) |
+
+### Class Session actions — `POST /api/v1/BookingSession/{id}/actions/{action}`
+
+Bookings Manager only (write on Class Session). Each is the operation `bookings.booking_session.{action}`
+(`transactional_action`; a repeated effect key answers the first result).
+
+| Action | When | Params → result |
+|---|---|---|
+| `cancel_session` | Scheduled | `{reason?}` (cleaned, at most 1000 characters) → `{session, cancelled: [booking ids]}`: the session `Cancelled` with the reason, its waitlist places cancelled first (no freed seat is offered to them), then every seat, each as a business cancellation (a paid deposit back in full); each guest is told once by the next upkeep round |
+| `move` | Scheduled (hidden on the record page: the schedule offers it) | `{start_time (RFC 3339 text, ahead), staff?, resource?}` (empty = the same) → `{session, moved}`: decided once for the whole session under the old and new teachers' locks (another booking or session in the way, buffers included, or a taken room: 409; outside hours, time off, the past: 422) and nothing changes on a refusal; the session and every seat move together, keeping the key, each seat told once; waitlist places move silently. Where it already is: `moved: 0`, nobody told |
+| `repeat` | Scheduled, not in a series | `{every: week / 2 weeks / 4 weeks / month, count: 2–52 (this one included), skip_conflicts?: "Yes"}` → `{series, scheduled: [{id, start_time}], skipped: [{date, start_time, reason}]}`: later sessions at the same local time in the teacher's zone, each checked as one scheduled by hand; a taken date stops the whole repeat (naming it) unless skipping |
 
 ### Waitlists
 
@@ -143,11 +196,11 @@ answer the same 404. `POST`s are limited to 30 per 10 minutes per address and wo
 
 | Method & path | Request | Response |
 |---|---|---|
-| `GET /services` | — | `{time_zone, currency, services: [{id, name, description, duration_minutes, seats, price, location_type, location (in person only), staff: [{id, name, bio}], questions: [{question, type, options, required}]}]}` — active services with active staff |
-| `GET /slots` | `service` (required), `from`, `to` (dates in the zone; default the next 7 days, at most 62), `time_zone` (IANA; default the workspace's), `staff`, `seats`, `waitlist` (1: list full classes too, marked `full: true` with `seats_left` what is free, so a page can offer their waitlist) | `{service: {id, name, duration_minutes, seats}, time_zone, from, to, days: [{date, slots: [{start, end, time ("HH:MM" in the zone), seats_left, staff: [{id, name}]}]}]}`. 404 for an unknown or inactive service; 422 for bad parameters |
-| `POST /book` | `{service, start_time, staff? (id or "any"), seats?, name, email, phone?, time_zone?, language?, notes?, answers? ({question: answer} or [{question, answer}]), waitlist?, website}` | `201 {booking: View, token}`. `website` is a honeypot: when filled the answer is `201 {"status": "received"}` and nothing is booked. Answers are checked against the questions (required ones present, numbers, Yes/No, one of the choices, nothing unknown). 422 with field errors, 409 when taken, 404 unknown service |
+| `GET /services` | — | `{time_zone, currency, locations: [{id, name, address, time_zone}], services: [{id, name, description, duration_minutes, seats, price, location_type, location (in person only), locations: [ids it is offered at], staff: [{id, name, bio, location}], questions: [{question, type, options, required}]}]}` — active services with active staff; `locations` are the active ones (empty when the workspace has none) |
+| `GET /slots` | `service` (required), `from`, `to` (dates in the zone; default the next 7 days, at most 62), `time_zone` (IANA; default the workspace's), `staff`, `seats`, `location` (resolved as "Locations" below; 422 on `location` when it must be chosen or is not offered), `waitlist` (1: list full classes too, marked `full: true` with `seats_left` what is free, so a page can offer their waitlist) | `{service: {id, name, duration_minutes, seats}, time_zone, from, to, days: [{date, slots: [{start, end, time ("HH:MM" in the zone), seats_left, staff: [{id, name}]}]}]}`. 404 for an unknown or inactive service; 422 for bad parameters |
+| `POST /book` | `{service, start_time, staff? (id or "any"), location?, seats?, name, email, phone?, time_zone?, language?, notes?, answers? ({question: answer} or [{question, answer}]), waitlist?, website}` | `201 {booking: View, token}`. `website` is a honeypot: when filled the answer is `201 {"status": "received"}` and nothing is booked. Answers are checked against the questions (required ones present, numbers, Yes/No, one of the choices, nothing unknown). 422 with field errors, 409 when taken, 404 unknown service |
 | `GET /manage/{token}` | — | `{booking: View}` |
-| `GET /manage/{token}/slots` | `from`, `to`, `time_zone`, `staff` | Like `/slots` for the booking's service and seats; its own time does not block |
+| `GET /manage/{token}/slots` | `from`, `to`, `time_zone`, `staff` | Like `/slots` for the booking's service, seats and location; its own time does not block |
 | `POST /manage/{token}/reschedule` | `{start_time, staff?, seats?}` | `{booking: View}`; guest rules (grid, notice, advance) and the reschedule window; 409 when taken |
 | `POST /manage/{token}/cancel` | `{reason?}` | `{booking: View}`; the cancellation window applies (not to waitlist places) |
 | `GET /manage/{token}/booking.ics` | — | `text/calendar` (METHOD:PUBLISH), as an attachment |
@@ -155,7 +208,7 @@ answer the same 404. `POST`s are limited to 30 per 10 minutes per address and wo
 
 **View**: `{number, status, service: {id, name}, staff: {id, name}, start_time, end_time,
 time_zone, when ("Mon 2 Nov 2026, 10:00 (Asia/Kolkata)"), until ("11:00"), seats,
-location_type, location (null when cancelled), guest: {name, email, phone}, answers: [{question,
+location_type, location (null when cancelled), place ({id, name, address} of its location, or null), guest: {name, email, phone}, answers: [{question,
 answer}], amount, cancellation_reason, waitlist_position (Waitlisted only), can_cancel,
 cancel_until, can_reschedule, reschedule_until, links: {manage, ics}, deposit}`.
 
@@ -238,4 +291,7 @@ busy), purge guest tokens of bookings over for 30 days and claims of bookings ov
 
 Besides the entity tables: `bookings_token` and `bookings_notice` (row-level security like every
 table), the exclusion constraint `bookings_no_double_booking` and the check
-`bookings_active_is_scheduled` on `e_booking` (`sql/001_bookings.sql`).
+`bookings_active_is_scheduled` on `e_booking` (`sql/001_bookings.sql`); the exclusion constraint
+`bookings_sessions_do_not_overlap` and the check `bookings_session_is_scheduled` on `e_booking_session`
+(`sql/002_sessions.sql`; the session's unique key and its index by teacher and time are the entity's own). A booking and a session
+cannot share one constraint: both lock the teacher's `e_booking_staff` row first.

@@ -30,6 +30,26 @@
     - {label: Opening Days, fields: [calendar]}
     - {label: Links, collapsible: true, fields: [public_url, manage_page_url, signing_secret]}
 
+- name: BookingLocation
+  label: Booking Location
+  kind: master
+  module: bookings
+  title_field: location_name
+  description: "A place the business takes bookings at. Staff, rooms and services that name it are its own; those that name none are everywhere."
+  fields:
+    - {name: location_name, type: data, required: true, unique: true, in_list: true, max_length: 140}
+    - {name: active, type: check, default: true, in_list: true, in_filter: true, description: "Inactive locations are not offered for new bookings"}
+    - {name: address, type: text, max_length: 500, description: "Guests see it for in-person services that state no address of their own"}
+    - {name: time_zone, type: data, max_length: 64, in_list: true, description: "IANA time zone the booking page starts in for this location, e.g. Europe/London. Empty = the workspace's"}
+    - {name: calendar, type: data, max_length: 64, label: Opening Calendar, description: "A working calendar (Admin, Calendars): nobody is booked here outside its open time. Empty = the Business Calendar of Booking Settings"}
+  list: {columns: [location_name, time_zone, active], sort: location_name asc}
+
+- name: BookingServiceLocation
+  label: Service Location
+  kind: child
+  fields:
+    - {name: location, type: link, to: BookingLocation, required: true, on_delete: cascade, in_list: true}
+
 - name: BookingResource
   label: Booking Resource
   kind: master
@@ -41,6 +61,7 @@
     - {name: resource_type, type: select, options: [Room, Equipment, Vehicle, Other], default: Room, required: true, in_list: true, in_filter: true}
     - {name: capacity, type: int, default: 1, required: true, min: 1, max: 1000, in_list: true, description: "Bookings or class sessions it can host at once"}
     - {name: active, type: check, default: true, in_list: true, in_filter: true, description: "Inactive resources are not given to new bookings"}
+    - {name: location, type: link, to: BookingLocation, in_filter: true, description: "Where it is. Empty = usable at every location"}
     - {name: calendar, type: data, max_length: 64, label: Working Calendar, description: "A working calendar (Admin, Calendars): it is booked only in its open time. Empty: whenever staff work"}
     - {name: description, type: text}
   list: {columns: [resource_name, resource_type, capacity, active], sort: resource_name asc}
@@ -66,6 +87,7 @@
     - {name: email, type: email, required: true, unique: true, in_list: true, description: "The Ferrum user this is: they see their own bookings, get notified, and organize calendar invitations"}
     - {name: time_zone, type: data, required: true, default_expr: "user.timezone", max_length: 64, in_list: true, description: "IANA time zone of the working hours, e.g. Europe/London"}
     - {name: active, type: check, default: true, in_list: true, in_filter: true, description: "Inactive staff get no new bookings"}
+    - {name: location, type: link, to: BookingLocation, in_list: true, in_filter: true, description: "Where they work. Empty = every location"}
     - {name: bio, type: text, description: "Shown on the booking page"}
     - {name: calendar, type: data, max_length: 64, label: Working Calendar, description: "A working calendar (Admin, Calendars): when set, its open time (holidays and dated changes included) replaces the working hours below"}
     - {name: working_hours, type: table, of: BookingWorkingHour}
@@ -75,10 +97,23 @@
     - {name: outside_calendar_error, type: data, read_only: true, no_copy: true, label: Outside Calendar Problem, description: "Why the last reading failed, or what in it could not be read. What was read before still counts"}
     - {name: outside_calendar_tried, type: datetime, read_only: true, hidden: true, no_copy: true}
   actions:
-    - {name: calendar_feed, label: Calendar Feed Link, permission: read}
-    - {name: rotate_calendar_feed, label: Reset Calendar Feed Link, permission: read, confirm: "A new feed link is made and every earlier one stops working. Continue?"}
+    - name: calendar_feed
+      label: Calendar Feed Link
+      permission: read
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {url: {type: string}, path: {type: string}, expires_at: {type: string}, note: {type: string}}}
+        completion: "A signed calendar feed link for this staff member, valid a year, committed with this receipt (the workspace's signing key is made on first use); only the staff member or a bookings manager gets it"
+    - name: rotate_calendar_feed
+      label: Reset Calendar Feed Link
+      permission: read
+      confirm: "A new feed link is made and every earlier one stops working. Continue?"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {url: {type: string}, path: {type: string}, expires_at: {type: string}, note: {type: string}}}
+        completion: "Every earlier feed link of this staff member stops working and a new one is given, committed with this receipt (only the staff member or a bookings manager may)"
   form:
-    - {label: Staff, fields: [display_name, email, time_zone, active, bio]}
+    - {label: Staff, fields: [display_name, email, time_zone, active, location, bio]}
     - {label: Working Hours, fields: [calendar, working_hours]}
     - {label: Outside Calendar, fields: [outside_calendar, outside_calendar_read, outside_calendar_error]}
   list: {columns: [display_name, email, time_zone, active], sort: display_name asc}
@@ -109,6 +144,8 @@
   kind: child
   fields:
     - {name: staff, type: link, to: BookingStaff, required: true, on_delete: cascade, in_list: true}
+    - {name: priority, type: int, default: 0, min: 0, max: 100, in_list: true, description: "When a guest leaves the choice to you: of the staff free at that time, the highest priority is booked. All 0 = no priority"}
+    - {name: weight, type: int, default: 1, min: 1, max: 100, in_list: true, description: "Their share of the day's bookings among staff of the same priority: 2 gets about twice as many as 1"}
 
 - name: BookingServiceResource
   label: Service Resource
@@ -141,12 +178,14 @@
     - {name: slot_interval_minutes, type: int, label: Slot Interval (Minutes), min: 5, max: 1440, description: "Empty = Booking Settings"}
     - {name: capacity, type: int, label: Seats, default: 1, required: true, min: 1, max: 1000, in_list: true, description: "1 = one-to-one appointment; more = a group class with this many seats per session"}
     - {name: price, type: currency, default: 0, min: "0", in_list: true, description: "Per seat, in the company currency"}
+    - {name: sessions_only, type: check, label: Only Scheduled Sessions, description: "A group class is offered only at the sessions you schedule (Class Sessions). Off: any free time in working hours opens a session, and scheduled sessions are offered as well"}
     - {name: guest_repeat_max, type: int, label: Guests May Book It Up To, default: 0, min: 0, max: 52, description: "Times in a row a guest may book it on the booking page, every week, 2 weeks, 4 weeks or month, when it is free: 0 or 1 is once"}
     - {name: item, type: link, to: Item, required_if: "doc.price > 0.0", description: "Item bookings are invoiced as (a service item)"}
     - {name: location_type, type: select, options: [In Person, Video, Phone], default: In Person, required: true, in_list: true}
     - {name: location_details, type: text, description: "Address, video meeting link or phone number; guests see it once booked"}
     - {name: staff, type: table, of: BookingServiceStaff, required: true, description: "Staff who provide it"}
     - {name: resources, type: table, of: BookingServiceResource, description: "Each booking needs one of these free; empty = none"}
+    - {name: locations, type: table, of: BookingServiceLocation, description: "Where it is offered. Empty = every location"}
     - {name: questions, type: table, of: BookingQuestion, label: Intake Questions}
     - {name: min_notice_minutes, type: int, label: Minimum Notice (Minutes), min: 0, max: 525600, description: "Empty = Booking Settings"}
     - {name: max_advance_days, type: int, label: Book Ahead At Most (Days), min: 1, max: 730, description: "Empty = Booking Settings"}
@@ -156,15 +195,101 @@
     - {name: reminders, type: table, of: BookingReminder, description: "Reminders before each confirmed booking of this service. Empty = Booking Settings'"}
   actions:
     # The booking screens list the free times; a record page could not show them.
-    - {name: find_slots, label: Find Free Slots, permission: read, hidden: true}
+    - name: find_slots
+      label: Find Free Slots
+      permission: read
+      hidden: true
+      read_only: true
+      params:
+        - {name: from, type: date, label: From, description: "First day, in the asked zone. Empty: today"}
+        - {name: to, type: date, label: To, description: "Last day. Empty: a week from From; at most 62 days"}
+        - {name: time_zone, type: data, label: Time Zone, description: "IANA time zone the days are read in. Empty: the workspace's"}
+        - {name: staff, type: link, to: BookingStaff, label: Staff, description: "Only this staff member's times"}
+        - {name: seats, type: int, label: Seats, description: "1 to 1000"}
+        - {name: booking, type: link, to: Booking, label: Booking, description: "A booking being moved: the time it holds counts as free"}
+        - {name: location, type: link, to: BookingLocation, label: Location, description: "Only this location's staff, rooms and opening days"}
+      contract:
+        effect: query
+        returns: {type: object, properties: {time_zone: {type: string}, from: {type: string}, to: {type: string}, days: {type: array}}}
+        completion: "The free starts of the service, by day in the asked zone; nothing is held"
   form:
     - {label: Service, fields: [service_name, active, description, location_type, location_details]}
-    - {label: Time, fields: [duration_minutes, buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, capacity, guest_repeat_max]}
+    - {label: Time, fields: [duration_minutes, buffer_before_minutes, buffer_after_minutes, slot_interval_minutes, capacity, sessions_only, guest_repeat_max]}
     - {label: Price, fields: [price, item]}
-    - {label: Staff and Resources, fields: [staff, resources]}
+    - {label: Staff and Resources, fields: [staff, resources, locations]}
     - {label: Intake Questions, collapsible: true, fields: [questions]}
     - {label: Rules, collapsible: true, fields: [min_notice_minutes, max_advance_days, cancellation_window_hours, reschedule_window_hours, approval_required, reminders]}
   list: {columns: [service_name, duration_minutes, capacity, price, location_type, active], sort: service_name asc}
+
+- name: BookingSession
+  label: Class Session
+  kind: document
+  module: bookings
+  title_field: service_name
+  numbering: {template: "SES-{YYYY}-{seq:5}"}
+  search_fields: [service_name, staff_name]
+  owner_fields: [staff_email]
+  description: "One dated session of a group class, scheduled before anyone books it: its teacher, its seats and its room. It holds the teacher's time from the moment it is scheduled."
+  fields:
+    - {name: service, type: link, to: BookingService, required: true, in_filter: true}
+    - {name: service_name, type: data, read_only: true, in_list: true}
+    - {name: staff, type: link, to: BookingStaff, required: true, in_filter: true}
+    - {name: staff_name, type: data, read_only: true, in_list: true}
+    - {name: staff_email, type: email, read_only: true, hidden: true}
+    - {name: start_time, type: datetime, required: true, in_list: true, in_filter: true}
+    - {name: end_time, type: datetime, read_only: true}
+    - {name: capacity, type: int, label: Seats, min: 1, max: 1000, in_list: true, description: "Empty = the service's seats"}
+    - {name: resource, type: link, to: BookingResource, in_filter: true, description: "The room it is held in. Empty: one of the service's free rooms is taken when the first seat is booked"}
+    - {name: booking_location, type: link, to: BookingLocation, label: Booking Location, in_filter: true, description: "Where it takes place. Changes only with Move"}
+    - {name: status, type: select, options: [Scheduled, Cancelled], default: Scheduled, read_only: true, in_list: true, in_filter: true}
+    - {name: series, type: data, read_only: true, no_copy: true, in_filter: true, description: "Shared by sessions repeated together"}
+    - {name: cancellation_reason, type: text, read_only: true, no_copy: true}
+    - {name: block_start, type: datetime, read_only: true, hidden: true, no_copy: true}
+    - {name: block_end, type: datetime, read_only: true, hidden: true, no_copy: true}
+    - {name: session_key, type: data, read_only: true, hidden: true, no_copy: true}
+  unique: [[session_key]]
+  indexes: [[staff, start_time], [staff, block_start], [service, start_time], [status, start_time]]
+  actions:
+    - name: cancel_session
+      label: Cancel Session
+      permission: write
+      condition: "doc.status == 'Scheduled'"
+      confirm: "Cancel this session and every booking in it? Each guest is told."
+      params:
+        - {name: reason, type: text, label: Reason, description: The guests see it}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {session: {type: string, format: uuid}, cancelled: {type: array, items: {type: string, format: uuid}}}}
+        completion: "The session is Cancelled and every booking and waitlist place in it is cancelled, committed with this receipt; a paid deposit comes back in full; each guest is told once by the next upkeep round"
+    - name: move
+      label: Move
+      permission: write
+      hidden: true
+      condition: "doc.status == 'Scheduled'"
+      params:
+        - {name: start_time, type: data, label: New Start, required: true, description: "An instant as RFC 3339 text, e.g. 2026-12-01T18:00:00+05:30"}
+        - {name: staff, type: link, to: BookingStaff, label: Teacher, description: "Empty: the same teacher"}
+        - {name: resource, type: link, to: BookingResource, label: Room, description: "Empty: the same room"}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {session: {type: string, format: uuid}, moved: {type: integer}}}
+        completion: "The session and every booking in it are at the new time, teacher and room, committed with this receipt; each guest with a seat is told once"
+    - name: repeat
+      label: Repeat
+      permission: write
+      condition: "doc.status == 'Scheduled' && doc.series == null"
+      params:
+        - {name: every, type: select, label: Every, options: [week, 2 weeks, 4 weeks, month], required: true}
+        - {name: count, type: int, label: Sessions in All, required: true, description: "2 to 52, this one included"}
+        - {name: skip_conflicts, type: select, label: Skip Times That Are Taken, options: ["No", "Yes"], description: "No: a time that is taken stops the series"}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {series: {type: string}, scheduled: {type: array}, skipped: {type: array}}}
+        completion: "The later sessions are Scheduled and share this session's series, committed with this receipt; with skipping, the dates that were taken are listed"
+  form:
+    - {label: Session, fields: [service, staff, start_time, end_time, capacity, resource, booking_location, status]}
+    - {label: History, collapsible: true, fields: [series, cancellation_reason]}
+  list: {columns: [number, start_time, service_name, staff_name, capacity, status], sort: start_time desc}
 
 - name: BookingAnswer
   label: Intake Answer
@@ -196,6 +321,7 @@
     - {name: series, type: data, read_only: true, no_copy: true, in_filter: true, description: "Shared by bookings repeated together"}
     - {name: join_waitlist, type: check, no_copy: true, description: "When the class is full, join its waitlist instead of failing"}
     - {name: resource, type: link, to: BookingResource, read_only: true, in_filter: true}
+    - {name: booking_location, type: link, to: BookingLocation, label: Booking Location, in_filter: true, description: "Where it takes place. Changes only with Reschedule"}
     - {name: customer, type: link, to: Customer, in_filter: true}
     - {name: guest_name, type: data, max_length: 200, in_list: true}
     - {name: guest_email, type: email}
@@ -215,6 +341,7 @@
     - {name: scheduled_at, type: datetime, read_only: true, no_copy: true, description: "When the current time was booked or last moved"}
     - {name: confirmed_at, type: datetime, read_only: true, no_copy: true}
     - {name: cancelled_at, type: datetime, read_only: true, no_copy: true}
+    - {name: cancelled_by, type: select, options: [Guest, Business], read_only: true, no_copy: true, description: "Business: the business let the time go, and a paid deposit comes back in full whatever the service's terms"}
     - {name: completed_at, type: datetime, read_only: true, no_copy: true}
     - {name: block_start, type: datetime, read_only: true, hidden: true, no_copy: true}
     - {name: block_end, type: datetime, read_only: true, hidden: true, no_copy: true}
@@ -228,11 +355,18 @@
     - {name: outside_clash_kept, type: datetime, read_only: true, no_copy: true, label: Kept Despite a Clash, description: "Not flagged again at this time"}
     - {name: closed_clash, type: check, read_only: true, no_copy: true, in_filter: true, label: Outside Opening Hours,
        description: "A working calendar (the staff member's or the business's) closed this time after it was booked. It is kept: reschedule or cancel it"}
-  indexes: [[staff, start_time], [service, start_time], [status, start_time]]
+  indexes: [[staff, start_time], [service, start_time], [status, start_time], [booking_location, start_time]]
   rules:
     - {name: guest_or_customer, check: "doc.customer != null || (doc.guest_name != null && doc.guest_name != '')", message: "Choose a customer or enter the guest's name"}
   actions:
-    - {name: confirm, label: Confirm, permission: write, condition: "doc.status == 'Pending'"}
+    - name: confirm
+      label: Confirm
+      permission: write
+      condition: "doc.status == 'Pending'"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {id: {type: string, format: uuid}, number: {type: string}, status: {type: string}}}
+        completion: "The booking is Confirmed, committed with this receipt; the guest is told once by the next upkeep round"
     # Moved on the schedule, which offers the free times (a record page has no date and time to give).
     - {name: reschedule, label: Reschedule, permission: write, hidden: true, condition: "doc.status == 'Pending' || doc.status == 'Confirmed'"}
     - name: cancel_booking
@@ -241,12 +375,62 @@
       condition: "doc.status == 'Pending' || doc.status == 'Confirmed' || doc.status == 'Waitlisted'"
       params:
         - {name: reason, type: text, label: Reason, description: The guest sees it}
-    - {name: keep_despite_clash, label: Keep Despite the Clash, permission: write, condition: "doc.outside_clash",
-       confirm: "Keep this booking at its time, though the staff member's outside calendar is busy then?"}
-    - {name: complete, label: Mark Completed, permission: write, condition: "doc.status == 'Confirmed'"}
-    - {name: mark_no_show, label: Mark No Show, permission: write, condition: "doc.status == 'Confirmed' || doc.status == 'Pending'"}
-    - {name: make_sales_invoice, label: Create Sales Invoice, permission: write, condition: "doc.status == 'Confirmed' || doc.status == 'Completed' || doc.status == 'No Show'"}
-    - {name: guest_link, label: Guest Self-Service Link, permission: write, condition: "doc.status != 'Cancelled'"}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {id: {type: string, format: uuid}, number: {type: string}, status: {type: string}}}
+        completion: "The booking is Cancelled as the guest's cancellation (cancelled_by Guest, also when staff cancel for a guest who phoned: a paid deposit is settled by the service's terms), committed with this receipt; a freed class seat goes to the waitlist; the guest is told once by the next upkeep round"
+    - name: cancel_by_business
+      label: We Cancel It
+      permission: write
+      condition: "doc.status == 'Pending' || doc.status == 'Confirmed' || doc.status == 'Waitlisted'"
+      confirm: "Cancel this booking on the business's side? A paid deposit comes back in full, whatever the service's terms."
+      params:
+        - {name: reason, type: text, label: Reason, description: The guest sees it}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {id: {type: string, format: uuid}, status: {type: string}, cancelled_by: {type: string}}}
+        completion: "The booking is Cancelled with cancelled_by Business, committed with this receipt; a paid deposit is credited and asked back in full whatever the service's terms; the guest is told once by the next upkeep round"
+    - name: keep_despite_clash
+      label: Keep Despite the Clash
+      permission: write
+      condition: "doc.outside_clash"
+      confirm: "Keep this booking at its time, though the staff member's outside calendar is busy then?"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {id: {type: string, format: uuid}, number: {type: string}, status: {type: string}}}
+        completion: "The booking stays at its time and is no longer marked as clashing there, committed with this receipt"
+    - name: complete
+      label: Mark Completed
+      permission: write
+      condition: "doc.status == 'Confirmed'"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {id: {type: string, format: uuid}, number: {type: string}, status: {type: string}}}
+        completion: "The booking is Completed, committed with this receipt; refused before it starts"
+    - name: mark_no_show
+      label: Mark No Show
+      permission: write
+      condition: "doc.status == 'Confirmed' || doc.status == 'Pending'"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {id: {type: string, format: uuid}, number: {type: string}, status: {type: string}}}
+        completion: "The booking is No Show, committed with this receipt; refused before it starts"
+    - name: make_sales_invoice
+      label: Create Sales Invoice
+      permission: write
+      condition: "doc.status == 'Confirmed' || doc.status == 'Completed' || doc.status == 'No Show'"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {entity: {type: string}, id: {type: string, format: uuid}, number: {type: string}}}
+        completion: "A draft Sales Invoice of the booking's company for the item times the seats at the booked rate, linked to the booking, committed with this receipt; a booking without a customer gets one (a public booking a customer of its own); refused while a draft or submitted one exists (needs Sales Invoice create)"
+    - name: guest_link
+      label: Guest Self-Service Link
+      permission: write
+      condition: "doc.status != 'Cancelled'"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {token: {type: string}, url: {type: string}, api: {type: string}, expires_at: {type: string}, note: {type: string}}}
+        completion: "A new self-service link for the guest, valid until 30 days after the booking ends, committed with this receipt; earlier links keep working"
     - name: repeat
       label: Repeat
       permission: write
@@ -255,17 +439,25 @@
         - {name: every, type: select, label: Every, options: [week, 2 weeks, 4 weeks, month], required: true}
         - {name: count, type: int, label: Bookings in All, required: true, description: "2 to 52, this one included"}
         - {name: skip_conflicts, type: select, label: Skip Times That Are Taken, options: ["No", "Yes"], description: "No: a time that is taken stops the series"}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {series: {type: string}, booked: {type: array}, skipped: {type: array}}}
+        completion: "The later bookings are made at the same local time, with the same service, staff, seats and guest, and share this booking's series, committed with this receipt; with skipping, the dates that were taken are listed"
     - name: cancel_series
       label: Cancel This and Later
       permission: write
       condition: "doc.series != null"
       params:
         - {name: reason, type: text, label: Reason, description: The guests see it}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {cancelled: {type: array}}}
+        completion: "This booking and the later active ones of its series are Cancelled, each as the guest's cancellation (a paid deposit settled by the service's terms), committed with this receipt; freed class seats go to the waitlist; each guest is told once by the next upkeep round"
   form:
-    - {label: Booking, fields: [service, service_name, staff, staff_name, start_time, end_time, seats, status, source, join_waitlist, resource]}
+    - {label: Booking, fields: [service, service_name, staff, staff_name, start_time, end_time, seats, status, source, join_waitlist, resource, booking_location]}
     - {label: Guest, fields: [customer, guest_name, guest_email, guest_phone, guest_time_zone, guest_language, notes]}
     - {label: Intake Answers, collapsible: true, fields: [answers]}
     - {label: Location, collapsible: true, fields: [location_type, location]}
     - {label: Billing, collapsible: true, fields: [company, item, rate, amount, sales_invoice]}
-    - {label: History, collapsible: true, fields: [cancellation_reason, scheduled_at, confirmed_at, cancelled_at, completed_at, outside_clash, outside_clash_since, outside_clash_kept, closed_clash]}
+    - {label: History, collapsible: true, fields: [cancellation_reason, cancelled_by, scheduled_at, confirmed_at, cancelled_at, completed_at, outside_clash, outside_clash_since, outside_clash_kept, closed_clash]}
   list: {columns: [number, start_time, service_name, staff_name, guest_name, seats, status, outside_clash], sort: start_time desc}

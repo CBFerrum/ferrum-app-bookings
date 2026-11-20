@@ -1476,6 +1476,36 @@ async fn deposits() {
     assert_eq!(t.scalar("select count(*) from e_order_refund where tenant_id = $1 and payment_request = $2", Some(first_request)).await, 1);
     assert_eq!(receipts_of(&t).await.len(), 5, "no receipt more");
 
+    // ───────────── the business cancels: the deposit comes back whole, whatever the terms ─────────────
+    // Until 0.15.0 a staff cancellation was settled by the service's terms like a guest's: inside the 100 hours set
+    // above, all 300 were kept. A cancellation the business makes now returns it in full.
+    let (fifth, _, _) = book("13:00", "zhou@example.test").await;
+    let request: Uuid = t.get("Booking", fifth).await["bpay_payment_request"].as_str().unwrap().parse().unwrap();
+    t.act(&fakepay, "PaymentRequest", request, "mark_paid", json!({"amount": "300", "currency": "INR", "gateway_reference": "pi_5"})).await;
+    t.act(&manager, "Booking", fifth, "cancel_by_business", json!({"reason": "Our therapist is ill"})).await;
+    let b = t.get("Booking", fifth).await;
+    assert_eq!((dec_of(&b["bpay_kept"]), b["cancelled_by"].clone()), ("0".to_string(), json!("Business")), "all of it back");
+    let r = t.get("OrderRefund", b["bpay_refund"].as_str().expect("a refund").parse().unwrap()).await;
+    assert_eq!(dec_of(&r["amount"]), "300");
+    // A class session the business cancels: every seat's deposit back in full.
+    let peel = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Peel Class", "duration_minutes": 60, "capacity": 4, "price": "1000", "item": facial_item.to_string(),
+                   "staff": [{"staff": sid(&mira)}], "bpay_deposit_percent": "30", "bpay_refund_hours": 100, "bpay_keep_percent": "100"}),
+        )
+        .await);
+    let class = t.insert(&manager, "BookingSession", json!({"service": peel.to_string(), "staff": sid(&mira), "start_time": rfc(at("15:00"))})).await;
+    let v = t.book(json!({"service": peel.to_string(), "start_time": rfc(at("15:00")), "name": "Guest", "email": "yan@example.test"})).await.unwrap();
+    let seat = uid(&t.find_one("Booking", json!({"number": v["booking"]["number"]})).await);
+    let request: Uuid = t.get("Booking", seat).await["bpay_payment_request"].as_str().unwrap().parse().unwrap();
+    t.act(&fakepay, "PaymentRequest", request, "mark_paid", json!({"amount": "300", "currency": "INR", "gateway_reference": "pi_6"})).await;
+    t.act(&manager, "BookingSession", uid(&class), "cancel_session", json!({"reason": "Studio flooded"})).await;
+    let b = t.get("Booking", seat).await;
+    assert_eq!((b["status"].clone(), dec_of(&b["bpay_kept"]), b["cancelled_by"].clone()), (json!("Cancelled"), "0".to_string(), json!("Business")));
+    assert_eq!(dec_of(&t.get("OrderRefund", b["bpay_refund"].as_str().expect("a refund").parse().unwrap()).await["amount"]), "300");
+
     // ───────────── a refusal inside a booking leaves nothing of it ─────────────
     // A payment method the store does not have: Commerce refuses, and the guest's booking goes with its invoice.
     let counts = || async {
@@ -2273,9 +2303,9 @@ fn guests_become_clients_end_to_end() {
     run(guests_become_clients());
 }
 
-/// A guest who books is a customer at once: found by email (any case), never a web shop's guest,
-/// else made; booking twice, or two bookings at the same moment, make one; erasing the guest erases
-/// the customer too.
+/// A guest who books is a customer at once: one of their own made from what they typed on the public
+/// page, never one found by that address (a typed address proves nothing, A11 D4); staff booking a
+/// caller find the customer by the phone's digits; erasing the guest erases the customer too.
 async fn guests_become_clients() {
     let t = boot("visit", &["commerce"]).await;
     let a = t.admin.clone();
@@ -2303,19 +2333,21 @@ async fn guests_become_clients() {
     let first = book("09:00", "ravi@example.test").await;
     assert_eq!(customers("ravi@example.test").await, 1, "a customer at once");
     let again = book("10:00", "Ravi@Example.test").await;
-    assert_eq!((customers("ravi@example.test").await, first["customer"].clone()), (1, again["customer"].clone()), "the same person booking twice");
+    assert_eq!(customers("ravi@example.test").await, 2, "the same address typed twice: a customer for each booking");
+    assert_ne!(first["customer"], again["customer"], "the second is never found by the first's address");
     let cust = t.get("Customer", first["customer"].as_str().unwrap().parse().unwrap()).await;
     assert_eq!((cust["customer_name"].clone(), cust["customer_type"].clone()), (json!("Ravi Kumar"), json!("Individual")));
-    // An existing customer is linked, not copied.
+    // An existing customer is never linked by an address a guest typed.
     let known = uid(&t.insert(&a, "Customer", json!({"customer_name": "Sara Ali", "customer_type": "Individual", "email": "sara@example.test"})).await);
-    assert_eq!(book("11:00", "sara@example.test").await["customer"], json!(known.to_string()));
+    assert_ne!(book("11:00", "sara@example.test").await["customer"], json!(known.to_string()));
     // A web shop's guest with the address is not: anyone may type anyone's address at a guest checkout.
     let guest = json!({"customer_name": "Lee at the shop", "customer_type": "Individual", "email": "lee@example.test", "commerce_guest": true});
     let guest = uid(&t.insert(&ferrum_domain::util::sys(&a), "Customer", guest).await);
     assert_ne!(book("16:00", "lee@example.test").await["customer"], json!(guest.to_string()), "a customer of their own");
-    // Two bookings for one new address at the same moment make one customer.
+    // Two bookings for one new address at the same moment: a customer each.
     let (x, y) = tokio::join!(book("12:00", "pat@example.test"), book("13:00", "pat@example.test"));
-    assert_eq!((customers("pat@example.test").await, x["customer"].clone()), (1, y["customer"].clone()));
+    assert_eq!(customers("pat@example.test").await, 2);
+    assert_ne!(x["customer"], y["customer"]);
     // Without an email (staff booking a caller), the phone's digits find the customer.
     let call = t
         .insert(
@@ -2338,6 +2370,117 @@ async fn guests_become_clients() {
     let (b, c) = (t.get("Booking", uid(&first)).await, t.get("Customer", uid(&cust)).await);
     assert!(b["guest_email"].is_null() && c["email"].is_null(), "booking {} customer {}", b["guest_email"], c["email"]);
     assert_ne!(c["customer_name"], json!("Ravi Kumar"));
+}
+
+#[test]
+fn a_guest_is_never_matched_to_an_existing_customer() {
+    run(guest_never_matched());
+}
+
+/// A public booking is never put on an existing customer because the guest typed that customer's
+/// email or phone (A11 D4): the guest gets a customer of their own, and the existing customer gains
+/// nothing. A booking staff make for that customer keeps them.
+async fn guest_never_matched() {
+    let t = boot("match", &[]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    t.insert(&a, "BookingSettings", json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60})).await;
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let staff =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Noor", "email": "noor@match.test", "time_zone": "Asia/Kolkata", "working_hours": every})).await;
+    let svc = uid(&t.insert(&a, "BookingService", json!({"service_name": "Visit", "duration_minutes": 60, "staff": [{"staff": sid(&staff)}]})).await);
+    let known = uid(&t
+        .insert(&a, "Customer", json!({"customer_name": "Sara Ali", "customer_type": "Individual", "email": "sara@example.test", "phone": "+91 98200 12345"}))
+        .await);
+    let on_known = || t.scalar("select count(*) from e_booking where tenant_id = $1 and customer = $2", Some(known));
+    let book = |hhmm: &'static str, email: &'static str, phone: &'static str| {
+        let t = &t;
+        async move {
+            let body = json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, hhmm)), "name": "Someone Else", "email": email, "phone": phone});
+            let v = t.book(body).await.expect("booked");
+            t.find_one("Booking", json!({"number": v["booking"]["number"]})).await
+        }
+    };
+    // The customer's own email (another case), then their phone with an address of the guest's own.
+    for b in [book("09:00", "Sara@Example.test", "").await, book("10:00", "someone@example.test", "+91-98200-12345").await] {
+        let own: Uuid = b["customer"].as_str().expect("a customer of their own").parse().unwrap();
+        assert_ne!(own, known);
+        let c = t.get("Customer", own).await;
+        assert_eq!((c["customer_name"].clone(), c["customer_type"].clone()), (json!("Someone Else"), json!("Individual")));
+    }
+    assert_eq!(on_known().await, 0, "nothing of the guests' reaches the customer");
+    let sara = t.get("Customer", known).await;
+    assert_eq!((sara["customer_name"].clone(), sara["email"].clone()), (json!("Sara Ali"), json!("sara@example.test")), "the customer is unchanged");
+    // Staff booking for the customer keep them.
+    let staff_made =
+        t.insert(&a, "Booking", json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, "11:00")), "customer": known.to_string()})).await;
+    assert_eq!(staff_made["customer"], json!(known.to_string()));
+    assert_eq!(on_known().await, 1);
+}
+
+#[test]
+fn the_deposit_invoice_goes_to_the_guests_own_customer() {
+    run(deposit_on_own_customer());
+}
+
+/// A guest who types an existing customer's email on the public page has the deposit invoice made
+/// on a customer of their own; the existing customer has no invoice and no payment request for it.
+async fn deposit_on_own_customer() {
+    let t = boot("owed", &["commerce", "bookings_payments"]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let inr = t.find_one("Currency", json!({"code": "INR"})).await;
+    let cid = uid(&t.insert(&a, "Company", json!({"company_name": "Owed Studio", "abbr": "OS", "default_currency": inr["id"]})).await);
+    let services_group = t.find_one("ItemGroup", json!({"group_name": "Services"})).await;
+    let nos = t.find_one("Uom", json!({"uom_name": "Nos"})).await;
+    let item = |code: &str| json!({"item_code": code, "item_name": code, "item_group": services_group["id"], "stock_uom": nos["id"], "is_stock_item": false});
+    let facial_item = uid(&t.insert(&a, "Item", item("FACIAL")).await);
+    let ship = uid(&t.insert(&a, "Item", item("SHIP")).await);
+    let stores = t.find_one("Warehouse", json!({"warehouse_name": "Stores", "company": cid.to_string()})).await;
+    let selling = t.find_one("PriceList", json!({"price_list_name": "Standard Selling"})).await;
+    t.insert(
+        &a,
+        "StoreSettings",
+        json!({"store_name": "Owed", "company": cid.to_string(), "currency": inr["id"], "price_list": selling["id"], "fulfilment_warehouse": stores["id"],
+               "shipping_item": ship.to_string(), "payment_methods": [{"gateway": "fakepay", "label": "Card", "expiry_minutes": 30}], "store_url": "https://owed.test"}),
+    )
+    .await;
+    t.insert(
+        &a,
+        "BookingSettings",
+        json!({"company": cid.to_string(), "public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 30,
+               "bpay_payment_method": "fakepay"}),
+    )
+    .await;
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let mira =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Mira", "email": "mira@owed.test", "time_zone": "Asia/Kolkata", "working_hours": every})).await;
+    let facial = uid(&t
+        .insert(
+            &a,
+            "BookingService",
+            json!({"service_name": "Facial", "duration_minutes": 60, "price": "1000", "item": facial_item.to_string(), "location_type": "In Person",
+                   "staff": [{"staff": sid(&mira)}], "bpay_deposit_percent": "30", "bpay_refund_hours": 48, "bpay_keep_percent": "100"}),
+        )
+        .await);
+    let known = uid(&t.insert(&a, "Customer", json!({"customer_name": "Asha Rao", "customer_type": "Individual", "email": "asha@example.test"})).await);
+    let v = t
+        .book(json!({"service": facial.to_string(), "start_time": rfc(local(ist, day, "10:00")), "name": "Not Asha", "email": "asha@example.test"}))
+        .await
+        .expect("booked");
+    assert_eq!(v["booking"]["deposit"]["status"], json!("Initiated"), "a deposit is asked for");
+    let b = t.find_one("Booking", json!({"number": v["booking"]["number"]})).await;
+    let own = b["customer"].as_str().expect("a customer of their own").to_string();
+    assert_ne!(own, known.to_string());
+    let invoice = t.get("SalesInvoice", b["sales_invoice"].as_str().unwrap().parse().unwrap()).await;
+    assert_eq!(invoice["customer"], json!(own), "the deposit invoice is the guest's own customer's");
+    let on_known = |table: &'static str| {
+        let t = &t;
+        async move { t.scalar(&format!("select count(*) from {table} where tenant_id = $1 and customer = $2"), Some(known)).await }
+    };
+    assert_eq!((on_known("e_sales_invoice").await, on_known("e_booking").await), (0, 0), "nothing is owed by the existing customer");
 }
 
 #[test]
@@ -2503,4 +2646,749 @@ fn opener(url: &str) -> ferrum_kernel::vault::Opener {
         kdf: ferrum_kernel::vault::Kdf { m_kib: 64, t: 1, p: 1 },
         ..Default::default()
     }
+}
+
+#[test]
+fn priorities_end_to_end() {
+    run(priorities());
+}
+
+/// A guest who leaves the choice to the business gets the person with the higher priority while they are free;
+/// rows saved before priority and weight existed are placed by load, as before; only a manager sets them.
+async fn priorities() {
+    let t = boot("rank", &[]).await;
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let at = |hhmm: &str| local(ist, day, hhmm);
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let manager = t.user("manager@rank.test", &["Bookings Manager"]).await;
+    t.insert(
+        &manager,
+        "BookingSettings",
+        json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 30, "approval_required": false}),
+    )
+    .await;
+    let one =
+        |name: &str| json!({"display_name": name, "email": format!("{}@rank.test", name.to_lowercase()), "time_zone": "Asia/Kolkata", "working_hours": every});
+    let (ana, raj) = (uid(&t.insert(&manager, "BookingStaff", one("Ana")).await), uid(&t.insert(&manager, "BookingStaff", one("Raj")).await));
+    let svc = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Massage", "duration_minutes": 60, "price": "0", "staff": [{"staff": ana.to_string()}, {"staff": raj.to_string(), "priority": 1}]}),
+        )
+        .await);
+    let book = |hhmm: &'static str| {
+        let t = &t;
+        async move {
+            let v = t
+                .book(json!({"service": svc.to_string(), "staff": "any", "start_time": rfc(at(hhmm)), "name": "Guest", "email": "g@example.test"}))
+                .await
+                .expect("booked");
+            t.find_one("Booking", json!({"number": v["booking"]["number"]})).await["staff"].as_str().unwrap().parse::<Uuid>().unwrap()
+        }
+    };
+
+    // ───────────── the priority person while free, else the next ─────────────
+    assert_eq!(book("10:00").await, raj, "Raj has priority 1");
+    assert_eq!(book("11:00").await, raj, "still free: Raj again, though Ana has nothing that day");
+    t.insert(&manager, "StaffTimeOff", json!({"staff": raj.to_string(), "from_time": rfc(at("12:00")), "to_time": rfc(at("13:00"))})).await;
+    assert_eq!(book("12:00").await, ana, "Raj is off then");
+
+    // ───────────── rows saved before this release: null in both, placed by load as before ─────────────
+    let mut tx = t.k.db.tenant_tx(t.tenant).await.unwrap();
+    sqlx::query("update e_booking_service__staff set priority = null, weight = null where tenant_id = $1 and parent_id = $2")
+        .bind(t.tenant)
+        .bind(svc)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(book("14:00").await, ana, "Ana has one booking that day, Raj two: the least booked");
+
+    // ───────────── only a manager sets them ─────────────
+    let raj_user = t.user("raj@rank.test", &["Bookings User"]).await;
+    let refused =
+        t.k.update(
+            &raj_user,
+            "BookingService",
+            svc,
+            obj(json!({"staff": [{"staff": ana.to_string()}, {"staff": raj.to_string(), "priority": 100, "weight": 9}]})),
+            None,
+        )
+        .await;
+    assert!(refused.is_err(), "a Bookings User cannot");
+    t.update(&manager, "BookingService", svc, json!({"staff": [{"staff": ana.to_string(), "weight": 3}, {"staff": raj.to_string()}]})).await;
+    let rows = t
+        .texts(
+            "select coalesce(priority, -1) || '/' || coalesce(weight, -1) from e_booking_service__staff where tenant_id = $1 and parent_id = $2 order by idx",
+            Some(svc),
+        )
+        .await;
+    assert_eq!(rows, ["0/3", "0/1"], "a new row takes the defaults");
+}
+
+#[test]
+fn class_sessions_end_to_end() {
+    run(class_sessions());
+}
+
+/// The field a refusal names.
+fn refused_field(e: &Error) -> String {
+    match e {
+        Error::Validation(list) => list.first().map(|f| f.field.clone()).unwrap_or_default(),
+        other => format!("not a field error: {other:?}"),
+    }
+}
+
+/// A class session scheduled before anyone books it: it holds its teacher's time and its room, is what
+/// guests are offered, keeps its own seats, and nothing is double-booked when requests race.
+async fn class_sessions() {
+    let t = boot("yoga", &[]).await;
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let at = |hhmm: &str| local(ist, day, hhmm);
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let manager = t.user("manager@yoga.test", &["Bookings Manager"]).await;
+    t.insert(
+        &manager,
+        "BookingSettings",
+        json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60, "approval_required": false}),
+    )
+    .await;
+    let person =
+        |name: &str| json!({"display_name": name, "email": format!("{}@yoga.test", name.to_lowercase()), "time_zone": "Asia/Kolkata", "working_hours": every});
+    let asha = uid(&t.insert(&manager, "BookingStaff", person("Asha")).await);
+    let ben = uid(&t.insert(&manager, "BookingStaff", person("Ben")).await);
+    let cara = uid(&t.insert(&manager, "BookingStaff", person("Cara")).await);
+    let studio = uid(&t.insert(&manager, "BookingResource", json!({"resource_name": "Studio 1", "capacity": 1})).await);
+    let yoga = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Yoga", "duration_minutes": 60, "capacity": 10, "price": "0", "sessions_only": true,
+                   "staff": [{"staff": asha.to_string()}, {"staff": ben.to_string()}], "resources": [{"resource": studio.to_string()}]}),
+        )
+        .await);
+    let facial = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Facial", "duration_minutes": 60, "price": "0", "staff": [{"staff": asha.to_string()}, {"staff": ben.to_string()}]}),
+        )
+        .await);
+    let schedule = |who: Uuid, start: DateTime<Utc>, extra: Value| {
+        let (t, manager) = (&t, &manager);
+        async move {
+            let mut v = json!({"service": yoga.to_string(), "staff": who.to_string(), "start_time": rfc(start)});
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            t.k.insert(manager, "BookingSession", obj(v)).await
+        }
+    };
+
+    // ───────────── a session is scheduled, offered and booked ─────────────
+    let ses = schedule(asha, at("17:00"), json!({"capacity": 3, "resource": studio.to_string()})).await.expect("scheduled");
+    let key = ses["session_key"].as_str().unwrap().to_string();
+    assert_eq!(key, format!("s/{}", uid(&ses).simple()));
+    assert_eq!((ses["status"].clone(), ses["staff_name"].clone(), ses["service_name"].clone()), (json!("Scheduled"), json!("Asha"), json!("Yoga")));
+    assert_eq!(ses["end_time"], json!(rfc(at("18:00"))));
+    let slots = t.get_pub(&format!("/slots?service={yoga}&from={day}&to={day}&time_zone=Asia/Kolkata")).await;
+    let offered: Vec<(String, i64)> = slots["days"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|d| d["slots"].as_array().unwrap().iter())
+        .map(|s| (s["time"].as_str().unwrap().to_string(), s["seats_left"].as_i64().unwrap()))
+        .collect();
+    assert_eq!(offered, [("17:00".to_string(), 3)], "only the scheduled session, with its own seats");
+    let guest =
+        |n: &str| json!({"service": yoga.to_string(), "start_time": rfc(at("17:00")), "name": n, "email": format!("{}@example.test", n.to_lowercase())});
+    for n in ["Ann", "Bo"] {
+        let v = t.book(guest(n)).await.unwrap();
+        let b = t.find_one("Booking", json!({"number": v["booking"]["number"]})).await;
+        assert_eq!(
+            (b["session_key"].as_str().unwrap(), b["staff"].clone(), b["resource"].clone()),
+            (key.as_str(), json!(asha.to_string()), json!(studio.to_string()))
+        );
+    }
+    let refused = t.post_pub("/book", json!({"service": yoga.to_string(), "start_time": rfc(at("10:00")), "name": "Cy", "email": "cy@example.test"})).await;
+    assert!(refused.is_err(), "no session at 10:00: {refused:?}");
+
+    // ───────────── a scheduled session holds its teacher's time against other bookings ─────────────
+    let over = t
+        .k
+        .insert(&manager, "Booking", obj(json!({"service": facial.to_string(), "staff": asha.to_string(), "start_time": rfc(at("16:30")), "guest_name": "X"})))
+        .await
+        .unwrap_err();
+    assert!(matches!(over, Error::Conflict(_)), "{over:?}");
+
+    // ───────────── two requests race to schedule and to book the same time ─────────────
+    for round in 0..10i64 {
+        let start = local(ist, day + Duration::days(1 + round / 8), &format!("{:02}:00", 9 + round % 8));
+        let booking = t.k.insert(
+            &manager,
+            "Booking",
+            obj(json!({"service": facial.to_string(), "staff": ben.to_string(), "start_time": rfc(start), "guest_name": "Racer"})),
+        );
+        let (session, booking) = tokio::join!(schedule(ben, start, json!({})), booking);
+        assert_eq!(session.is_ok() as u8 + booking.is_ok() as u8, 1, "round {round}: exactly one ({session:?}, {booking:?})");
+    }
+
+    // ───────────── two sessions of one teacher cannot overlap ─────────────
+    let clash = schedule(asha, at("16:30"), json!({})).await.unwrap_err();
+    assert!(matches!(clash, Error::Conflict(_)), "{clash:?}");
+    let other = schedule(asha, at("11:00"), json!({})).await.expect("another time");
+    let mut tx = t.k.db.tenant_tx(t.tenant).await.unwrap();
+    let direct = sqlx::query("update e_booking_session set block_start = $3, block_end = $4 where tenant_id = $1 and id = $2")
+        .bind(t.tenant)
+        .bind(uid(&other))
+        .bind(at("17:30"))
+        .bind(at("18:30"))
+        .execute(&mut *tx)
+        .await;
+    assert!(direct.unwrap_err().to_string().contains("bookings_sessions_do_not_overlap"), "the database refuses it too");
+    drop(tx);
+
+    // ───────────── outside hours, on time off, not a class, not their service ─────────────
+    assert_eq!(refused_field(&schedule(asha, at("17:30"), json!({})).await.unwrap_err()), "start_time", "ends after 18:00");
+    t.insert(&manager, "StaffTimeOff", json!({"staff": asha.to_string(), "from_time": rfc(at("13:00")), "to_time": rfc(at("14:00"))})).await;
+    assert_eq!(refused_field(&schedule(asha, at("13:00"), json!({})).await.unwrap_err()), "start_time", "time off");
+    let not_class =
+        t.k.insert(&manager, "BookingSession", obj(json!({"service": facial.to_string(), "staff": asha.to_string(), "start_time": rfc(at("15:00"))}))).await;
+    assert_eq!(refused_field(&not_class.unwrap_err()), "service");
+    assert_eq!(refused_field(&schedule(cara, at("15:00"), json!({})).await.unwrap_err()), "staff", "Cara does not give Yoga");
+
+    // ───────────── seats, deletion and edits ─────────────
+    let sid_ = uid(&ses);
+    let low = t.k.update(&manager, "BookingSession", sid_, obj(json!({"capacity": 1})), None).await.unwrap_err();
+    assert_eq!(refused_field(&low), "capacity", "two seats are taken");
+    t.update(&manager, "BookingSession", sid_, json!({"capacity": 2})).await;
+    assert!(t.k.delete(&manager, "BookingSession", sid_, None).await.is_err(), "it has bookings");
+    let moved = t.k.update(&manager, "BookingSession", sid_, obj(json!({"start_time": rfc(at("15:00"))})), None).await;
+    assert!(moved.is_err(), "the time changes only by moving it");
+    let teacher = t.k.update(&manager, "BookingSession", sid_, obj(json!({"staff": ben.to_string()})), None).await;
+    assert!(teacher.is_err(), "the teacher too");
+    t.k.delete(&manager, "BookingSession", uid(&other), None).await.expect("an empty session can be deleted");
+
+    // ───────────── the last seat is not sold twice ─────────────
+    t.update(&manager, "BookingSession", sid_, json!({"capacity": 3})).await;
+    let (x, y) = tokio::join!(t.site("POST", "/book", Some(guest("Dee"))), t.site("POST", "/book", Some(guest("Eli"))));
+    assert_eq!([&x, &y].iter().filter(|r| r.as_ref().is_ok_and(|r| r.0 == 201)).count(), 1, "one of two gets the last seat: {x:?} {y:?}");
+    let mut late = guest("Fay");
+    late["waitlist"] = json!(true);
+    t.book(late).await.unwrap();
+    assert_eq!(t.find_one("Booking", json!({"guest_email": "fay@example.test"})).await["status"], json!("Waitlisted"));
+    assert_eq!(t.scalar("select coalesce(sum(seats), 0)::bigint from e_booking where tenant_id = $1 and session_key = (select session_key from e_booking_session where id = $2) and status = 'Confirmed'", Some(sid_)).await, 3);
+
+    // ───────────── only a manager schedules ─────────────
+    let ben_user = t.user("ben@yoga.test", &["Bookings User"]).await;
+    let asked =
+        t.k.insert(&ben_user, "BookingSession", obj(json!({"service": yoga.to_string(), "staff": ben.to_string(), "start_time": rfc(at("09:00"))}))).await;
+    assert!(matches!(asked, Err(Error::Forbidden(_))), "{asked:?}");
+    assert!(t.k.update(&ben_user, "BookingSession", sid_, obj(json!({"capacity": 9})), None).await.is_err());
+    assert!(t.k.delete(&ben_user, "BookingSession", sid_, None).await.is_err());
+}
+
+#[test]
+fn class_session_actions_end_to_end() {
+    run(class_session_actions());
+}
+
+/// A class session is cancelled, moved and repeated as one thing: every seat goes with it, each guest is told once,
+/// nothing lands on taken time, and a guest cancelling at the same moment is cancelled once.
+async fn class_session_actions() {
+    let t = boot("pilates", &["comms"]).await;
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let at = |hhmm: &str| local(ist, day, hhmm);
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let manager = t.user("manager@pilates.test", &["Bookings Manager"]).await;
+    t.insert(
+        &manager,
+        "BookingSettings",
+        json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60, "approval_required": false,
+               "cancellation_window_hours": 0, "reschedule_window_hours": 0}),
+    )
+    .await;
+    let person = |name: &str| json!({"display_name": name, "email": format!("{}@pilates.test", name.to_lowercase()), "time_zone": "Asia/Kolkata", "working_hours": every});
+    let asha = uid(&t.insert(&manager, "BookingStaff", person("Asha")).await);
+    let ben = uid(&t.insert(&manager, "BookingStaff", person("Ben")).await);
+    let room = |name: &str| json!({"resource_name": name, "capacity": 1});
+    let (one, two) = (uid(&t.insert(&manager, "BookingResource", room("Room 1")).await), uid(&t.insert(&manager, "BookingResource", room("Room 2")).await));
+    let pilates = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Pilates", "duration_minutes": 60, "capacity": 10, "price": "0", "sessions_only": true,
+                   "staff": [{"staff": asha.to_string()}, {"staff": ben.to_string()}],
+                   "resources": [{"resource": one.to_string()}, {"resource": two.to_string()}]}),
+        )
+        .await);
+    let facial = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Facial", "duration_minutes": 60, "price": "0", "staff": [{"staff": asha.to_string()}, {"staff": ben.to_string()}]}),
+        )
+        .await);
+    let schedule = |who: Uuid, start: DateTime<Utc>, extra: Value| {
+        let (t, manager) = (&t, &manager);
+        async move {
+            let mut v = json!({"service": pilates.to_string(), "staff": who.to_string(), "start_time": rfc(start)});
+            v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+            uid(&t.insert(manager, "BookingSession", v).await)
+        }
+    };
+    let book = |start: DateTime<Utc>, name: String, waitlist: bool| {
+        let t = &t;
+        async move {
+            let email = format!("{}@example.test", name.to_lowercase());
+            let v =
+                t.book(json!({"service": pilates.to_string(), "start_time": rfc(start), "name": name, "email": email, "waitlist": waitlist})).await.unwrap();
+            (uid(&t.find_one("Booking", json!({"number": v["booking"]["number"]})).await), v["token"].as_str().unwrap_or_default().to_string())
+        }
+    };
+    let cancels = |all: &[String]| all.iter().filter(|s| s.starts_with("Booking cancelled")).count();
+
+    // ───────────── cancelling a session cancels every seat and waitlist place, and tells each guest once ─────────────
+    let s1 = schedule(asha, at("10:00"), json!({"capacity": 3})).await;
+    let mut seats = Vec::new();
+    for n in ["Ann", "Bo", "Cy"] {
+        seats.push(book(at("10:00"), n.to_string(), false).await.0);
+    }
+    let (dee, _) = book(at("10:00"), "Dee".to_string(), true).await;
+    assert_eq!(t.get("Booking", dee).await["status"], json!("Waitlisted"));
+    t.maintain(Utc::now()).await;
+    let out = t.act(&manager, "BookingSession", s1, "cancel_session", json!({"reason": "Teacher unwell"})).await;
+    assert_eq!(out["cancelled"].as_array().unwrap().len(), 4, "{out}");
+    assert_eq!(out["cancelled"][0], json!(dee.to_string()), "the waitlist place first: no freed seat is offered to it");
+    for b in seats.iter().chain([&dee]) {
+        let b = t.get("Booking", *b).await;
+        assert_eq!(
+            (b["status"].clone(), b["cancellation_reason"].clone(), b["cancelled_by"].clone()),
+            (json!("Cancelled"), json!("Teacher unwell"), json!("Business"))
+        );
+    }
+    assert!(t.get("Booking", dee).await["confirmed_at"].is_null(), "nobody is promoted out of a cancelled session");
+    let s = t.get("BookingSession", s1).await;
+    assert_eq!((s["status"].clone(), s["cancellation_reason"].clone()), (json!("Cancelled"), json!("Teacher unwell")));
+    t.maintain(Utc::now()).await;
+    t.maintain(Utc::now()).await;
+    for email in ["ann@example.test", "bo@example.test", "cy@example.test"] {
+        assert_eq!(cancels(&subjects_of(&t, email).await), 1, "{email}: one cancellation, the second round sends none");
+    }
+    assert!(t.action(&manager, "BookingSession", s1, "cancel_session", json!({})).await.is_err(), "a cancelled session is not cancelled twice");
+    let gone = t.post_pub("/book", json!({"service": pilates.to_string(), "start_time": rfc(at("10:00")), "name": "Eli", "email": "eli@example.test"})).await;
+    assert!(gone.is_err(), "a cancelled session is not offered: {gone:?}");
+    let slots = t.get_pub(&format!("/slots?service={pilates}&from={day}&to={day}&time_zone=Asia/Kolkata")).await;
+    assert!(!all_starts(&slots).contains(&rfc(at("10:00"))));
+
+    // ───────────── moving a session moves every seat, half an hour onto its own old time ─────────────
+    let s2 = schedule(asha, at("12:00"), json!({"capacity": 2, "resource": one.to_string()})).await;
+    let key = t.get("BookingSession", s2).await["session_key"].as_str().unwrap().to_string();
+    let (eve, _) = book(at("12:00"), "Eve".to_string(), false).await;
+    let (fay, _) = book(at("12:00"), "Fay".to_string(), false).await;
+    let (gus, _) = book(at("12:00"), "Gus".to_string(), true).await;
+    t.maintain(Utc::now()).await;
+    let gus_mails = t.mails_to("gus@example.test").await.len();
+    let out = t.act(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("12:30"))})).await;
+    assert_eq!(out["moved"], json!(2));
+    for b in [eve, fay, gus] {
+        let b = t.get("Booking", b).await;
+        assert_eq!((b["start_time"].clone(), b["end_time"].clone(), b["session_key"].clone()), (json!(rfc(at("12:30"))), json!(rfc(at("13:30"))), json!(key)));
+    }
+    assert_eq!(t.get("Booking", eve).await["block_start"], json!(rfc(at("12:30"))));
+    assert_eq!(t.get("BookingSession", s2).await["start_time"], json!(rfc(at("12:30"))));
+    t.maintain(Utc::now()).await;
+    for email in ["eve@example.test", "fay@example.test"] {
+        assert_eq!(subjects_of(&t, email).await.iter().filter(|s| s.starts_with("Booking moved")).count(), 1, "{email}");
+    }
+    assert_eq!(t.mails_to("gus@example.test").await.len(), gus_mails, "the waitlist place moves silently");
+
+    // ───────────── refused moves change nothing ─────────────
+    let snapshot = || async {
+        let mut rows = vec![t.get("BookingSession", s2).await];
+        for b in [eve, fay, gus] {
+            rows.push(t.get("Booking", b).await);
+        }
+        let f = |r: &Doc, k: &str| r.get(k).cloned().unwrap_or_default();
+        rows.iter().map(|r| (f(r, "staff"), f(r, "start_time"), f(r, "resource"), f(r, "notice_version"))).collect::<Vec<_>>()
+    };
+    let before = snapshot().await;
+    t.insert(&manager, "Booking", json!({"service": facial.to_string(), "staff": asha.to_string(), "start_time": rfc(at("15:00")), "guest_name": "Hal"})).await;
+    let onto = t.action(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("15:00"))})).await.unwrap_err();
+    assert!(matches!(onto, Error::Conflict(_)), "onto another booking: {onto:?}");
+    t.insert(&manager, "StaffTimeOff", json!({"staff": asha.to_string(), "from_time": rfc(at("16:00")), "to_time": rfc(at("17:00"))})).await;
+    assert_eq!(refused_field(&t.action(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("16:00"))})).await.unwrap_err()), "start_time");
+    assert_eq!(refused_field(&t.action(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("20:00"))})).await.unwrap_err()), "start_time");
+    let past = rfc(Utc::now() - Duration::days(1));
+    assert_eq!(refused_field(&t.action(&manager, "BookingSession", s2, "move", json!({"start_time": past})).await.unwrap_err()), "start_time");
+    assert_eq!(snapshot().await, before, "session and seats exactly as before");
+
+    // ───────────── another teacher and room go to every seat; a taken room refuses ─────────────
+    let out =
+        t.act(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("12:30")), "staff": ben.to_string(), "resource": two.to_string()})).await;
+    assert_eq!(out["moved"], json!(2));
+    for b in [eve, fay] {
+        let b = t.get("Booking", b).await;
+        assert_eq!((b["staff"].clone(), b["staff_name"].clone(), b["resource"].clone()), (json!(ben.to_string()), json!("Ben"), json!(two.to_string())));
+    }
+    schedule(asha, at("14:00"), json!({"resource": one.to_string()})).await;
+    let before = snapshot().await;
+    let taken = t.action(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("14:00")), "resource": one.to_string()})).await.unwrap_err();
+    assert!(matches!(taken, Error::Conflict(_)), "Room 1 is held by Asha's 14:00: {taken:?}");
+    assert_eq!(snapshot().await, before);
+    let out = t.act(&manager, "BookingSession", s2, "move", json!({"start_time": rfc(at("12:30"))})).await;
+    assert_eq!(out["moved"], json!(0), "where it is: nothing changes");
+    assert_eq!(snapshot().await, before, "and nobody is told");
+
+    // ───────────── a guest cancelling while the session is cancelled: cancelled once ─────────────
+    let mut rounds = Vec::new();
+    for i in 0..10i64 {
+        let start = local(ist, day + Duration::days(1 + i / 8), &format!("{:02}:00", 9 + i % 8));
+        let session = schedule(ben, start, json!({})).await;
+        let (b, token) = book(start, format!("Racer{i}"), false).await;
+        rounds.push((session, b, token, format!("racer{i}@example.test")));
+    }
+    t.maintain(Utc::now()).await;
+    for (session, b, token, _) in &rounds {
+        let path = format!("/manage/{token}/cancel");
+        let guest = t.site("POST", &path, Some(json!({"reason": "Cannot come"})));
+        let business = t.action(&manager, "BookingSession", *session, "cancel_session", json!({"reason": "Closed"}));
+        let (guest, business) = tokio::join!(guest, business);
+        assert!(done_or_already(&guest), "{guest:?}");
+        assert!(business.is_ok(), "{business:?}");
+        assert_eq!(t.get("Booking", *b).await["status"], json!("Cancelled"));
+    }
+    t.maintain(Utc::now()).await;
+    for (_, _, _, email) in &rounds {
+        assert_eq!(cancels(&subjects_of(&t, email).await), 1, "{email}: one cancellation mail");
+    }
+
+    // ───────────── repeat schedules the weeks, whole or nothing ─────────────
+    let s4 = schedule(ben, at("17:00"), json!({})).await;
+    t.insert(
+        &manager,
+        "Booking",
+        json!({"service": facial.to_string(), "staff": ben.to_string(), "start_time": rfc(at("17:00") + Duration::days(14)), "guest_name": "Ivy"}),
+    )
+    .await;
+    let sessions = || t.scalar("select count(*) from e_booking_session where tenant_id = $1 and status = 'Scheduled' and $2::uuid is null", None);
+    let count = sessions().await;
+    let whole = t.action(&manager, "BookingSession", s4, "repeat", json!({"every": "week", "count": 4})).await.unwrap_err();
+    assert!(messages(&whole).contains(&(day + Duration::days(14)).to_string()), "names the date: {whole:?}");
+    assert_eq!(sessions().await, count, "nothing scheduled");
+    let out = t.act(&manager, "BookingSession", s4, "repeat", json!({"every": "week", "count": 4, "skip_conflicts": "Yes"})).await;
+    assert_eq!((out["scheduled"].as_array().unwrap().len(), out["skipped"].as_array().unwrap().len()), (2, 1), "{out}");
+    assert_eq!(sessions().await, count + 2);
+    let series = t.get("BookingSession", s4).await["series"].clone();
+    assert!(series.is_string());
+    let later: Uuid = out["scheduled"][0]["id"].as_str().unwrap().parse().unwrap();
+    assert_eq!(t.get("BookingSession", later).await["series"], series);
+
+    // ───────────── the same key answers once ─────────────
+    let s5 = schedule(asha, at("09:00") + Duration::days(20), json!({})).await;
+    let inv = || {
+        ferrum_kernel::capability::Invocation::new("bookings.booking_session.cancel_session", json!({"id": s5, "params": {"reason": "Once"}})).key("close-s5")
+    };
+    let first = t.k.invoke(&manager, inv()).await.expect("cancelled");
+    let again = t.k.invoke(&manager, inv()).await.expect("answered");
+    assert!(!first.repeated && again.repeated);
+    assert_eq!(again.result, first.result);
+
+    // ───────────── only a manager; the catalog lists the three with their contracts ─────────────
+    let ben_user = t.user("ben@pilates.test", &["Bookings User"]).await;
+    let s6 = schedule(ben, at("09:00") + Duration::days(21), json!({})).await;
+    for (name, params) in [
+        ("cancel_session", json!({})),
+        ("move", json!({"start_time": rfc(at("10:00") + Duration::days(21))})),
+        ("repeat", json!({"every": "week", "count": 2})),
+    ] {
+        assert!(t.action(&ben_user, "BookingSession", s6, name, params).await.is_err(), "{name}");
+        let cap = t.k.capability(&manager, &format!("bookings.booking_session.{name}")).expect(name);
+        assert_eq!(serde_json::to_value(cap.effect).unwrap(), json!("transactional_action"), "{name}");
+        assert!(!cap.completion.is_empty(), "{name}");
+    }
+    assert_eq!(t.get("BookingSession", s6).await["status"], json!("Scheduled"));
+}
+
+async fn subjects_of(t: &T, email: &str) -> Vec<String> {
+    t.mails_to(email).await.iter().map(|m| m["subject"].as_str().unwrap_or_default().to_string()).collect()
+}
+
+/// A guest's request that either did it or found it done.
+fn done_or_already(r: &Result<(u16, Value), Error>) -> bool {
+    match r {
+        Ok((status, _)) => *status == 200,
+        Err(e) => messages(e).contains("already"),
+    }
+}
+
+#[test]
+fn locations_end_to_end() {
+    run(locations());
+}
+
+/// Each place with its own people, rooms, services and opening days: a booking is at one location, with only that
+/// location's staff and rooms; a workspace without locations is as before.
+async fn locations() {
+    let t = boot("places", &[]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let d = Utc::now().with_timezone(&ist).date_naive() + Duration::days(3);
+    let at = |day: NaiveDate, hhmm: &str| local(ist, day, hhmm);
+    let every: Vec<Value> = WEEK.iter().map(|w| json!({"weekday": w, "start_time": "09:00", "end_time": "18:00"})).collect();
+    let manager = t.user("manager@places.test", &["Bookings Manager"]).await;
+    t.insert(
+        &manager,
+        "BookingSettings",
+        json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60, "approval_required": false}),
+    )
+    .await;
+    let person = |name: &str, extra: Value| {
+        let mut v = json!({"display_name": name, "email": format!("{}@places.test", name.to_lowercase()), "time_zone": "Asia/Kolkata", "working_hours": every});
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        v
+    };
+    let chen = uid(&t.insert(&manager, "BookingStaff", person("Chen", json!({}))).await);
+    let massage = uid(&t
+        .insert(&manager, "BookingService", json!({"service_name": "Massage", "duration_minutes": 60, "price": "0", "staff": [{"staff": chen.to_string()}]}))
+        .await);
+    let book = |body: Value| {
+        let t = &t;
+        async move {
+            let v = t.post_pub("/book", body).await?;
+            Ok::<Doc, Error>(t.find_one("Booking", json!({"number": v["booking"]["number"]})).await)
+        }
+    };
+    let guest = |svc: Uuid, start: DateTime<Utc>, extra: Value| {
+        let mut v = json!({"service": svc.to_string(), "start_time": rfc(start), "name": "Guest", "email": "guest@example.test"});
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        v
+    };
+
+    // ───────────── without locations nothing changes ─────────────
+    assert_eq!(t.get_pub("/services").await["locations"], json!([]));
+    let plain = book(guest(massage, at(d, "09:00"), json!({}))).await.expect("booked");
+    assert!(plain["booking_location"].is_null());
+
+    // ───────────── a location's own people ─────────────
+    let place = |name: &str, extra: Value| {
+        let mut v = json!({"location_name": name, "address": format!("1 {name} Road")});
+        v.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        v
+    };
+    let north = uid(&t.insert(&manager, "BookingLocation", place("North", json!({"time_zone": "Asia/Kolkata"}))).await);
+    let south = uid(&t.insert(&manager, "BookingLocation", place("South", json!({}))).await);
+    let bad = t.k.insert(&manager, "BookingLocation", obj(place("West", json!({"time_zone": "Mars/Base"})))).await.unwrap_err();
+    assert_eq!(refused_field(&bad), "time_zone");
+    let asha = uid(&t.insert(&manager, "BookingStaff", person("Asha", json!({"location": north.to_string()}))).await);
+    let ben = uid(&t.insert(&manager, "BookingStaff", person("Ben", json!({"location": south.to_string()}))).await);
+    t.update(
+        &manager,
+        "BookingService",
+        massage,
+        json!({"staff": [{"staff": asha.to_string()}, {"staff": ben.to_string()}, {"staff": chen.to_string()}],
+               "locations": [{"location": north.to_string()}, {"location": south.to_string()}]}),
+    )
+    .await;
+    let listing = t.get_pub("/services").await;
+    assert_eq!(listing["locations"].as_array().unwrap().len(), 2);
+    let svc = listing["services"].as_array().unwrap().iter().find(|s| s["name"] == json!("Massage")).unwrap().clone();
+    assert_eq!(svc["locations"].as_array().unwrap().len(), 2);
+    assert!(svc["staff"].as_array().unwrap().iter().any(|s| s["location"] == json!(north.to_string())));
+    let slots_at = |svc: Uuid, day: NaiveDate, loc: Uuid| {
+        let t = &t;
+        async move { t.get_pub(&format!("/slots?service={svc}&from={day}&to={day}&time_zone=Asia/Kolkata&location={loc}")).await }
+    };
+    let north_slots = slots_at(massage, d + Duration::days(1), north).await;
+    assert!(!times_for(&north_slots, &asha.to_string()).is_empty() && !times_for(&north_slots, &chen.to_string()).is_empty());
+    assert!(times_for(&north_slots, &ben.to_string()).is_empty(), "Ben works at South");
+    for i in 0..20i64 {
+        let day = d + Duration::days(1 + i / 18);
+        let start = at(day, &format!("{:02}:00", 9 + (i % 18) / 2));
+        let b = book(guest(massage, start, json!({"location": north.to_string()}))).await.expect("booked at North");
+        assert_ne!(b["staff"], json!(ben.to_string()), "booking {i} at North went to Ben");
+        assert_eq!((b["booking_location"].clone(), b["location"].clone()), (json!(north.to_string()), json!("1 North Road")), "the location's address");
+    }
+    let wrong = book(guest(massage, at(d + Duration::days(3), "10:00"), json!({"location": north.to_string(), "staff": ben.to_string()}))).await.unwrap_err();
+    assert_eq!(refused_field(&wrong), "staff", "Ben does not work at North");
+
+    // ───────────── chosen when there are two, filled in when there is one ─────────────
+    let ask = book(guest(massage, at(d + Duration::days(3), "11:00"), json!({}))).await.unwrap_err();
+    assert_eq!((refused_field(&ask), messages(&ask).contains("choose a location")), ("location".to_string(), true));
+    let bens = book(guest(massage, at(d + Duration::days(3), "11:00"), json!({"staff": ben.to_string()}))).await.expect("Ben's own location");
+    assert_eq!(bens["booking_location"], json!(south.to_string()));
+    let facial = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Facial", "duration_minutes": 60, "price": "0", "location_details": "Suite 4",
+                   "staff": [{"staff": asha.to_string()}, {"staff": ben.to_string()}], "locations": [{"location": south.to_string()}]}),
+        )
+        .await);
+    let one = book(guest(facial, at(d + Duration::days(3), "12:00"), json!({}))).await.expect("the only location");
+    assert_eq!((one["booking_location"].clone(), one["staff"].clone()), (json!(south.to_string()), json!(ben.to_string())));
+    assert_eq!(one["location"], json!("Suite 4"), "a service with an address of its own keeps it");
+
+    // ───────────── offered only where it says ─────────────
+    let elsewhere = book(guest(facial, at(d + Duration::days(3), "13:00"), json!({"location": north.to_string()}))).await.unwrap_err();
+    assert_eq!(refused_field(&elsewhere), "location");
+
+    // ───────────── a room belongs to its location ─────────────
+    let steam = uid(&t.insert(&manager, "BookingResource", json!({"resource_name": "Steam Room", "capacity": 1, "location": south.to_string()})).await);
+    let sauna = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Steam", "duration_minutes": 60, "price": "0", "staff": [{"staff": chen.to_string()}], "resources": [{"resource": steam.to_string()}]}),
+        )
+        .await);
+    let day4 = d + Duration::days(4);
+    assert!(all_starts(&slots_at(sauna, day4, north).await).is_empty(), "North has no steam room");
+    let north_steam = book(guest(sauna, at(day4, "10:00"), json!({"location": north.to_string()}))).await;
+    assert!(north_steam.is_err(), "{north_steam:?}");
+    let south_steam = book(guest(sauna, at(day4, "10:00"), json!({"location": south.to_string()}))).await.expect("South has it");
+    assert_eq!(south_steam["resource"], json!(steam.to_string()));
+
+    // ───────────── a location's opening days ─────────────
+    let day5 = d + Duration::days(5);
+    let at_north = book(guest(massage, at(day5, "10:00"), json!({"location": north.to_string(), "staff": asha.to_string()}))).await.expect("booked");
+    let at_south = book(guest(massage, at(day5, "10:00"), json!({"location": south.to_string(), "staff": ben.to_string()}))).await.expect("booked");
+    let h = json!([["09:00", "18:00"]]);
+    t.k.put_logic_calendar(
+        &a,
+        "north",
+        &json!({"zone": "Asia/Kolkata", "weekends": [], "holidays": [day5.to_string()],
+                "hours": {"mon": h, "tue": h, "wed": h, "thu": h, "fri": h, "sat": h, "sun": h}, "exceptions": {}}),
+    )
+    .await
+    .unwrap();
+    t.update(&manager, "BookingLocation", north, json!({"calendar": "north"})).await;
+    assert!(all_starts(&slots_at(massage, day5, north).await).is_empty(), "North is closed that day");
+    assert!(!all_starts(&slots_at(massage, day5, south).await).is_empty(), "South is open");
+    t.maintain(Utc::now()).await;
+    assert_eq!(t.get("Booking", uid(&at_north)).await["closed_clash"], json!(true));
+    assert_eq!(t.get("Booking", uid(&at_south)).await["closed_clash"], json!(false));
+
+    // ───────────── moved and promoted bookings stay at their location ─────────────
+    let moved = t.act(&manager, "Booking", uid(&at_south), "reschedule", json!({"start_time": rfc(at(day5, "15:00"))})).await;
+    assert_eq!(moved["booking_location"], json!(south.to_string()));
+    let edit = t.k.update(&manager, "Booking", uid(&at_south), obj(json!({"booking_location": north.to_string()})), None).await.unwrap_err();
+    assert_eq!(refused_field(&edit), "booking_location", "a booking does not change place by an edit");
+    let yoga = uid(&t
+        .insert(
+            &manager,
+            "BookingService",
+            json!({"service_name": "Yoga", "duration_minutes": 60, "capacity": 2, "price": "0", "staff": [{"staff": chen.to_string()}]}),
+        )
+        .await);
+    let day6 = d + Duration::days(6);
+    let first = book(guest(yoga, at(day6, "16:00"), json!({"location": south.to_string(), "seats": 2}))).await.expect("seats");
+    let waiting = book(guest(yoga, at(day6, "16:00"), json!({"location": south.to_string(), "waitlist": true}))).await.expect("waitlisted");
+    assert_eq!(waiting["status"], json!("Waitlisted"));
+    t.act(&manager, "Booking", uid(&first), "cancel_booking", json!({})).await;
+    let promoted = t.get("Booking", uid(&waiting)).await;
+    assert_eq!((promoted["status"].clone(), promoted["booking_location"].clone()), (json!("Confirmed"), json!(south.to_string())));
+
+    // ───────────── a class session is at a location, offered only there ─────────────
+    let day7 = d + Duration::days(7);
+    let ses = t
+        .insert(
+            &manager,
+            "BookingSession",
+            json!({"service": yoga.to_string(), "staff": chen.to_string(), "start_time": rfc(at(day7, "12:00")), "booking_location": north.to_string()}),
+        )
+        .await;
+    assert_eq!(ses["booking_location"], json!(north.to_string()));
+    let north_yoga = slots_at(yoga, day7, north).await;
+    assert!(all_starts(&north_yoga).contains(&rfc(at(day7, "12:00"))));
+    assert!(!all_starts(&slots_at(yoga, day7, south).await).contains(&rfc(at(day7, "12:00"))), "the North session holds Chen's time at South");
+    let away =
+        t.k.insert(
+            &manager,
+            "BookingSession",
+            obj(json!({"service": yoga.to_string(), "staff": ben.to_string(), "start_time": rfc(at(day7, "15:00")), "booking_location": north.to_string()})),
+        )
+        .await;
+    assert!(away.is_err(), "Ben does not give Yoga or work at North: {away:?}");
+
+    // ───────────── an inactive location is not offered, and its bookings stay ─────────────
+    t.update(&manager, "BookingLocation", south, json!({"active": false})).await;
+    assert_eq!(t.get_pub("/services").await["locations"].as_array().unwrap().len(), 1);
+    let closed = book(guest(massage, at(d + Duration::days(8), "10:00"), json!({"location": south.to_string()}))).await.unwrap_err();
+    assert_eq!(refused_field(&closed), "location");
+    let kept = t.get("Booking", uid(&bens)).await;
+    assert_eq!((kept["status"].clone(), kept["booking_location"].clone()), (json!("Confirmed"), json!(south.to_string())));
+
+    // ───────────── only a manager; find_slots in the catalog ─────────────
+    let asha_user = t.user("asha@places.test", &["Bookings User"]).await;
+    assert!(t.k.insert(&asha_user, "BookingLocation", obj(place("East", json!({})))).await.is_err());
+    assert!(t.k.update(&asha_user, "BookingStaff", asha, obj(json!({"location": south.to_string()})), None).await.is_err());
+    let cap = t.k.capability(&manager, "bookings.booking_service.find_slots").expect("find_slots");
+    assert_eq!(serde_json::to_value(cap.effect).unwrap(), json!("query"));
+    let found = t
+        .act(&manager, "BookingService", massage, "find_slots", json!({"from": day4.to_string(), "to": day4.to_string(), "location": north.to_string()}))
+        .await;
+    assert!(times_for(&found, &ben.to_string()).is_empty() && !times_for(&found, &asha.to_string()).is_empty());
+}
+
+#[test]
+fn a_report_refuses_grouping_by_a_field_the_caller_cannot_read() {
+    run(report_readability());
+}
+
+/// A report groups, defaults and shows columns only by fields the caller may read (S9 K0-7): a grouping by a hidden
+/// field is refused, a hidden default falls back to the next readable grouping, and a column of a hidden field is left
+/// out with its values.
+async fn report_readability() {
+    let t = boot("readable", &[]).await;
+    let a = t.admin.clone();
+    let ist: Tz = "Asia/Kolkata".parse().unwrap();
+    let day = Utc::now().with_timezone(&ist).date_naive() + Duration::days(2);
+    let every: Vec<Value> = WEEK.iter().map(|d| json!({"weekday": d, "start_time": "09:00", "end_time": "18:00"})).collect();
+    t.insert(&a, "BookingSettings", json!({"public_page": true, "min_notice_minutes": 0, "max_advance_days": 60, "slot_interval_minutes": 60})).await;
+    let staff =
+        t.insert(&a, "BookingStaff", json!({"display_name": "Noor", "email": "noor@readable.test", "time_zone": "Asia/Kolkata", "working_hours": every})).await;
+    let svc = uid(&t.insert(&a, "BookingService", json!({"service_name": "Visit", "duration_minutes": 60, "staff": [{"staff": sid(&staff)}]})).await);
+    t.book(json!({"service": svc.to_string(), "start_time": rfc(local(ist, day, "10:00")), "name": "Guest", "email": "g@example.test"})).await.unwrap();
+    // A role that reads bookings but not who booked from where, what they were for, or what they cost.
+    let rule = ferrum_meta::PermissionDef {
+        entity: "Booking".into(),
+        read: true,
+        hide: vec!["source".into(), "service_name".into(), "amount".into()],
+        ..Default::default()
+    };
+    t.k.set_role_permission(&a, "Booking Viewer", &rule).await.unwrap();
+    let viewer = t.user("viewer@readable.test", &["Booking Viewer"]).await;
+    let range = [("from_date", day.to_string()), ("to_date", day.to_string())];
+    let run = |ctx: &Ctx, name: &'static str, group: Option<&'static str>| {
+        let (t, ctx, range) = (&t, ctx.clone(), range.clone());
+        async move {
+            let mut p: HashMap<String, String> = range.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
+            if let Some(g) = group {
+                p.insert("group_by".into(), g.into());
+            }
+            ferrum_domain::reports::run(&t.k, &ctx, name, &p).await
+        }
+    };
+
+    // ───────────── a grouping by a field the caller cannot read is refused ─────────────
+    let refused = run(&viewer, "bookings_summary", Some("Source")).await.unwrap_err();
+    assert_eq!(refused.code(), "forbidden", "{refused:?}");
+    assert!(run(&viewer, "bookings_attendance", Some("Service")).await.is_err());
+    assert!(run(&viewer, "bookings_summary", Some("Staff")).await.is_ok(), "a field they read");
+    assert!(run(&a, "bookings_summary", Some("Source")).await.is_ok(), "the administrator reads it");
+
+    // ───────────── a default the caller cannot read falls back to a readable grouping ─────────────
+    let mine = run(&viewer, "bookings_summary", None).await.unwrap();
+    assert_eq!(mine["meta"]["group_by"], json!("Staff"), "Service is hidden: the next grouping they read");
+    assert_eq!(run(&a, "bookings_summary", None).await.unwrap()["meta"]["group_by"], json!("Service"));
+
+    // ───────────── a column of a hidden field is left out, with its values ─────────────
+    let names = |v: &Value| v["columns"].as_array().unwrap().iter().map(|c| c["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert!(!names(&mine).contains(&"amount".to_string()), "{:?}", names(&mine));
+    assert!(mine["rows"].as_array().unwrap().iter().all(|r| r.get("amount").is_none()) && mine["totals"].get("amount").is_none(), "{mine}");
+    let full = run(&a, "bookings_summary", None).await.unwrap();
+    assert!(names(&full).contains(&"amount".to_string()) && full["rows"][0].get("amount").is_some());
 }

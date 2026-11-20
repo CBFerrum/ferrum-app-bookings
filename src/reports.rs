@@ -8,7 +8,7 @@ use crate::engine::{self, Span};
 use async_trait::async_trait;
 use chrono::NaiveDate;
 use chrono_tz::Tz;
-use ferrum_domain::reports::{Params, ReportCompany, ReportSource, col, param_def, period, read_tx};
+use ferrum_domain::reports::{Params, ReportCompany, ReportSource, col, param_def, period, read_tx, readable_choice, readable_columns, readable_default};
 use ferrum_domain::util::money;
 use ferrum_kernel::{Action, Ctx, Error, Kernel, Result, Tx, row_scope};
 use rust_decimal::Decimal;
@@ -31,6 +31,53 @@ fn group_param(options: &[&str], default: &str) -> Value {
 fn grouping(p: &Params<'_>, options: &[&'static str], default: &'static str) -> Result<&'static str> {
     let want = p.str("group_by").unwrap_or(default);
     options.iter().copied().find(|o| o.eq_ignore_ascii_case(want)).ok_or_else(|| Error::field("group_by", format!("use one of: {}", options.join(", "))))
+}
+
+/// The field of Booking a grouping reads.
+fn field_of(label: &str) -> &'static str {
+    match label {
+        "Service" => "service_name",
+        "Staff" => "staff_name",
+        "Status" => "status",
+        "Source" => "source",
+        _ => "start_time",
+    }
+}
+
+/// [`grouping`] as the caller may read it: a grouping by a field they cannot read is refused; with none asked for,
+/// the default when they read it, else the first of the others they read.
+fn readable_grouping(ctx: &Ctx, p: &Params<'_>, options: &[&'static str], default: &'static str) -> Result<&'static str> {
+    if p.str("group_by").is_some() {
+        let label = grouping(p, options, default)?;
+        readable_choice(ctx, "Booking", field_of(label))?;
+        return Ok(label);
+    }
+    let order: Vec<&'static str> = std::iter::once(default).chain(options.iter().copied().filter(|o| *o != default)).collect();
+    let fields: Vec<&str> = order.iter().map(|l| field_of(l)).collect();
+    readable_default(ctx, "Booking", &fields)
+        .and_then(|f| order.iter().copied().find(|l| field_of(l) == f))
+        .ok_or_else(|| Error::Forbidden("you cannot read any field this report groups by".into()))
+}
+
+/// `columns` (each with the `field` of `entity` it reads) as the caller may read them, and the values of the ones left
+/// out taken from `rows` and `totals`.
+fn readable(ctx: &Ctx, entity: &str, columns: Vec<Value>, rows: &mut [Value], totals: &mut Value) -> Vec<Value> {
+    let kept = readable_columns(ctx, entity, columns.clone());
+    for gone in columns.iter().filter(|c| !kept.contains(c)) {
+        let name = gone["name"].as_str().unwrap_or_default();
+        for r in rows.iter_mut().chain(std::iter::once(&mut *totals)) {
+            if let Some(o) = r.as_object_mut() {
+                o.remove(name);
+            }
+        }
+    }
+    kept
+}
+
+/// A column that reads `field`.
+fn reads(mut c: Value, field: &str) -> Value {
+    c["field"] = json!(field);
+    c
 }
 
 fn zone(ctx: &Ctx) -> Tz {
@@ -77,7 +124,7 @@ type SummaryRow = (String, i64, i64, i64, i64, i64, i64, i64, i64, Decimal, i64)
 
 async fn summary(ctx: &Ctx, p: &Params<'_>, tx: &mut Tx) -> Result<Value> {
     let (from, to, window) = span(ctx, p)?;
-    let label = grouping(p, &SUMMARY_GROUPS, "Service")?;
+    let label = readable_grouping(ctx, p, &SUMMARY_GROUPS, "Service")?;
     let tz = zone(ctx);
     let mut qb = QueryBuilder::new("select ");
     push_group(&mut qb, label, tz.name());
@@ -94,7 +141,7 @@ async fn summary(ctx: &Ctx, p: &Params<'_>, tx: &mut Tx) -> Result<Value> {
     let mut totals = [0i64; 8];
     let mut total_amount = Decimal::ZERO;
     let mut invoiced_total = 0i64;
-    let rows: Vec<Value> = data
+    let mut rows: Vec<Value> = data
         .into_iter()
         .map(|(group, a, b, c, d, e, f, g, h, amount, invoiced)| {
             let mut row = json!({"group": group});
@@ -112,10 +159,24 @@ async fn summary(ctx: &Ctx, p: &Params<'_>, tx: &mut Tx) -> Result<Value> {
     let mut t: serde_json::Map<String, Value> = keys.iter().zip(totals).map(|(k, v)| (k.to_string(), json!(v))).collect();
     t.insert("amount".into(), money(total_amount));
     t.insert("invoiced".into(), json!(invoiced_total));
+    let mut t = Value::Object(t);
+    let status = |name: &str, label: &str| reads(col(name, label, "int"), "status");
+    let columns = vec![
+        reads(col("group", label, "data"), field_of(label)),
+        col("bookings", "Bookings", "int"),
+        reads(col("seats", "Seats Taken", "int"), "seats"),
+        status("pending", "Pending"),
+        status("confirmed", "Confirmed"),
+        status("completed", "Completed"),
+        status("no_show", "No Show"),
+        status("cancelled", "Cancelled"),
+        status("waitlisted", "Waitlisted"),
+        reads(col("amount", "Booked Amount", "currency"), "amount"),
+        reads(col("invoiced", "Invoiced", "int"), "sales_invoice"),
+    ];
+    let columns = readable(ctx, "Booking", columns, &mut rows, &mut t);
     Ok(json!({
-        "columns": [col("group", label, "data"), col("bookings", "Bookings", "int"), col("seats", "Seats Taken", "int"), col("pending", "Pending", "int"),
-            col("confirmed", "Confirmed", "int"), col("completed", "Completed", "int"), col("no_show", "No Show", "int"), col("cancelled", "Cancelled", "int"),
-            col("waitlisted", "Waitlisted", "int"), col("amount", "Booked Amount", "currency"), col("invoiced", "Invoiced", "int")],
+        "columns": columns,
         "rows": rows,
         "totals": t,
         "meta": meta(from, to, Some(label), tz),
@@ -124,7 +185,7 @@ async fn summary(ctx: &Ctx, p: &Params<'_>, tx: &mut Tx) -> Result<Value> {
 
 async fn attendance(ctx: &Ctx, p: &Params<'_>, tx: &mut Tx) -> Result<Value> {
     let (from, to, window) = span(ctx, p)?;
-    let label = grouping(p, &ATTENDANCE_GROUPS, "Month")?;
+    let label = readable_grouping(ctx, p, &ATTENDANCE_GROUPS, "Month")?;
     let tz = zone(ctx);
     let mut qb = QueryBuilder::new("select ");
     push_group(&mut qb, label, tz.name());
@@ -144,18 +205,28 @@ async fn attendance(ctx: &Ctx, p: &Params<'_>, tx: &mut Tx) -> Result<Value> {
         r
     };
     let mut sum = (0, 0, 0, 0);
-    let rows: Vec<Value> = data
+    let mut rows: Vec<Value> = data
         .into_iter()
         .map(|(g, n, done, absent, cancelled)| {
             sum = (sum.0 + n, sum.1 + done, sum.2 + absent, sum.3 + cancelled);
             row(Some(g), (n, done, absent, cancelled))
         })
         .collect();
+    let mut totals = row(None, sum);
+    let columns = vec![
+        reads(col("group", label, "data"), field_of(label)),
+        col("bookings", "Bookings", "int"),
+        reads(col("completed", "Completed", "int"), "status"),
+        reads(col("no_show", "No Show", "int"), "status"),
+        reads(col("cancelled", "Cancelled", "int"), "status"),
+        reads(col("cancellation_rate", "Cancellation Rate %", "percent"), "status"),
+        reads(col("no_show_rate", "No-Show Rate % (of attended or missed)", "percent"), "status"),
+    ];
+    let columns = readable(ctx, "Booking", columns, &mut rows, &mut totals);
     Ok(json!({
-        "columns": [col("group", label, "data"), col("bookings", "Bookings", "int"), col("completed", "Completed", "int"), col("no_show", "No Show", "int"),
-            col("cancelled", "Cancelled", "int"), col("cancellation_rate", "Cancellation Rate %", "percent"), col("no_show_rate", "No-Show Rate % (of attended or missed)", "percent")],
+        "columns": columns,
         "rows": rows,
-        "totals": row(None, sum),
+        "totals": totals,
         "meta": meta(from, to, Some(label), tz),
     }))
 }
@@ -209,7 +280,7 @@ async fn utilization(ctx: &Ctx, p: &Params<'_>, tx: &mut Tx) -> Result<Value> {
         }
     }
     let (mut all_available, mut all_booked, mut all_sessions) = (0i64, 0i64, 0i64);
-    let rows: Vec<Value> = staff
+    let mut rows: Vec<Value> = staff
         .iter()
         .map(|s| {
             let away: Vec<Span> = off.iter().filter(|o| o.0 == s.id).map(|o| Span::new(o.1, o.2)).collect();
@@ -225,13 +296,37 @@ async fn utilization(ctx: &Ctx, p: &Params<'_>, tx: &mut Tx) -> Result<Value> {
                 "free_minutes": (available - minutes).max(0), "sessions": count, "utilization": pct(minutes, available)})
         })
         .collect();
+    let mut totals = json!({"available_minutes": all_available, "booked_minutes": all_booked, "free_minutes": (all_available - all_booked).max(0),
+        "sessions": all_sessions, "utilization": pct(all_booked, all_available)});
+    // The staff member's own fields, then what their bookings' times give.
+    let mut columns = readable(
+        ctx,
+        "BookingStaff",
+        vec![
+            reads(col("staff", "Staff", "data"), "display_name"),
+            reads(col("time_zone", "Time Zone", "data"), "time_zone"),
+            reads(col("available_minutes", "Available Minutes", "int"), "working_hours"),
+        ],
+        &mut rows,
+        &mut totals,
+    );
+    let times = |name: &str, label: &str, kind: &str| reads(col(name, label, kind), "start_time");
+    columns.extend(readable(
+        ctx,
+        "Booking",
+        vec![
+            times("booked_minutes", "Booked Minutes", "int"),
+            times("free_minutes", "Free Minutes", "int"),
+            times("sessions", "Bookings / Sessions", "int"),
+            times("utilization", "Utilization %", "percent"),
+        ],
+        &mut rows,
+        &mut totals,
+    ));
     Ok(json!({
-        "columns": [col("staff", "Staff", "data"), col("time_zone", "Time Zone", "data"), col("available_minutes", "Available Minutes", "int"),
-            col("booked_minutes", "Booked Minutes", "int"), col("free_minutes", "Free Minutes", "int"), col("sessions", "Bookings / Sessions", "int"),
-            col("utilization", "Utilization %", "percent")],
+        "columns": columns,
         "rows": rows,
-        "totals": {"available_minutes": all_available, "booked_minutes": all_booked, "free_minutes": (all_available - all_booked).max(0),
-            "sessions": all_sessions, "utilization": pct(all_booked, all_available)},
+        "totals": totals,
         "meta": meta(from, to, None, zone(ctx)),
     }))
 }

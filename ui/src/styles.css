@@ -173,6 +173,15 @@
   -webkit-line-clamp: 2;
 }
 
+.gb-place {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0;
+  color: var(--muted-foreground);
+}
+
 .gb-facts {
   display: flex;
   flex-wrap: wrap;
@@ -1386,6 +1395,23 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.5rem;
+}
+
+/* a class session's dialogs */
+
+.bk-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2rem;
+}
+
+.bk-skipped {
+  margin: 0;
+  padding-inline-start: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
 }
 
 .bk-center {

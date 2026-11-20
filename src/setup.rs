@@ -40,11 +40,42 @@ async fn calendar_error(hc: &mut HookCtx<'_>, name: Option<&str>, field: &str) -
         .then(|| FieldError::new(field, "is not the name of a working calendar (Admin, Calendars)")))
 }
 
+/// A placement refusal as the public routes and `find_slots` name it: on `location`.
+pub(crate) fn as_location(e: Error) -> Error {
+    match e {
+        Error::Validation(fields) => Error::Validation(
+            fields
+                .into_iter()
+                .map(|mut f| {
+                    if f.field == "booking_location" {
+                        f.field = "location".into();
+                    }
+                    f
+                })
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
 fn param(params: &Value, key: &str) -> Option<String> {
     match params.get(key)? {
         Value::String(v) => Some(v.trim().to_string()).filter(|v| !v.is_empty()),
         Value::Number(n) => Some(n.to_string()),
         _ => None,
+    }
+}
+
+pub struct LocationHook;
+
+#[async_trait]
+impl DocHook for LocationHook {
+    async fn validate(&self, hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
+        let mut errors: Vec<FieldError> = calendar_error(hc, s(doc, "calendar"), "calendar").await?.into_iter().collect();
+        if s(doc, "time_zone").is_some_and(|z| calendar::zone(z).is_none()) {
+            errors.push(FieldError::new("time_zone", "is not an IANA time zone (e.g. Europe/London)"));
+        }
+        if errors.is_empty() { Ok(()) } else { Err(Error::Validation(errors)) }
     }
 }
 
@@ -79,8 +110,10 @@ impl DocHook for ServiceHook {
         }
         let st = settings::load(hc.tx, tenant).await?;
         let default_tz = calendar::zone(&hc.ctx.schema.timezone).unwrap_or(Tz::UTC);
-        let q = slots::parse(|k| param(params, k), default_tz)?;
+        let mut q = slots::parse(|k| param(params, k), default_tz)?;
         let moving = param(params, "booking").map(|v| v.parse::<Uuid>().map_err(|_| Error::field("booking", "is not a booking id"))).transpose()?;
+        let asked = param(params, "location").map(|v| v.parse::<Uuid>().map_err(|_| Error::field("location", "is not a location id"))).transpose()?;
+        q.place = calendar::place(hc.tx, tenant, &svc, asked, q.staff).await.map_err(as_location)?;
         let rules = Rules { earliest: Some(Utc::now()), latest: None, on_grid: true };
         Ok(Some(slots::find(hc.tx, tenant, &svc, &st, &q, rules, moving, false).await?))
     }
@@ -151,7 +184,7 @@ impl DocHook for StaffHook {
         if old.get("email") == doc.get("email") && old.get("display_name") == doc.get("display_name") {
             return Ok(());
         }
-        for table in ["e_booking", "e_staff_time_off"] {
+        for table in ["e_booking", "e_staff_time_off", "e_booking_session"] {
             sqlx::query(sqlx::AssertSqlSafe(format!("update {table} set staff_email = $3, staff_name = $4 where tenant_id = $1 and staff = $2")))
                 .bind(hc.ctx.tenant)
                 .bind(doc_id(doc)?)

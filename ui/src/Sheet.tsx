@@ -10,10 +10,11 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router";
 import { api, docPath, errorMessage, formatMoment, t, isolate } from "@ferrum/client";
 import { Alert, Badge, Button, confirmDialog, Dialog, Field, Menu, MenuItem, Spinner, TabPanel, Tabs, toast } from "@ferrum/kit";
-import { type Bk, nextSteps, type Step, tone } from "./board";
-import { act } from "./data";
+import { type Bk, type Block, nextSteps, type Step, tone } from "./board";
+import { act, type Meta } from "./data";
 import { priceText } from "./guest/booking";
 import { Reschedule } from "./Reschedule";
+import { CancelSession, MoveSession, RepeatSession } from "./Sessions";
 import { closedNote, Failed, Loading } from "./states";
 import { clockText, dayOf, dayText } from "./zone";
 
@@ -453,23 +454,29 @@ export function BookingSheet({ id, zone, hour12, canWrite, onClose, onChanged }:
   );
 }
 
-/** A class session: who has a seat, and a way into each booking. */
-export function SessionSheet({ bookings, zone, hour12, onOpen, onClose }: { bookings: Bk[]; zone: string; hour12: boolean; onOpen: (id: string) => void; onClose: () => void }) {
+/** A class session: who has a seat, a way into each booking, and for a scheduled one the three things done
+ *  to it as a whole (to a person who may change sessions). */
+export function SessionSheet({ block, meta, zone, hour12, canWrite, onOpen, onClose, onChanged }: { block: Block; meta: Meta; zone: string; hour12: boolean; canWrite: boolean; onOpen: (id: string) => void; onClose: () => void; onChanged: () => void }) {
   const head = useRef<HTMLHeadingElement>(null);
   useEffect(() => head.current?.focus(), []);
+  const [dialog, setDialog] = useState<"move" | "repeat" | "cancel" | null>(null);
+  const { bookings, session: ses } = block;
   const first = bookings[0];
-  const start = Date.parse(first.start_time);
-  const end = Date.parse(first.end_time);
-  const seats = bookings.reduce((n, x) => n + (x.seats ?? 1), 0);
+  const title = ses?.service_name ?? first?.service_name ?? block.title;
+  const teacher = ses?.staff_name ?? first?.staff_name ?? "";
+  const done = () => {
+    setDialog(null);
+    onChanged();
+  };
   return (
-    <aside className="bk-sheet" aria-label={t("Class")} onKeyDown={(e) => e.key === "Escape" && onClose()}>
+    <aside className="bk-sheet" aria-label={t("Class")} onKeyDown={(e) => e.key === "Escape" && !dialog && onClose()}>
       <header className="bk-sheet-head">
         <div>
           <h2 ref={head} tabIndex={-1}>
-            {isolate(first.service_name ?? "")}
+            {isolate(title)}
           </h2>
           <p className="muted">
-            {isolate(dayText(dayOf(start, zone), { weekday: "long", day: "numeric", month: "long" }))}, {isolate(clockText(start, zone, hour12))} – {isolate(clockText(end, zone, hour12))} {t("· with {staff_name}", { staff_name: first.staff_name ?? "" })}
+            {isolate(dayText(dayOf(block.start, zone), { weekday: "long", day: "numeric", month: "long" }))}, {isolate(clockText(block.start, zone, hour12))} – {isolate(clockText(block.end, zone, hour12))} {t("· with {staff_name}", { staff_name: teacher })}
           </p>
         </div>
         <button type="button" className="icon-btn" aria-label={t("Close")} title={t("Close (Esc)")} onClick={onClose}>
@@ -477,23 +484,49 @@ export function SessionSheet({ bookings, zone, hour12, onOpen, onClose }: { book
         </button>
       </header>
       <div className="bk-sheet-body">
-        <p className="bk-big">
-          {seats} {(seats === 1 ? t("seat taken") : t("seats taken"))}
-        </p>
-        <ul className="bk-attendees">
-          {bookings.map((x) => (
-            <li key={x.id}>
-              <button type="button" className="bk-attendee" onClick={() => onOpen(x.id)}>
-                <span>
-                  <strong>{isolate(x.guest_name ?? "")}</strong>
-                  {(x.seats ?? 1) > 1 && <span className="faint"> {t("· {seats} seats", { seats: x.seats ?? "" })}</span>}
-                </span>
-                <Badge tone={tone(x.status)}>{isolate(x.status)}</Badge>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <p className="bk-big">{t("{seats} of {capacity} seats taken", { seats: block.seats, capacity: block.capacity })}</p>
+        {bookings.length ? (
+          <ul className="bk-attendees">
+            {bookings.map((x) => (
+              <li key={x.id}>
+                <button type="button" className="bk-attendee" onClick={() => onOpen(x.id)}>
+                  <span>
+                    <strong>{isolate(x.guest_name ?? "")}</strong>
+                    {(x.seats ?? 1) > 1 && <span className="faint"> {t("· {seats} seats", { seats: x.seats ?? "" })}</span>}
+                  </span>
+                  <Badge tone={tone(x.status)}>{isolate(x.status)}</Badge>
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted">{t("Nobody has booked yet.")}</p>
+        )}
       </div>
+      {ses?.status === "Scheduled" && canWrite && (
+        <footer className="bk-sheet-actions">
+          <Button onClick={() => setDialog("move")}>{t("Move")}</Button>
+          <Button onClick={() => setDialog("repeat")} disabled={!!ses.series} title={ses.series ? t("It is in a timetable already") : undefined}>
+            {t("Repeat")}
+          </Button>
+          <Button variant="danger" onClick={() => setDialog("cancel")}>
+            {t("Cancel session")}
+          </Button>
+        </footer>
+      )}
+      {ses && dialog === "move" && <MoveSession ses={ses} meta={meta} zone={zone} hour12={hour12} onClose={() => setDialog(null)} onDone={done} />}
+      {ses && dialog === "repeat" && <RepeatSession ses={ses} zone={zone} hour12={hour12} onClose={() => setDialog(null)} onDone={done} />}
+      {ses && dialog === "cancel" && (
+        <CancelSession
+          ses={ses}
+          onClose={() => setDialog(null)}
+          onDone={() => {
+            setDialog(null);
+            onChanged();
+            onClose();
+          }}
+        />
+      )}
     </aside>
   );
 }
