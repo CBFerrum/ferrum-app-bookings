@@ -97,8 +97,21 @@
     - {name: outside_calendar_error, type: data, read_only: true, no_copy: true, label: Outside Calendar Problem, description: "Why the last reading failed, or what in it could not be read. What was read before still counts"}
     - {name: outside_calendar_tried, type: datetime, read_only: true, hidden: true, no_copy: true}
   actions:
-    - {name: calendar_feed, label: Calendar Feed Link, permission: read}
-    - {name: rotate_calendar_feed, label: Reset Calendar Feed Link, permission: read, confirm: "A new feed link is made and every earlier one stops working. Continue?"}
+    - name: calendar_feed
+      label: Calendar Feed Link
+      permission: read
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {url: {type: string}, path: {type: string}, expires_at: {type: string}, note: {type: string}}}
+        completion: "A signed calendar feed link for this staff member, valid a year, committed with this receipt (the workspace's signing key is made on first use); only the staff member or a bookings manager gets it"
+    - name: rotate_calendar_feed
+      label: Reset Calendar Feed Link
+      permission: read
+      confirm: "A new feed link is made and every earlier one stops working. Continue?"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {url: {type: string}, path: {type: string}, expires_at: {type: string}, note: {type: string}}}
+        completion: "Every earlier feed link of this staff member stops working and a new one is given, committed with this receipt (only the staff member or a bookings manager may)"
   form:
     - {label: Staff, fields: [display_name, email, time_zone, active, location, bio]}
     - {label: Working Hours, fields: [calendar, working_hours]}
@@ -346,7 +359,14 @@
   rules:
     - {name: guest_or_customer, check: "doc.customer != null || (doc.guest_name != null && doc.guest_name != '')", message: "Choose a customer or enter the guest's name"}
   actions:
-    - {name: confirm, label: Confirm, permission: write, condition: "doc.status == 'Pending'"}
+    - name: confirm
+      label: Confirm
+      permission: write
+      condition: "doc.status == 'Pending'"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {id: {type: string, format: uuid}, number: {type: string}, status: {type: string}}}
+        completion: "The booking is Confirmed, committed with this receipt; the guest is told once by the next upkeep round"
     # Moved on the schedule, which offers the free times (a record page has no date and time to give).
     - {name: reschedule, label: Reschedule, permission: write, hidden: true, condition: "doc.status == 'Pending' || doc.status == 'Confirmed'"}
     - name: cancel_booking
@@ -355,6 +375,10 @@
       condition: "doc.status == 'Pending' || doc.status == 'Confirmed' || doc.status == 'Waitlisted'"
       params:
         - {name: reason, type: text, label: Reason, description: The guest sees it}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {id: {type: string, format: uuid}, number: {type: string}, status: {type: string}}}
+        completion: "The booking is Cancelled as the guest's cancellation (cancelled_by Guest, also when staff cancel for a guest who phoned: a paid deposit is settled by the service's terms), committed with this receipt; a freed class seat goes to the waitlist; the guest is told once by the next upkeep round"
     - name: cancel_by_business
       label: We Cancel It
       permission: write
@@ -366,12 +390,47 @@
         effect: transactional_action
         returns: {type: object, properties: {id: {type: string, format: uuid}, status: {type: string}, cancelled_by: {type: string}}}
         completion: "The booking is Cancelled with cancelled_by Business, committed with this receipt; a paid deposit is credited and asked back in full whatever the service's terms; the guest is told once by the next upkeep round"
-    - {name: keep_despite_clash, label: Keep Despite the Clash, permission: write, condition: "doc.outside_clash",
-       confirm: "Keep this booking at its time, though the staff member's outside calendar is busy then?"}
-    - {name: complete, label: Mark Completed, permission: write, condition: "doc.status == 'Confirmed'"}
-    - {name: mark_no_show, label: Mark No Show, permission: write, condition: "doc.status == 'Confirmed' || doc.status == 'Pending'"}
-    - {name: make_sales_invoice, label: Create Sales Invoice, permission: write, condition: "doc.status == 'Confirmed' || doc.status == 'Completed' || doc.status == 'No Show'"}
-    - {name: guest_link, label: Guest Self-Service Link, permission: write, condition: "doc.status != 'Cancelled'"}
+    - name: keep_despite_clash
+      label: Keep Despite the Clash
+      permission: write
+      condition: "doc.outside_clash"
+      confirm: "Keep this booking at its time, though the staff member's outside calendar is busy then?"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {id: {type: string, format: uuid}, number: {type: string}, status: {type: string}}}
+        completion: "The booking stays at its time and is no longer marked as clashing there, committed with this receipt"
+    - name: complete
+      label: Mark Completed
+      permission: write
+      condition: "doc.status == 'Confirmed'"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {id: {type: string, format: uuid}, number: {type: string}, status: {type: string}}}
+        completion: "The booking is Completed, committed with this receipt; refused before it starts"
+    - name: mark_no_show
+      label: Mark No Show
+      permission: write
+      condition: "doc.status == 'Confirmed' || doc.status == 'Pending'"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {id: {type: string, format: uuid}, number: {type: string}, status: {type: string}}}
+        completion: "The booking is No Show, committed with this receipt; refused before it starts"
+    - name: make_sales_invoice
+      label: Create Sales Invoice
+      permission: write
+      condition: "doc.status == 'Confirmed' || doc.status == 'Completed' || doc.status == 'No Show'"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {entity: {type: string}, id: {type: string, format: uuid}, number: {type: string}}}
+        completion: "A draft Sales Invoice of the booking's company for the item times the seats at the booked rate, linked to the booking, committed with this receipt; a booking without a customer gets one (a public booking a customer of its own); refused while a draft or submitted one exists (needs Sales Invoice create)"
+    - name: guest_link
+      label: Guest Self-Service Link
+      permission: write
+      condition: "doc.status != 'Cancelled'"
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {token: {type: string}, url: {type: string}, api: {type: string}, expires_at: {type: string}, note: {type: string}}}
+        completion: "A new self-service link for the guest, valid until 30 days after the booking ends, committed with this receipt; earlier links keep working"
     - name: repeat
       label: Repeat
       permission: write
@@ -380,12 +439,20 @@
         - {name: every, type: select, label: Every, options: [week, 2 weeks, 4 weeks, month], required: true}
         - {name: count, type: int, label: Bookings in All, required: true, description: "2 to 52, this one included"}
         - {name: skip_conflicts, type: select, label: Skip Times That Are Taken, options: ["No", "Yes"], description: "No: a time that is taken stops the series"}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {series: {type: string}, booked: {type: array}, skipped: {type: array}}}
+        completion: "The later bookings are made at the same local time, with the same service, staff, seats and guest, and share this booking's series, committed with this receipt; with skipping, the dates that were taken are listed"
     - name: cancel_series
       label: Cancel This and Later
       permission: write
       condition: "doc.series != null"
       params:
         - {name: reason, type: text, label: Reason, description: The guests see it}
+      contract:
+        effect: transactional_action
+        returns: {type: object, properties: {cancelled: {type: array}}}
+        completion: "This booking and the later active ones of its series are Cancelled, each as the guest's cancellation (a paid deposit settled by the service's terms), committed with this receipt; freed class seats go to the waitlist; each guest is told once by the next upkeep round"
   form:
     - {label: Booking, fields: [service, service_name, staff, staff_name, start_time, end_time, seats, status, source, join_waitlist, resource, booking_location]}
     - {label: Guest, fields: [customer, guest_name, guest_email, guest_phone, guest_time_zone, guest_language, notes]}

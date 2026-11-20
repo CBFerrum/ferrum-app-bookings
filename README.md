@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.16.3-0e7490?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.16.4-0e7490?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -37,7 +37,7 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 
 | | |
 |---|---|
-| **Version** | 0.16.3 (Booking Deposits connector 0.3.0) |
+| **Version** | 0.16.4 (Booking Deposits connector 0.3.0) |
 | **Kind** | Its own interface at `/bookings/` for the team, and a public booking page at `/bookings/book/{workspace}`. Records open in the platform's records screens |
 | **What it adds** | 15 entities (8 you work with, 7 that sit inside them), 2 roles, 3 reports, 1 menu module, 2 packages (`bookings`, `bookings_payments`), 1 payments connector, 2 SQL files |
 | **Depends on** | Ferrum platform `>=0.4.0, <0.5` and [ERP](https://github.com/CBFerrum/ferrum-app-erp) `>=0.1` (installing Bookings installs ERP) |
@@ -159,7 +159,7 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 | **No Show** | Marked after the start. A deposit, if any, is kept |
 | **Completed** | Marked after the start |
 
-- **Actions.** Confirm, Reschedule, Cancel Booking (with a reason), Mark Completed, Mark No Show, Create Sales Invoice, Guest Self-Service Link, Repeat, Cancel This and Later, Keep Despite the Clash.
+- **Actions.** Confirm, Reschedule, Cancel Booking and We Cancel It (each with a reason), Mark Completed, Mark No Show, Create Sales Invoice, Guest Self-Service Link, Repeat, Cancel This and Later, Keep Despite the Clash.
 - **Staff bookings** are confirmed at once. Public bookings wait as Pending when confirmation is manual.
 - **Times change only through Reschedule,** which re-checks everything like a new booking. Statuses change only through the actions.
 - **Active bookings cannot be deleted.** Cancel them.
@@ -172,7 +172,7 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 - **Invoices into ERP.** Create Sales Invoice makes one draft invoice for the booking's company: one line of the item times the seats at the booked rate. It is refused while another live invoice exists, and a guest without a customer becomes one.
 - **Deposits (Booking Deposits, with Commerce).** A service may ask a percentage of its price (100 for in full) when a guest books. The booking waits as Pending, is invoiced at once, and is confirmed when the deposit is paid through the store's payment method. Bookings asks Commerce through the platform's gate (its operations `commerce.sales_invoice.request_payment`, `commerce.payment_request.refund` and `commerce.payment_request.cancel`, which Booking Deposits declares it uses), in the booking's transaction, once per booking and step: it does not compile against Commerce.
 - **Unpaid deposits release the time.** After the configured minutes, or when the payment request expires, the booking expires and the guest is told. Paid late, it is restored if the time is still free, and refunded in full if it was taken.
-- **Refunds by terms.** Cancelled early enough, the deposit comes back whole. Cancelled later, the service keeps its share. The invoice is credited for what is not kept, and the guest's refund goes back through the gateway once a person approves it. A no-show keeps the deposit.
+- **Refunds by terms.** Two ways to cancel. Cancel Booking is a cancellation on the guest's side, also when staff press it for a guest who phoned: the service's terms decide the deposit. We Cancel It is the business's cancellation and returns the deposit in full. Cancelled early enough, the deposit comes back whole. Cancelled later, the service keeps its share. The invoice is credited for what is not kept, and the guest's refund goes back through the gateway once a person approves it. A no-show keeps the deposit.
 
 ### 🔔 Messages and reminders
 
@@ -344,6 +344,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 
 ### ✅ Recently shipped
 
+- [x] **0.16.4:** every action a person sees has a contract (effect, result, what done means) and declares its parameters, so agents and outside callers use them through the gate as people do.
 - [x] **0.16.3:** locations on the booking page (where first, then that location's services, people and times) and on the schedule (a Location filter; new bookings and sessions ask where only when they must).
 - [x] **0.16.2:** a booking from the public page gets a customer of its own, never an existing one found by the address the guest typed.
 - [x] **0.16.1:** reports group, default and show columns only by fields the reader may read.

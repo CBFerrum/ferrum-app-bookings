@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.4
+
+Needs the same platform as 0.16.3. No database change.
+
+- **Every visible action has a contract.** Confirm, Cancel Booking, Keep Despite the Clash, Mark Completed, Mark No
+  Show, Create Sales Invoice, Guest Self-Service Link, Repeat and Cancel This and Later on Booking, and Calendar Feed
+  Link and Reset Calendar Feed Link on Booking Staff, now say their effect, what they return and what "done" means,
+  and declare the parameters their handlers read, so an agent or an outside caller uses them through the gate as a
+  person does. The two feed actions are transactional (the workspace's signing key is made on first use).
+- **The two cancellations, said where they are described.** Cancel Booking is a cancellation on the guest's side
+  (the service's terms decide the deposit, also when staff press it for a guest who phoned); We Cancel It is the
+  business's and returns the deposit in full.
+
 ## 0.16.3
 
 Needs the same platform as 0.16.2. No database change. Interface only.

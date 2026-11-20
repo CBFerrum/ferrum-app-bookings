@@ -153,7 +153,7 @@ deleted (cancel them). `source` is `Internal` or `Public`.
 |---|---|---|
 | `confirm` | Pending | → the booking, `Confirmed` |
 | `reschedule` | Pending, Confirmed | `{start_time, staff?: id \| "any", seats?}` (staff absent = keep) → the booking; re-checked like a new booking (staff rules); freed class seats go to the waitlist |
-| `cancel_booking` | Pending, Confirmed, Waitlisted | `{reason?}` → the booking, `Cancelled`, `cancelled_by: Guest` (a cancellation the guest asked for, here or on their page): a paid deposit is settled by the service's terms; a freed class seat goes to the waitlist |
+| `cancel_booking` | Pending, Confirmed, Waitlisted | `{reason?}` → the booking, `Cancelled`, `cancelled_by: Guest`: a cancellation on the guest's side (on their page, or staff pressing it for a guest who phoned), so a paid deposit is settled by the service's terms; a freed class seat goes to the waitlist |
 | `cancel_by_business` (We Cancel It) | Pending, Confirmed, Waitlisted | `{reason?}` → the booking, `Cancelled`, `cancelled_by: Business`: the business lets the time go, so a paid deposit comes back in full whatever the service's terms; otherwise as `cancel_booking` |
 | `complete` | Confirmed, once started | → `Completed` |
 | `mark_no_show` | Pending, Confirmed, once started | → `No Show` |
