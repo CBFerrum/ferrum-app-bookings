@@ -295,7 +295,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 | Class timetable with its own sessions | 🟡⁴ | ❌ | ✅ | ❌ | ✅ | 🟡 |
 | Holidays and dated exceptions | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Any available person, chosen fairly | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Weighted round robin or priorities | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Weighted round robin or priorities | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ |
 | Rooms and equipment with capacity | ✅ | ❌ | 🟡 | ❌ | ✅ | ❌ |
 | Intake questions | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Guest cancels or moves from a link | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -304,7 +304,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 | Packages, memberships, gift cards | ❌ | ❌ | ✅ | ❌ | ✅ | ❌ |
 | Email reminders and invitations | 🟡⁷ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | SMS reminders | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Editable message wording | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Editable message wording | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Booking written to Google or Outlook, two ways | 🟡⁸ | ✅ | ✅ | 🟡 | ✅ | ✅ |
 | A video meeting made per booking | 🟡⁹ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Embed on your own website | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -312,11 +312,11 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 | Front-desk schedule with drag to move | ✅ | ❌ | ✅ | 🟡 | ✅ | ❌ |
 | Mark who came, no-show rates | ✅ | ✅ | ✅ | 🟡 | ✅ | ✅ |
 | Staff utilization report | ✅ | ✅ | ✅ | 🟡 | ✅ | 🟡 |
-| Separate locations with their own staff | ❌ | ❌ | ✅ | ❌ | ✅ | ❌ |
+| Separate locations with their own staff | ✅¹⁰ | ❌ | ✅ | ❌ | ✅ | ❌ |
 | Zapier and Make connectors | ❌ | ✅ | ✅ | 🟡 | ✅ | ✅ |
 | API and webhooks | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-<sub>¹ Cal.com has an open core with commercial enterprise features. ² Included in some Microsoft 365 plans. ³ Through integrations or exports, not one data set. ⁴ Sessions are scheduled ahead as records with their own seats, teacher and room, shown on the schedule booked or not, and cancelled, moved and repeated as one thing; no substitute teacher is recorded beside the teacher. ⁵ Free services only. A paid series is booked one at a time. ⁶ Needs Commerce and a payment gateway plugin; refunds are approved by a person. ⁷ Needs the Mail app. ⁸ Bookings reach a calendar by a signed feed, and busy times are read from an iCalendar address every 15 minutes. ⁹ Meetings are made in Ferrum Comms, not Zoom, Meet or Teams.</sub>
+<sub>¹ Cal.com has an open core with commercial enterprise features. ² Included in some Microsoft 365 plans. ³ Through integrations or exports, not one data set. ⁴ Sessions are scheduled ahead as records with their own seats, teacher and room, shown on the schedule booked or not, and cancelled, moved and repeated as one thing; no substitute teacher is recorded beside the teacher. ⁵ Free services only. A paid series is booked one at a time. ⁶ Needs Commerce and a payment gateway plugin; refunds are approved by a person. ⁷ Needs the Mail app. ⁸ Bookings reach a calendar by a signed feed, and busy times are read from an iCalendar address every 15 minutes. ⁹ Meetings are made in Ferrum Comms, not Zoom, Meet or Teams. ¹⁰ A person works at one location or at all of them; working hours that differ by location for one person are not there yet.</sub>
 
 ### 🏆 Where Bookings stands out
 
@@ -329,12 +329,12 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 
 ### 🚧 Where the leaders are still ahead
 
-- 📣 **Messages.** SMS, WhatsApp and editable wording. Ferrum sends fixed English-text emails (the wording is built in code) and in-app notices.
+- 📣 **Messages.** SMS and WhatsApp. Ferrum sends emails from message templates a workspace edits and translates, and in-app notices.
 - 🌐 **The website.** Embed snippets, logo and colours, and a returning-client area.
 - 📆 **Calendar sync.** Writing each booking into a Google or Outlook calendar and checking several outside calendars.
-- 👥 **Team scheduling.** Collective bookings, weighted round robin and priorities (Calendly, Cal.com).
+- 👥 **Team scheduling.** Collective bookings, several people at one booking (Calendly, Cal.com).
 - 🎟️ **Stored value.** Packages, memberships, gift cards, tips and promo codes (Acuity, SimplyBook.me).
-- 🏢 **Several locations,** each with its own staff, hours and time zone.
+- 🏢 **Locations.** Working hours that differ by location for a person who works at several, and reports by location.
 - 🔗 **Ready-made connectors** such as Zapier and Make, and booking by search engines and maps.
 
 > [!NOTE]
