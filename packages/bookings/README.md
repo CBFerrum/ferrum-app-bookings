@@ -292,6 +292,6 @@ busy), purge guest tokens of bookings over for 30 days and claims of bookings ov
 Besides the entity tables: `bookings_token` and `bookings_notice` (row-level security like every
 table), the exclusion constraint `bookings_no_double_booking` and the check
 `bookings_active_is_scheduled` on `e_booking` (`sql/001_bookings.sql`); the exclusion constraint
-`bookings_sessions_do_not_overlap`, the check `bookings_session_is_scheduled` and the unique key
-`bookings_session_key` on `e_booking_session` (`sql/002_sessions.sql`). A booking and a session
+`bookings_sessions_do_not_overlap` and the check `bookings_session_is_scheduled` on `e_booking_session`
+(`sql/002_sessions.sql`; the session's unique key and its index by teacher and time are the entity's own). A booking and a session
 cannot share one constraint: both lock the teacher's `e_booking_staff` row first.

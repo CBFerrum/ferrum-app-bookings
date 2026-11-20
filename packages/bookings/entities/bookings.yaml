@@ -234,7 +234,8 @@
     - {name: block_start, type: datetime, read_only: true, hidden: true, no_copy: true}
     - {name: block_end, type: datetime, read_only: true, hidden: true, no_copy: true}
     - {name: session_key, type: data, read_only: true, hidden: true, no_copy: true}
-  indexes: [[staff, start_time], [service, start_time], [status, start_time]]
+  unique: [[session_key]]
+  indexes: [[staff, start_time], [staff, block_start], [service, start_time], [status, start_time]]
   actions:
     - name: cancel_session
       label: Cancel Session

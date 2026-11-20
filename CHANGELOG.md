@@ -9,6 +9,12 @@ Needs the same platform as 0.16.1. No database change.
   typed an existing customer's email or phone was put on that customer: the booking and its deposit invoice landed on
   their account (and in their portal). A booking staff make still finds the customer by email or phone digits, and a
   booking for a chosen customer keeps them.
+- **Class sessions' database guards hold no writes while they are added.** The session's check constraint is added
+  `not valid` and validated in a statement of its own; its unique key and its index by teacher and time are the
+  entity's own (`unique`, `indexes`), which the schema sync builds without holding writes (they were
+  `bookings_session_key` and `bookings_sessions_ahead` in `sql/002_sessions.sql`). The overlap constraint stays in
+  the file: PostgreSQL cannot add it `not valid`, and the table is new and empty when it runs. Each statement may run
+  again.
 
 ## 0.16.1
 
