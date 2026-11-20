@@ -20,7 +20,7 @@ const minutesOf = (hhmm: string) => {
 function useRefusal() {
   const [error, setError] = useState<ApiError | string | null>(null);
   const field = (name: string) => (error instanceof ApiError ? error.fields.find((f) => f.field === name)?.message : undefined);
-  const named = new Set(["service", "staff", "start_time", "capacity", "resource", "every", "count"]);
+  const named = new Set(["service", "staff", "start_time", "capacity", "resource", "every", "count", "booking_location"]);
   const message =
     error instanceof ApiError
       ? error.status === 409
@@ -80,7 +80,7 @@ function Frame({ title, form, busy, label, danger, onClose, children }: { title:
 }
 
 /** A new dated session of a class, before anyone books it. */
-export function NewSession({ meta, zone, hour12, day, onClose, onCreated }: { meta: Meta; zone: string; hour12: boolean; day: string; onClose: () => void; onCreated: (s: Ses) => void }) {
+export function NewSession({ meta, zone, hour12, day, loc, onClose, onCreated }: { meta: Meta; zone: string; hour12: boolean; day: string; loc?: string | null; onClose: () => void; onCreated: (s: Ses) => void }) {
   const classes = meta.services.filter((s) => s.active !== false && (s.capacity ?? 1) > 1);
   const [service, setService] = useState(classes.length === 1 ? classes[0].id : "");
   const [staff, setStaff] = useState("");
@@ -88,10 +88,13 @@ export function NewSession({ meta, zone, hour12, day, onClose, onCreated }: { me
   const [time, setTime] = useState("18:00");
   const [seats, setSeats] = useState("");
   const [room, setRoom] = useState("");
+  const [place, setPlace] = useState(loc ?? "");
   const [busy, setBusy] = useState(false);
   const r = useRefusal();
   const { people, rooms } = useTeachers(meta, service);
   const chosen = classes.find((s) => s.id === service);
+  const places = (meta.locations ?? []).filter((l) => l.active !== false);
+  const askWhere = places.length > 1 && !meta.staff.find((p) => p.id === staff)?.location;
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -109,6 +112,7 @@ export function NewSession({ meta, zone, hour12, day, onClose, onCreated }: { me
         start_time: new Date(start).toISOString(),
         capacity: seats ? Number(seats) : undefined,
         resource: room || undefined,
+        booking_location: askWhere && place ? place : undefined,
       });
       toast(t("{service} scheduled for {start}", { service: chosen?.service_name ?? "", start: clockText(start, zone, hour12) }));
       onCreated(made);
@@ -142,6 +146,18 @@ export function NewSession({ meta, zone, hour12, day, onClose, onCreated }: { me
             ))}
           </select>
         </Field>
+        {askWhere && (
+          <Field label={t("Location")} htmlFor="bk-ses-place" error={r.field("booking_location")}>
+            <select id="bk-ses-place" className="select" value={place} onChange={(e) => setPlace(e.target.value)}>
+              <option value="">{t("Choose a location…")}</option>
+              {places.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {isolate(l.location_name)}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
         <When date={date} time={time} onDate={setDate} onTime={setTime} error={r.field("start_time")} />
         <div className="bk-new-when">
           <Field label={t("Seats")} htmlFor="bk-ses-seats" error={r.field("capacity")} hint={chosen?.capacity ? t("Empty: the class's {capacity}", { capacity: chosen.capacity }) : undefined}>

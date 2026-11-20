@@ -13,7 +13,7 @@ import { ApiError, bootstrap, t, isolate } from "@ferrum/client";
 import { Alert, Button, Field, StatePanel, useShellTitle } from "@ferrum/kit";
 import { Nothing } from "../states";
 import { dayOf, isDate, whenText, zoneList, zoneText } from "../zone";
-import { type Catalog, check, bookBody, durationText, type Form, hasErrors, isTaken, noErrors, priceText, type Question, type Service, serverErrors, whereText } from "./booking";
+import { type Catalog, check, bookBody, durationText, type Form, hasErrors, isTaken, noErrors, type Place, placeOf, priceText, type Question, type Service, serverErrors, shownPeople, shownServices, step, whereText } from "./booking";
 import { ClockSwitch, Closed, Frame, Loading, useDisplay } from "./Frame";
 import { ManagePage } from "./Manage";
 import { Picker } from "./Picker";
@@ -49,16 +49,53 @@ function Facts({ service, currency }: { service: Service; currency: string | nul
   );
 }
 
-function ServiceList({ catalog }: { catalog: Catalog }) {
+/** The address of a step, keeping the location chosen. */
+const stepUrl = (place: Place | null, more = "") => `?${[place ? `loc=${encodeURIComponent(place.id)}` : "", more].filter(Boolean).join("&")}`;
+
+/** Where the guest would like to come, when the business has several places. */
+function PlaceList({ places }: { places: Place[] }) {
   const name = bootstrap()?.workspace.name;
   return (
     <div className="gb-services">
       <h1 className="gb-h1">{name ? t("Book with {name}", { name }) : t("Book an appointment")}</h1>
-      <p className="muted">{t("What would you like to book?")}</p>
+      <p className="muted">{t("Where would you like to come?")}</p>
       <ul className="gb-service-list">
-        {catalog.services.map((s) => (
+        {places.map((p) => (
+          <li key={p.id}>
+            <Link className="gb-service-card" to={{ search: stepUrl(p) }}>
+              <strong>{isolate(p.name)}</strong>
+              {p.address && <span className="faint gb-line">{isolate(p.address)}</span>}
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ServiceList({ catalog, services, place }: { catalog: Catalog; services: Service[]; place: Place | null }) {
+  const name = bootstrap()?.workspace.name;
+  const several = (catalog.locations?.length ?? 0) > 1;
+  return (
+    <div className="gb-services">
+      <h1 className="gb-h1">{name ? t("Book with {name}", { name }) : t("Book an appointment")}</h1>
+      {place && several && (
+        <p className="gb-place">
+          <MapPin size={15} aria-hidden="true" /> {isolate(place.name)} ·{" "}
+          <Link to={{ search: "" }}>{t("Another location")}</Link>
+        </p>
+      )}
+      {!services.length && place ? (
+        <Nothing title={t("Nothing can be booked at {name} at the moment.", { name: place.name })}>
+          {several ? <Link to={{ search: "" }}>{t("See the other locations")}</Link> : null}
+        </Nothing>
+      ) : (
+        <p className="muted">{t("What would you like to book?")}</p>
+      )}
+      <ul className="gb-service-list">
+        {services.map((s) => (
           <li key={s.id}>
-            <Link className="gb-service-card" to={{ search: `?service=${s.id}` }}>
+            <Link className="gb-service-card" to={{ search: stepUrl(place, `service=${s.id}`) }}>
               <strong>{isolate(s.name)}</strong>
               <Facts service={s} currency={catalog.currency} />
               {s.description && <p className="gb-clamp">{isolate(s.description)}</p>}
@@ -131,11 +168,20 @@ function ZoneSelect({ zone, workspace, onChange }: { zone: string; workspace: st
 
 function Booker({ tenant }: { tenant: string }) {
   const [sp, setSp] = useSearchParams();
-  const { zone, setZone, hour12, setHour12 } = useDisplay();
+  const display = useDisplay();
+  const { setZone, hour12, setHour12 } = display;
   const cat = useQuery({ queryKey: ["gb-catalog", tenant], queryFn: ({ signal }) => site.catalog(tenant, signal), staleTime: 60_000, retry: false });
   const catalog = cat.data;
-  const only = catalog?.services.length === 1 ? catalog.services[0] : undefined;
-  const service = catalog?.services.find((s) => s.id === sp.get("service")) ?? only;
+  // A location named in the address only when it is one of the catalog's (a stale one falls back to the list).
+  const place = catalog ? placeOf(catalog, sp.get("loc")) : null;
+  const loc = place?.id ?? null;
+  const offered = catalog ? shownServices(catalog, loc) : [];
+  const only = offered.length === 1 ? offered[0] : undefined;
+  const found = offered.find((s) => s.id === sp.get("service")) ?? only;
+  // At a location, a service is given by the people who work there or everywhere.
+  const service = found && { ...found, staff: shownPeople(found, loc) };
+  // The location's own zone, until the guest chooses one.
+  const zone = !display.chosen && place?.time_zone ? place.time_zone : display.zone;
   const choice = sp.get("with");
   const staff = service?.staff.some((p) => p.id === choice) ? choice : null;
   const seats = Math.min(Math.max(Number(sp.get("seats")) || 1, 1), service?.seats ?? 1);
@@ -166,10 +212,17 @@ function Booker({ tenant }: { tenant: string }) {
       </Frame>
     );
   }
+  if (step(catalog, loc, service) === "where") {
+    return (
+      <Frame>
+        <PlaceList places={catalog.locations ?? []} />
+      </Frame>
+    );
+  }
   if (!service) {
     return (
       <Frame>
-        <ServiceList catalog={catalog} />
+        <ServiceList catalog={catalog} services={offered} place={place} />
       </Frame>
     );
   }
@@ -178,13 +231,19 @@ function Booker({ tenant }: { tenant: string }) {
     <Frame wide>
       <div className="gb-booker" data-step={at ? "details" : "times"}>
         <aside className="gb-panel" aria-label={t("About this booking")}>
-          {catalog.services.length > 1 && (
-            <Link className="gb-back" to={{ search: "" }}>
+          {offered.length > 1 && (
+            <Link className="gb-back" to={{ search: stepUrl(place) }}>
               <ChevronLeft size={15} aria-hidden="true" /> {t("All services")}
             </Link>
           )}
           <h1 className="gb-h1">{isolate(service.name)}</h1>
-          <Facts service={service} currency={catalog.currency} />
+          <Facts service={service.location_type === "In Person" && !service.location && place?.address ? { ...service, location: place.address } : service} currency={catalog.currency} />
+          {place && (catalog.locations?.length ?? 0) > 1 && (
+            <p className="gb-place">
+              <MapPin size={15} aria-hidden="true" /> {isolate(place.name)} ·{" "}
+              <Link to={{ search: "" }}>{t("Another location")}</Link>
+            </p>
+          )}
           {service.description && <p className="gb-about">{isolate(service.description)}</p>}
           {at ? (
             <div className="gb-when">
@@ -203,7 +262,7 @@ function Booker({ tenant }: { tenant: string }) {
         </aside>
         <section className="gb-stage" aria-label={at ? t("Your details") : t("Choose a time")}>
           {at ? (
-            <Details tenant={tenant} service={service} currency={catalog.currency} at={at} staff={staff} seats={seats} zone={zone} waitlist={waitlist} onAnother={() => go({ at: null, wait: null })} />
+            <Details tenant={tenant} service={service} currency={catalog.currency} at={at} staff={staff} seats={seats} zone={zone} loc={loc} waitlist={waitlist} onAnother={() => go({ at: null, wait: null })} />
           ) : (
             <>
               <div className="gb-stage-head">
@@ -214,8 +273,8 @@ function Booker({ tenant }: { tenant: string }) {
                 </div>
               </div>
               <Picker
-                scope={[tenant, service.id, staff ?? "any", seats, zone]}
-                load={(from, to, signal) => site.freeSlots(tenant, service.id, { from, to, zone, staff: staff ?? undefined, seats }, signal)}
+                scope={[tenant, service.id, staff ?? "any", seats, zone, loc ?? ""]}
+                load={(from, to, signal) => site.freeSlots(tenant, service.id, { from, to, zone, staff: staff ?? undefined, seats, location: loc ?? undefined }, signal)}
                 zone={zone}
                 hour12={hour12}
                 today={today}
@@ -277,7 +336,7 @@ function Answer({ q, value, error, onChange }: { q: Question; value: string; err
   );
 }
 
-function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, onAnother }: {
+function Details({ tenant, service, currency, at, staff, seats, zone, loc, waitlist, onAnother }: {
   tenant: string;
   service: Service;
   currency: string | null;
@@ -285,6 +344,7 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
   staff: string | null;
   seats: number;
   zone: string;
+  loc: string | null;
   /** The class is full: this joins its waitlist. */
   waitlist: boolean;
   onAnother: () => void;
@@ -303,8 +363,8 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
 
   // Is the time still free? Asked again when the guest comes back to the tab, and every minute.
   const still = useQuery({
-    queryKey: ["gb-still", tenant, service.id, staff ?? "any", seats, zone, at],
-    queryFn: ({ signal }) => site.freeSlots(tenant, service.id, { from: day, to: day, zone, staff: staff ?? undefined, seats }, signal),
+    queryKey: ["gb-still", tenant, service.id, staff ?? "any", seats, zone, at, loc ?? ""],
+    queryFn: ({ signal }) => site.freeSlots(tenant, service.id, { from: day, to: day, zone, staff: staff ?? undefined, seats, location: loc ?? undefined }, signal),
     refetchInterval: 60_000,
     refetchOnWindowFocus: true,
     staleTime: 0,
@@ -324,7 +384,7 @@ function Details({ tenant, service, currency, at, staff, seats, zone, waitlist, 
     if (hasErrors(found)) return firstProblem();
     setBusy(true);
     try {
-      const out = await site.book(tenant, bookBody({ service, start: at, staff: staff ?? undefined, form: values, zone, waitlist, website: trap, language: bootstrap()?.locale.language }));
+      const out = await site.book(tenant, bookBody({ service, start: at, staff: staff ?? undefined, form: values, zone, waitlist, website: trap, language: bootstrap()?.locale.language, location: loc }));
       // That time is no longer free for the next guest, whatever the lists on screen last said.
       void qc.invalidateQueries({ queryKey: ["gb-slots"] });
       if ("status" in out) setReceived(true);

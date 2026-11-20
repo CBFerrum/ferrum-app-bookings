@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.16.3
+
+Needs the same platform as 0.16.2. No database change. Interface only.
+
+- **Locations on the booking page.** With more than one active location the page asks "Where would you like to come?"
+  first (`?loc=` in the address); then it offers only the services offered there, with the people who work there or
+  everywhere, and that location's free times, starting in its time zone until the guest chooses one. A location with
+  nothing offered says so, with a way back to the others; a location in a stale link falls back to the list. The
+  guest's booking page names the location. With one location, or none, nothing changes.
+- **Locations on the schedule.** A Location filter (with more than one location) shows that location's people and
+  those who work everywhere. A new booking or class session asks for the location only when there is a choice and the
+  person chosen works everywhere; it starts from the filter.
+
 ## 0.16.2
 
 Needs the same platform as 0.16.1. No database change.

@@ -326,6 +326,7 @@ export function ManagePage({ tenant, token }: { tenant: string; token: string })
               <div>
                 <dt>{t("Where")}</dt>
                 <dd>
+                  {b.place && <strong className="gb-line">{isolate(b.place.name)}</strong>}
                   {b.location_type === "Video" ? t("Video call") : b.location_type === "Phone" ? t("Phone call") : b.location ? null : t("In person")}
                   {b.location &&
                     (isLink(b.location) ? (

@@ -18,6 +18,16 @@ export interface Person {
   id: string;
   name: string;
   bio?: string | null;
+  /** Where they work; none: every location. */
+  location?: string | null;
+}
+
+/** A place the business takes bookings at. */
+export interface Place {
+  id: string;
+  name: string;
+  address?: string | null;
+  time_zone?: string | null;
 }
 
 export interface Service {
@@ -33,12 +43,35 @@ export interface Service {
   questions: Question[];
   /** How many in a row a guest may book it (0: once). */
   repeats?: number;
+  /** Where it is offered, among the catalog's locations. */
+  locations?: string[];
 }
 
 export interface Catalog {
   time_zone: string;
   currency: string | null;
+  /** The business's active locations; none when it has none. */
+  locations?: Place[];
   services: Service[];
+}
+
+/** The location in the address when it is one of the catalog's; the only one when there is one; else none. */
+export function placeOf(catalog: Catalog, asked: string | null): Place | null {
+  const places = catalog.locations ?? [];
+  return places.find((p) => p.id === asked) ?? (places.length === 1 ? places[0] : null);
+}
+
+/** The services offered at a location: those that list it, or list none. */
+export const shownServices = (catalog: Catalog, loc: string | null): Service[] =>
+  catalog.services.filter((s) => !loc || !s.locations?.length || s.locations.includes(loc));
+
+/** The people of a service at a location: those who work there, or everywhere. */
+export const shownPeople = (service: Service, loc: string | null): Person[] => service.staff.filter((p) => !loc || !p.location || p.location === loc);
+
+/** Which step the page is at: where (several locations and none chosen), what, or when and who. */
+export function step(catalog: Catalog, loc: string | null, service: Service | undefined): "where" | "services" | "book" {
+  if ((catalog.locations?.length ?? 0) > 1 && !loc) return "where";
+  return service ? "book" : "services";
 }
 
 export interface Slot {
@@ -94,6 +127,8 @@ export interface GuestBooking {
   clash?: boolean;
   reschedule_until?: string | null;
   deposit?: Deposit | null;
+  /** The location it is at. */
+  place?: { id: string; name: string; address?: string | null } | null;
 }
 
 /** The guest can still pay a deposit: it waits, and the booking is held for it or was released (it is still payable). */
@@ -217,7 +252,7 @@ export function serverErrors(error: unknown, questions: Question[]): FormErrors 
     if (own) e[own] = sentence(LABELS[own], f.message);
     else if (q) e.answers[q.question] = f.message.slice(q.question.length + 2);
     // The time, the person and the service come as whole sentences ("Asha is not available at that time").
-    else e.general.push(["start_time", "staff", "service"].includes(f.field) ? f.message : `${f.field.replace(/_/g, " ")}: ${f.message}`);
+    else e.general.push(["start_time", "staff", "service", "location"].includes(f.field) ? f.message : `${f.field.replace(/_/g, " ")}: ${f.message}`);
   }
   if (!error.fields.length) e.general.push(error.message);
   return e;
@@ -227,12 +262,13 @@ export function serverErrors(error: unknown, questions: Question[]): FormErrors 
 export const isTaken = (error: unknown) => error instanceof ApiError && (error.status === 409 || error.fields.some((f) => f.field === "start_time"));
 
 /** The request `POST /book` takes. */
-export function bookBody(o: { service: Service; start: string; staff?: string; form: Form; zone: string; waitlist?: boolean; website?: string; language?: string }) {
+export function bookBody(o: { service: Service; start: string; staff?: string; form: Form; zone: string; waitlist?: boolean; website?: string; language?: string; location?: string | null }) {
   const { service, form } = o;
   return {
     service: service.id,
     start_time: o.start,
     staff: o.staff ?? "any",
+    location: o.location ?? undefined,
     seats: service.seats > 1 ? form.seats : 1,
     name: form.name.trim(),
     email: form.email.trim(),

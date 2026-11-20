@@ -3,7 +3,7 @@
 // which answer with the booking as it now stands or say why not.
 
 import { api, docPath } from "@ferrum/client";
-import type { Bk, Hour, Off, ResourceRow, ServiceRow, Ses, StaffRow } from "./board";
+import type { Bk, Hour, LocationRow, Off, ResourceRow, ServiceRow, Ses, StaffRow } from "./board";
 
 export const rows = <T,>(entity: string, query: Record<string, string | number | boolean>, signal?: AbortSignal) =>
   api.get<{ rows: T[] }>(`/api/v1/${entity}`, query, signal).then((r) => r.rows);
@@ -12,14 +12,17 @@ export interface Meta {
   staff: StaffRow[];
   services: ServiceRow[];
   resources: ResourceRow[];
+  /** The business's locations (none when it has none). */
+  locations?: LocationRow[];
 }
 
 /** The people (with the hours they work), services and rooms the board is drawn from. */
 export async function loadMeta(signal?: AbortSignal): Promise<Meta> {
-  const [people, services, resources] = await Promise.all([
-    rows<Omit<StaffRow, "hours">>("BookingStaff", { fields: "display_name,email,time_zone,active", sort: "display_name asc", limit: 200 }, signal),
+  const [people, services, resources, locations] = await Promise.all([
+    rows<Omit<StaffRow, "hours">>("BookingStaff", { fields: "display_name,email,time_zone,active,location", sort: "display_name asc", limit: 200 }, signal),
     rows<ServiceRow>("BookingService", { fields: "service_name,capacity,duration_minutes,active", sort: "service_name asc", limit: 200 }, signal),
     rows<ResourceRow>("BookingResource", { fields: "resource_name,resource_type,capacity,active", sort: "resource_name asc", limit: 200 }, signal),
+    rows<LocationRow>("BookingLocation", { fields: "location_name,active", sort: "location_name asc", limit: 200 }, signal),
   ]);
   // A list leaves out a record's rows, and the weekly hours are rows.
   const staff = await Promise.all(
@@ -28,7 +31,7 @@ export async function loadMeta(signal?: AbortSignal): Promise<Meta> {
       return { ...p, hours: doc.working_hours ?? [] };
     }),
   );
-  return { staff, services, resources };
+  return { staff, services, resources, locations };
 }
 
 const FIELDS = "number,service,service_name,staff,staff_name,start_time,end_time,block_start,block_end,seats,status,closed_clash,resource,session_key,guest_name,source,series,amount,version";

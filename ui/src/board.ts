@@ -85,7 +85,18 @@ export interface StaffRow {
   time_zone: string;
   active?: boolean;
   hours: Hour[];
+  /** Where they work; none: every location. */
+  location?: string | null;
 }
+
+export interface LocationRow {
+  id: string;
+  location_name: string;
+  active?: boolean;
+}
+
+/** People shown for a location: those who work there or everywhere (no location: everyone). */
+export const atLocation = <T extends { location?: string | null }>(people: T[], loc: string | null): T[] => (loc ? people.filter((p) => !p.location || p.location === loc) : people);
 
 export interface Off {
   id: string;

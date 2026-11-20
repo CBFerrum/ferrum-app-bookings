@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.16.2-0e7490?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.16.3-0e7490?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -37,13 +37,13 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 
 | | |
 |---|---|
-| **Version** | 0.16.2 (Booking Deposits connector 0.3.0) |
+| **Version** | 0.16.3 (Booking Deposits connector 0.3.0) |
 | **Kind** | Its own interface at `/bookings/` for the team, and a public booking page at `/bookings/book/{workspace}`. Records open in the platform's records screens |
 | **What it adds** | 15 entities (8 you work with, 7 that sit inside them), 2 roles, 3 reports, 1 menu module, 2 packages (`bookings`, `bookings_payments`), 1 payments connector, 2 SQL files |
 | **Depends on** | Ferrum platform `>=0.4.0, <0.5` and [ERP](https://github.com/CBFerrum/ferrum-app-erp) `>=0.1` (installing Bookings installs ERP) |
 | **Works with** | Mail, Chat and Calendar (Comms) for emails, calendar invitations and video meetings, Commerce for deposits, ERP for customers, items and invoices, platform working calendars for holidays |
 | **Languages** | English, Arabic, Hindi (about 380 interface words each, and 250 names each) |
-| **Tests** | 76 Rust tests, 93 interface tests |
+| **Tests** | 76 Rust tests, 105 interface tests |
 | **Licence** | AGPL-3.0-only |
 
 ## 📸 Screenshots
@@ -113,7 +113,7 @@ Ferrum Bookings is for clinics, studios, salons, consultants and any team that s
 
 ### 👥 Staff, time and availability
 
-- **Locations with their own staff.** A business with several places records each as a location, with its own address, time zone and opening calendar. Staff and rooms belong to one location or to all, a service lists where it is offered, and every booking is at one location, with only that location's people and rooms, inside its opening days. A workspace with no location works as before.
+- **Locations with their own staff.** A business with several places records each as a location, with its own address, time zone and opening calendar. Staff and rooms belong to one location or to all, a service lists where it is offered, and every booking is at one location, with only that location's people and rooms, inside its opening days. A workspace with no location works as before. On the booking page a guest of a business with several locations first chooses where (each location's address shown, `?loc=` in the address so a business can link straight to one), then sees only what is offered there, with that location's people and times; their booking page says where to come. The team filters the schedule by location (its people and those who work everywhere), and a new booking or class session asks for the location only when it is not already clear.
 - **Staff in their own time zone.** Hours are entered as local time in an IANA zone. Several intervals a day leave breaks, and a night shift runs past midnight.
 - **Working calendars.** A staff member, a resource or the whole business may follow a platform working calendar (Admin, Calendars). Its weekends, holidays and dated exceptions close or open time for everyone who follows it, also on a day the clocks change. A Saturday opened by an exception is offered; a closed afternoon is not.
 - **Time off.** A person enters their own time off. The record counts the active bookings already inside it, so nobody is surprised.
@@ -344,6 +344,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 
 ### ✅ Recently shipped
 
+- [x] **0.16.3:** locations on the booking page (where first, then that location's services, people and times) and on the schedule (a Location filter; new bookings and sessions ask where only when they must).
 - [x] **0.16.2:** a booking from the public page gets a customer of its own, never an existing one found by the address the guest typed.
 - [x] **0.16.1:** reports group, default and show columns only by fields the reader may read.
 - [x] **0.16.0:** locations with their own staff, rooms, services and opening days; every booking is at one.
@@ -396,7 +397,7 @@ Leaders: Calendly, Acuity Scheduling, Microsoft Bookings, SimplyBook.me and Cal.
 
 ### 🔭 Later
 
-- [ ] Working hours per location for a person who works at several, the location on the booking page and the schedule, and reports by location.
+- [ ] Working hours per location for a person who works at several, and reports by location.
 - [ ] Service categories, images and colours, duration options and add-ons, several services in one visit.
 - [ ] A different price or duration per staff member.
 - [ ] Tips, discounts and promo codes.

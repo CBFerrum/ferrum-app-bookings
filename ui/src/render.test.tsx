@@ -151,6 +151,57 @@ const booking = (over: Partial<GuestBooking> = {}): GuestBooking => ({
   ...over,
 });
 
+describe("the booking page with locations", () => {
+  const places = {
+    ...catalog,
+    locations: [{ id: "north", name: "North", address: "1 Hill Road" }, { id: "south", name: "South", address: "2 Low Road" }],
+    services: [
+      { ...catalog.services[0], staff: [{ id: "st-1", name: "Asha", location: "north" }, { id: "st-2", name: "Ravi", location: "south" }, { id: "st-3", name: "Mira" }] },
+      { ...catalog.services[1], locations: ["south"] },
+    ],
+  };
+  const page = (url: string) => {
+    const qc = client();
+    qc.setQueryData(["gb-catalog", "acme"], places);
+    return draw(qc, url, <BookPage />, "/book/:tenant");
+  };
+
+  it("asks where first when there are several locations", () => {
+    const html = page("/book/acme");
+    expect(html).toContain("Where would you like to come?");
+    expect(html).toContain("North");
+    expect(html).toContain("2 Low Road");
+    expect(html).not.toContain("Deep tissue massage");
+  });
+
+  it("shows a location's own services and people", () => {
+    const list = page("/book/acme?loc=south");
+    expect(list).toContain("Pilates");
+    expect(list).toContain("loc=south&amp;service=svc-1");
+    // North offers one service: its times at once, without the other location's class.
+    const booker = page("/book/acme?loc=north");
+    expect(booker).toContain("Deep tissue massage");
+    expect(booker).not.toContain("Pilates");
+    expect(booker).toContain("Who would you like to see?");
+    expect(booker).toContain("Asha");
+    expect(booker).toContain("Mira");
+    expect(booker).not.toContain("Ravi");
+    expect(booker).toContain("Another location");
+  });
+
+  it("falls back to the list for a location that is not there", () => {
+    expect(page("/book/acme?loc=gone")).toContain("Where would you like to come?");
+  });
+
+  it("says when nothing is offered at a location", () => {
+    const qc = client();
+    qc.setQueryData(["gb-catalog", "acme"], { ...places, services: [places.services[1]] });
+    const html = draw(qc, "/book/acme?loc=north", <BookPage />, "/book/:tenant");
+    expect(html).toContain("Nothing can be booked at North at the moment.");
+    expect(html).toContain("See the other locations");
+  });
+});
+
 describe("a guest's own booking", () => {
   const show = (b: GuestBooking) => {
     const qc = client();
@@ -175,6 +226,12 @@ describe("a guest's own booking", () => {
     const html = show(booking({ can_cancel: false, can_reschedule: false }));
     expect(html).toContain("can no longer be changed online");
     expect(html).not.toContain("Cancel booking");
+  });
+
+  it("says where, at a location", () => {
+    const html = show(booking({ place: { id: "north", name: "North", address: "1 Hill Road" }, location: "1 Hill Road" }));
+    expect(html).toContain("North");
+    expect(html).toContain("1 Hill Road");
   });
 
   it("waits for the business to confirm a pending booking", () => {
@@ -338,6 +395,23 @@ describe("the schedule", () => {
     expect(draw(seeded([]), `/?date=${DAY}`, <Schedule />)).toContain("Nothing is booked");
   });
 
+  it("filters people by location", () => {
+    const qc = seeded(rows);
+    const located = {
+      ...meta,
+      staff: [{ ...meta.staff[0], location: "north" }, { ...meta.staff[1], location: "south" }, { id: "st-3", display_name: "Mira Das", email: "mira@spa.test", time_zone: ZONE, active: true, hours: [] }],
+      locations: [{ id: "north", location_name: "North", active: true }, { id: "south", location_name: "South", active: true }],
+    };
+    qc.setQueryData(["bk", "meta"], located);
+    const html = draw(qc, `/?date=${DAY}&loc=north`, <Schedule />);
+    expect(html).toContain("All locations");
+    expect(html).toContain("Asha Rao");
+    expect(html).toContain("Mira Das");
+    expect(html).not.toContain("Ravi Iyer");
+    const all = draw(qc, `/?date=${DAY}`, <Schedule />);
+    expect(all).toContain("Ravi Iyer");
+  });
+
   const yoga: Ses = { id: "ses-1", service: "svc-2", service_name: "Pilates", staff: "st-2", staff_name: "Ravi Iyer", start_time: at("17:00"), end_time: at("17:45"), capacity: 12, status: "Scheduled", session_key: "s/ses-1" };
 
   it("draws a scheduled class nobody has booked yet", () => {
@@ -481,6 +555,27 @@ describe("a booking's sheet and the dialogs", () => {
     for (const word of ["New booking", "Choose a service", "Anyone free", "Ravi Iyer", "Guest&#x27;s name", "All fields"]) expect(html).toContain(word);
     expect(html).toContain('value="2026-11-02"');
     expect(html).toContain('value="10:15"');
+  });
+
+  it("asks a new booking for its location only when it must", () => {
+    const located = {
+      ...meta,
+      staff: [{ ...meta.staff[0], location: "north" }, { ...meta.staff[1] }],
+      locations: [{ id: "north", location_name: "North", active: true }, { id: "south", location_name: "South", active: true }],
+    };
+    const dialog = (m: Meta, staff?: string) =>
+      renderToString(
+        <QueryClientProvider client={client()}>
+          <MemoryRouter>
+            <NewBooking meta={m} zone={ZONE} hour12={false} from={{ staff }} loc="south" onClose={() => {}} onCreated={() => {}} />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    const asked = dialog(located, "st-2");
+    expect(asked).toContain("Choose a location");
+    expect(asked).toContain('value="south" selected=""');
+    expect(dialog(located, "st-1")).not.toContain("Choose a location");
+    expect(dialog(meta, "st-2")).not.toContain("Choose a location");
   });
 
   it("blocks out time for a person", () => {

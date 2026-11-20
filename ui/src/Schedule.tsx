@@ -12,7 +12,7 @@ import { errorMessage, t as tr, isolate } from "@ferrum/client";
 import { Alert, Badge, Button, StatePanel, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, useEntityMeta, useMe } from "@ferrum/records";
 import { Board } from "./Grid";
-import { type Bk, blocks as makeBlocks, type Block, dropHint, type Lane, makeLane, tone, viewWindow } from "./board";
+import { atLocation, type Bk, blocks as makeBlocks, type Block, dropHint, type Lane, makeLane, tone, viewWindow } from "./board";
 import { act, LIMIT, loadMeta, loadRange, loadWaiting, type Range } from "./data";
 import { NewBooking, type Start } from "./NewBooking";
 import { Pop } from "./Pop";
@@ -117,6 +117,7 @@ export function Schedule() {
   const date = isDate(dateParam) ? dateParam : today;
   const chosen = (sp.get("staff") ?? "").split(",").filter(Boolean);
   const service = sp.get("service") ?? "";
+  const locParam = sp.get("loc");
   const openId = sp.get("b");
   const openSession = sp.get("s");
 
@@ -165,14 +166,17 @@ export function Schedule() {
   const all = useMemo(() => makeBlocks(bookings, services, sessions), [bookings, services, sessions]);
   const hasClass = (meta.data?.services ?? []).some((x) => x.active !== false && (x.capacity ?? 1) > 1);
 
+  // A location's lanes are its people and those who work everywhere; their bookings come with them.
+  const places = useMemo(() => (meta.data?.locations ?? []).filter((l) => l.active !== false), [meta.data]);
+  const loc = places.some((l) => l.id === locParam) ? locParam : null;
   // Who has a column: the people picked (everyone active when none is), and anyone with a booking in view.
   const people = useMemo(() => {
-    const staff = meta.data?.staff ?? [];
+    const staff = atLocation(meta.data?.staff ?? [], loc);
     const busy = new Set(all.map((b) => b.staff));
     const shown = staff.filter((p) => (p.active !== false || busy.has(p.id)) && (!chosen.length || chosen.includes(p.id)));
     return shown;
-  }, [meta.data, all, chosen.join(",")]);
-  const everyone = useMemo(() => (meta.data?.staff ?? []).filter((p) => p.active !== false), [meta.data]);
+  }, [meta.data, all, chosen.join(","), loc]);
+  const everyone = useMemo(() => atLocation(meta.data?.staff ?? [], loc).filter((p) => p.active !== false), [meta.data, loc]);
   const resources = useMemo(() => (meta.data?.resources ?? []).filter((r) => r.active !== false), [meta.data]);
 
   const off = useMemo(() => range.data?.off ?? [], [range.data]);
@@ -422,6 +426,16 @@ export function Schedule() {
               ))}
             </select>
           )}
+          {places.length > 1 && (
+            <select className="select bk-select" aria-label={tr("Location")} value={loc ?? ""} onChange={(e) => set({ loc: e.target.value || null, staff: null }, true)}>
+              <option value="">{tr("All locations")}</option>
+              {places.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {isolate(l.location_name)}
+                </option>
+              ))}
+            </select>
+          )}
           {meta.data && meta.data.services.length > 1 && (
             <select className="select bk-select" aria-label={tr("Service")} value={service} onChange={(e) => set({ service: e.target.value || null }, true)}>
               <option value="">{tr("All services")}</option>
@@ -473,6 +487,7 @@ export function Schedule() {
           zone={zone}
           hour12={hour12}
           day={date}
+          loc={loc}
           onClose={() => setScheduling(false)}
           onCreated={(x) => {
             setScheduling(false);
@@ -487,6 +502,7 @@ export function Schedule() {
           meta={meta.data}
           zone={zone}
           hour12={hour12}
+          loc={loc}
           from={draft}
           onClose={() => {
             setDraft(null);

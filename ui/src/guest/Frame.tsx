@@ -94,7 +94,16 @@ export function useDisplay() {
     setHour12State(h);
     remember("hour12", h ? "1" : "0");
   }, []);
-  return { zone, setZone, hour12, setHour12 };
+  // Whether the guest chose the zone (now or before): a location's own zone does not replace their choice.
+  const [chosen, setChosen] = useState(() => !!remembered("zone"));
+  const choose = useCallback(
+    (z: string) => {
+      setZone(z);
+      setChosen(true);
+    },
+    [setZone],
+  );
+  return { zone, setZone: choose, hour12, setHour12, chosen };
 }
 
 export function ClockSwitch({ hour12, onChange }: { hour12: boolean; onChange: (h: boolean) => void }) {
